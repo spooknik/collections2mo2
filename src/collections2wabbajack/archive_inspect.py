@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+from .reporter import Reporter, get_reporter
 from .sevenzip import ArchiveEntry, list_archive
 
 MANIFEST_ENTRY_FIELDS = (
@@ -196,19 +197,25 @@ def _print_report(entries: list[dict[str, Any]], failures: list[tuple[str, str]]
             print(f"  - {name}: {err}")
 
 
-def cmd_inspect(args: argparse.Namespace) -> int:
+def cmd_inspect(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
+    rep = get_reporter(reporter)
     downloads_json = Path(args.downloads_json).resolve()
     data = json.loads(downloads_json.read_text(encoding="utf-8"))
     candidates = [e for e in data.get("entries", []) if e.get("status") in ("ok", "skipped")]
 
+    rep.stage("inspect", len(candidates))
     results: list[dict[str, Any]] = []
     failures: list[tuple[str, str]] = []
+    done = 0
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
         futures = {pool.submit(_inspect_one, e): e for e in candidates}
         for fut in as_completed(futures):
             base, inspection, error = fut.result()
+            done += 1
+            name = base.get("name") or base.get("file_name") or "?"
+            rep.progress(done, len(candidates), f"{'FAILED  ' if error else 'ok      '} {name}")
             if error is not None:
-                failures.append((base.get("name") or base.get("file_name") or "?", error))
+                failures.append((name, error))
                 continue
             results.append({**base, **inspection})
 
@@ -219,7 +226,10 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         json.dumps({"downloads_json": str(downloads_json), "entries": results}, indent=2),
         encoding="utf-8",
     )
-    print(f"wrote {out_path} ({len(results)} archives inspected, {len(failures)} failed)")
+    rep.done(
+        "inspect",
+        f"{len(results)} archives inspected, {len(failures)} failed -> {out_path}",
+    )
 
     _print_report(results, failures)
     return 1 if failures else 0

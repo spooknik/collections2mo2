@@ -35,6 +35,7 @@ import requests
 
 from .manifest import install_mode, load_manifest
 from .nexus import API_BASE, AuthRequired, NexusClient, NexusError
+from .reporter import Reporter, get_reporter
 
 CHECKPOINT_EVERY = 25
 RESYNC_EVERY = 50
@@ -427,7 +428,9 @@ def run_survey(
     min_remaining: int,
     limit: int | None,
     api_key: str | None,
+    reporter: Reporter | None = None,
 ) -> int:
+    rep = get_reporter(reporter)
     manifest = load_manifest(manifest_path)
     info = manifest.get("info") or {}
     domain = info.get("domainName")
@@ -439,9 +442,10 @@ def run_survey(
                 domain = d
                 break
     if not domain:
-        print("error: could not determine game domain from manifest", file=sys.stderr)
+        rep.warn("could not determine game domain from manifest")
         return 1
 
+    rep.stage("survey")
     targets = _select_targets(all_mods, survey_all)
     if limit is not None:
         targets = targets[:limit]
@@ -461,7 +465,7 @@ def run_survey(
         to_process.append(m)
 
     if not to_process:
-        print(f"all {len(targets)} target(s) already surveyed (cached in {out_path})")
+        rep.done("survey", f"all {len(targets)} target(s) already surveyed (cached in {out_path})")
         _print_report(state, targets, all_mods, 0, 0)
         return 0
 
@@ -475,7 +479,7 @@ def run_survey(
     except (NexusError, requests.RequestException) as e:
         print(f"warning: could not read initial rate-limit headers: {e}", file=sys.stderr)
 
-    print(
+    rep.log(
         f"surveying {len(to_process)} of {len(targets)} target(s) for {domain} "
         f"with {jobs} worker(s) (hourly remaining: {limiter.remaining}/{limiter.limit})"
     )
@@ -537,7 +541,7 @@ def run_survey(
     state.write(out_path)
 
     if fatal_error:
-        print(f"error: {fatal_error}", file=sys.stderr)
+        rep.warn(fatal_error)
         _print_report(state, targets, all_mods, processed, len(to_process) - processed)
         return 1
 
@@ -553,6 +557,7 @@ def run_survey(
     _print_report(state, targets, all_mods, processed, remaining)
 
     if remaining == 0:
+        rep.done("survey", f"{len(targets)} target(s) surveyed")
         return 0
     return 3 if stopped_for_rate_limit else 1
 

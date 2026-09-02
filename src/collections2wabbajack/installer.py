@@ -28,7 +28,6 @@ import json
 import os
 import shutil
 import stat
-import sys
 import threading
 import time
 from collections import Counter
@@ -40,9 +39,13 @@ from typing import Any
 
 from . import fomod, layout
 from .naming import assign_folder_names, mod_folder_name
+from .reporter import Reporter, get_reporter
 from .sevenzip import extract
 
 PLUGIN_EXTS = {".esp", ".esm", ".esl"}
+# meta.ini `comments=` value marking who installed a mod folder. The instance ledger
+# (`ledger.py`) holds the authoritative mapping; this is the copy MO2 itself shows.
+OWNER_COMMENT_PREFIX = "owner: "
 # What a FOMOD <fileDependency> can plausibly name, and what we therefore
 # remember from the mods we have already installed in this run.
 GAME_FILE_EXTS = PLUGIN_EXTS | {".bsa", ".ba2", ".dll", ".exe"}
@@ -329,6 +332,7 @@ def _install_one(
     force: bool,
     file_state: FileStateIndex | None = None,
     folder: str | None = None,
+    owner: str | None = None,
 ) -> ModResult:
     tag = entry.get("tag") or ""
     result = ModResult(
@@ -346,6 +350,9 @@ def _install_one(
     dest_root = mods_dir / result.folder
     if dest_root.exists() and not force:
         result.strategy = "existing"
+        if owner:
+            # The folder is not being rewritten, but it must still carry its owner.
+            stamp_owner(dest_root, owner)
         result.file_count = sum(1 for p in dest_root.rglob("*") if p.is_file())
         result.plugins = _root_plugins(dest_root)
         result.root_file_count = _root_folder_count(dest_root)
@@ -396,7 +403,7 @@ def _install_one(
         result.file_count = _copy_pairs(base, pairs, dest_root, result.warnings, landed)
         result.plugins = _root_plugins(dest_root)
         result.root_file_count = _root_folder_count(dest_root)
-        _write_meta_ini(dest_root, entry, mod, game_name)
+        _write_meta_ini(dest_root, entry, mod, game_name, owner)
         if file_state is not None:
             # Publish before returning: mods still queued can now see these files.
             file_state.add_installed(landed)
@@ -428,7 +435,11 @@ def _ini_value(value: Any) -> str:
 
 
 def _write_meta_ini(
-    dest_root: Path, entry: dict[str, Any], mod: dict[str, Any], game_name: str
+    dest_root: Path,
+    entry: dict[str, Any],
+    mod: dict[str, Any],
+    game_name: str,
+    owner: str | None = None,
 ) -> None:
     lines = [
         "[General]",
@@ -439,7 +450,7 @@ def _write_meta_ini(
         f"installationFile={_ini_value(entry.get('file_name'))}",
         "repository=Nexus",
         f"gameName={game_name}",
-        "comments=",
+        f"comments={OWNER_COMMENT_PREFIX}{owner}" if owner else "comments=",
         f"notes={_ini_value(mod.get('instructions'))}",
         "nexusFileStatus=1",
         "hasCustomURL=false",
@@ -453,6 +464,38 @@ def _write_meta_ini(
         "",
     ]
     (dest_root / "meta.ini").write_text("\n".join(lines), encoding="utf-8")
+
+
+def stamp_owner(dest_root: Path, owner: str) -> bool:
+    """Set `comments=owner: <owner>` in an existing mod's meta.ini; True if it changed.
+
+    Used when a mod folder is left alone (already installed) but the instance ledger
+    still needs the folder attributed to the layer that put it there.
+    """
+    meta = dest_root / "meta.ini"
+    wanted = f"comments={OWNER_COMMENT_PREFIX}{owner}"
+    try:
+        text = meta.read_text(encoding="utf-8-sig")
+    except OSError:
+        return False
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().lower().startswith("comments="):
+            if line == wanted:
+                return False
+            lines[i] = wanted
+            break
+    else:
+        anchor = next((i for i, ln in enumerate(lines) if ln.strip().lower() == "[general]"), None)
+        if anchor is None:
+            lines.insert(0, "[General]")
+            anchor = 0
+        lines.insert(anchor + 1, wanted)
+    try:
+        meta.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------- reporting
@@ -492,7 +535,9 @@ def _default_mods_dir(inspect_json: Path) -> Path:
     return inspect_json.parent.parent / "mo2" / "mods"
 
 
-def cmd_install(args: argparse.Namespace) -> int:
+def cmd_install(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
+    rep = get_reporter(reporter)
+    owner: str | None = getattr(args, "owner", None) or None
     inspect_json = Path(args.inspect_json).resolve()
     inspect_data = json.loads(inspect_json.read_text(encoding="utf-8"))
     entries = inspect_data.get("entries", [])
@@ -505,7 +550,7 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     manifest_path = Path(args.manifest) if args.manifest else Path(downloads.get("manifest", ""))
     if not manifest_path or not manifest_path.exists():
-        print(f"error: manifest not found ({manifest_path})", file=sys.stderr)
+        rep.warn(f"manifest not found ({manifest_path})")
         return 2
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     mods = manifest.get("mods", [])
@@ -519,10 +564,10 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     game_path = Path(args.game_path).resolve() if args.game_path else None
     if game_path is not None and not game_path.is_dir():
-        print(f"warning: --game-path {game_path} is not a directory, ignored", file=sys.stderr)
+        rep.warn(f"--game-path {game_path} is not a directory, ignored")
         game_path = None
     file_state = FileStateIndex(manifest.get("plugins"), game_path)
-    print(
+    rep.log(
         f"fileDependency resolver: {file_state.manifest_count} plugins from the manifest, "
         f"{file_state.game_count} more from the game folder"
     )
@@ -535,7 +580,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     todo = [e for e in entries if e.get("tag") in by_tag]
     missing = [e for e in entries if e.get("tag") not in by_tag]
     for entry in missing:
-        print(f"warning: {entry.get('name')} has no manifest entry (tag {entry.get('tag')}), skipped")
+        rep.warn(f"{entry.get('name')} has no manifest entry (tag {entry.get('tag')}), skipped")
     if args.only:
         needle = args.only.lower()
         todo = [e for e in todo if needle in (e.get("name") or "").lower()]
@@ -544,6 +589,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     results: list[ModResult] = []
     total = len(todo)
     done = 0
+    rep.stage("install", total)
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
         futures = {
             pool.submit(
@@ -557,6 +603,7 @@ def cmd_install(args: argparse.Namespace) -> int:
                 args.force,
                 file_state,
                 folder_names.get(entry["tag"]),
+                owner,
             ): entry
             for entry in todo
         }
@@ -565,15 +612,20 @@ def cmd_install(args: argparse.Namespace) -> int:
             results.append(result)
             done += 1
             flag = "!" if result.warnings else " "
-            print(
-                f"[{done}/{total}] {result.strategy:<16} {flag} {result.name}  "
-                f"({result.file_count} files)"
+            rep.progress(
+                done,
+                total,
+                f"{result.strategy:<16} {flag} {result.name}  ({result.file_count} files)",
             )
 
     results.sort(key=lambda r: order.get(r.tag, 0))
     _rmtree(tmp_root)
 
-    out_path = mods_dir.parent / "install.json"
+    out_path = (
+        Path(args.out).resolve()
+        if getattr(args, "out", None)
+        else mods_dir.parent / "install.json"
+    )
     # A re-run that skips existing folders must not erase what the original install
     # recorded (strategy, warnings such as default FOMOD picks); carry those forward.
     if out_path.exists():
@@ -600,6 +652,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         entries_out.extend(p for p in previous if p.get("tag") not in done_tags)
         entries_out.sort(key=lambda p: order.get(p.get("tag"), 0))
 
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
         json.dumps(
             {
@@ -612,9 +665,10 @@ def cmd_install(args: argparse.Namespace) -> int:
         ),
         encoding="utf-8",
     )
-    print(f"\nwrote {out_path}")
     _report(results)
-    return 1 if any(r.failed for r in results) else 0
+    failed = sum(1 for r in results if r.failed)
+    rep.done("install", f"{len(results)} mod(s), {failed} failed -> {out_path}")
+    return 1 if failed else 0
 
 
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -632,6 +686,17 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument("--jobs", type=int, default=4, help="parallel installs (default: 4)")
     p.add_argument("--force", action="store_true", help="reinstall mods that already exist")
+    p.add_argument(
+        "--out",
+        default=None,
+        help="where to write install.json (default: <mods-dir>/../install.json)",
+    )
+    p.add_argument(
+        "--owner",
+        default=None,
+        help='who these mods belong to, e.g. "collection:<slug>@<rev>"; stamped into '
+        "each mod's meta.ini as comments=owner: <value> for the instance ledger",
+    )
     p.add_argument(
         "--choices-overrides",
         default=None,

@@ -27,6 +27,7 @@ import requests
 
 from .manifest import install_mode, load_manifest
 from .nexus import USER_AGENT, AuthRequired, NexusClient, NexusError
+from .reporter import Reporter, get_reporter
 
 # Nexus domain -> MO2 short game name.
 MO2_GAME_NAMES: dict[str, str] = {
@@ -516,7 +517,16 @@ def run_download(
     limit: int | None,
     include_optional: bool,
     api_key: str | None,
+    json_path: Path | None = None,
+    reporter: Reporter | None = None,
 ) -> int:
+    """Download every mod of `manifest_path` into `out_dir`.
+
+    `json_path` overrides where the run summary is written (default
+    `<out_dir>/downloads.json`); `create` uses it to keep the archive store free of
+    our own bookkeeping files.
+    """
+    rep = get_reporter(reporter)
     manifest = load_manifest(manifest_path)
     info = manifest.get("info") or {}
     domain = info.get("domainName")
@@ -529,7 +539,7 @@ def run_download(
                 domain = d
                 break
     if not domain:
-        print("error: could not determine game domain from manifest", file=sys.stderr)
+        rep.warn("could not determine game domain from manifest")
         return 1
 
     game_name = mo2_game_name(domain)
@@ -542,7 +552,7 @@ def run_download(
 
     total = len(selected_mods)
     if total == 0:
-        print("no mods to download")
+        rep.done("download", "no mods to download")
         return 0
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -559,9 +569,11 @@ def run_download(
     }
     total_bytes = 0
     start = time.monotonic()
-    downloads_json = out_dir / "downloads.json"
+    downloads_json = Path(json_path) if json_path else out_dir / "downloads.json"
+    downloads_json.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"downloading {total} mod(s) for {game_name} ({domain}) with {jobs} worker(s)")
+    rep.stage("download", total)
+    rep.log(f"downloading {total} mod(s) for {game_name} ({domain}) with {jobs} worker(s)")
 
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         futures = {
@@ -608,10 +620,10 @@ def run_download(
                 "error": "ERROR",
                 "unsupported": "unsupported",
             }.get(entry.status, entry.status)
-            line = f"[{done}/{total}] {status_label:8s} {entry.file_name or entry.name}  {size_str}"
+            line = f"{status_label:8s} {entry.file_name or entry.name}  {size_str}"
             if entry.error and entry.status != "skipped":
                 line += f"  ({entry.error})"
-            print(line)
+            rep.progress(done, total, line)
 
             if done % CHECKPOINT_EVERY == 0:
                 state.write(downloads_json)
@@ -619,15 +631,15 @@ def run_download(
     state.write(downloads_json)
     elapsed = time.monotonic() - start
 
-    print()
-    print(
+    rep.done(
+        "download",
         f"done in {elapsed:.1f}s: ok={counts.get('ok', 0)} "
         f"skipped={counts.get('skipped', 0)} "
         f"md5_mismatch={counts.get('md5_mismatch', 0)} "
         f"error={counts.get('error', 0)} "
-        f"unsupported={counts.get('unsupported', 0)}  total={_fmt_bytes(total_bytes)}"
+        f"unsupported={counts.get('unsupported', 0)}  total={_fmt_bytes(total_bytes)}",
     )
-    print(f"downloads.json: {downloads_json.resolve()}")
+    rep.log(f"downloads.json: {downloads_json.resolve()}")
 
     ok = counts.get("md5_mismatch", 0) == 0 and counts.get("error", 0) == 0
     return 0 if ok else 1

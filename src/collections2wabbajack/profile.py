@@ -21,8 +21,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import ledger as ledger_mod
 from .manifest import load_manifest
 from .naming import sanitize_folder_name, separator_name
+from .reporter import Reporter, get_reporter
 
 # MO2 short game name -> the game plugin's display name (ModOrganizer.ini gameName=).
 MO2_GAME_DISPLAY_NAMES: dict[str, str] = {
@@ -610,11 +612,13 @@ def merge_ini_values(target: Path, section: str, values: dict[str, str]) -> int:
     return applied
 
 
-def merge_ini_tweak(target: Path, tweak: Path) -> int:
+def merge_ini_tweak(target: Path, tweak: Path, record: dict[str, list[str]] | None = None) -> int:
     """Apply a Vortex INI tweak file onto a game INI: set/override each key in its section.
 
     Line-based (via `merge_ini_values`) so comments, ordering and odd lines in the game INI
-    survive. Returns the number of keys applied.
+    survive. Returns the number of keys applied. When `record` is given it collects
+    `{"[Section]": [key, ...]}` for the instance ledger, so a later uninstall knows exactly
+    which INI keys this layer is responsible for.
     """
     tweak_cp = configparser.RawConfigParser(strict=False, delimiters=("=",), interpolation=None)
     tweak_cp.optionxform = str  # type: ignore[assignment]
@@ -622,12 +626,24 @@ def merge_ini_tweak(target: Path, tweak: Path) -> int:
 
     applied = 0
     for section in tweak_cp.sections():
-        applied += merge_ini_values(target, section, dict(tweak_cp.items(section)))
+        values = dict(tweak_cp.items(section))
+        applied += merge_ini_values(target, section, values)
+        if record is not None and values:
+            bucket = record.setdefault(f"[{section}]", [])
+            bucket.extend(k for k in values if k not in bucket)
     return applied
 
 
-def apply_collection_ini_tweaks(profile_dir: Path, archive_dir: Path, game_name: str) -> list[str]:
-    """Apply the collection archive's `INI Tweaks/<name> [Skyrim].ini` files to the profile INIs."""
+def apply_collection_ini_tweaks(
+    profile_dir: Path,
+    archive_dir: Path,
+    game_name: str,
+    record: dict[str, dict[str, list[str]]] | None = None,
+) -> list[str]:
+    """Apply the collection archive's `INI Tweaks/<name> [Skyrim].ini` files to the profile INIs.
+
+    `record`, when given, collects `{"<ini file>": {"[Section]": [key, ...]}}`.
+    """
     tweaks_dir = archive_dir / "INI Tweaks"
     if not tweaks_dir.is_dir():
         return []
@@ -640,7 +656,8 @@ def apply_collection_ini_tweaks(profile_dir: Path, archive_dir: Path, game_name:
         if not target_name:
             notes.append(f"INI tweak skipped (cannot tell which INI it targets): {tweak.name}")
             continue
-        n = merge_ini_tweak(profile_dir / target_name, tweak)
+        into = record.setdefault(target_name, {}) if record is not None else None
+        n = merge_ini_tweak(profile_dir / target_name, tweak, into)
         notes.append(f"INI tweak applied: {tweak.name} -> {target_name} ({n} keys)")
     return notes
 
@@ -696,6 +713,7 @@ def apply_display_settings(
     resolution: str,
     vsync: str,
     window: str,
+    record: dict[str, dict[str, list[str]]] | None = None,
 ) -> list[str]:
     """Apply --resolution/--vsync/--window overrides to the profile's `*Prefs.ini` [Display].
 
@@ -759,11 +777,16 @@ def apply_display_settings(
 
     if values:
         merge_ini_values(target, "Display", values)
+        if record is not None:
+            bucket = record.setdefault(target_name, {}).setdefault("[Display]", [])
+            bucket.extend(k for k in values if k not in bucket)
 
     return [f"display: {res_label}, vsync {vsync_label}, window {window_label} ({target_name})"]
 
 
-def cmd_profile(args: argparse.Namespace) -> int:
+def cmd_profile(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
+    rep = get_reporter(reporter)
+    owner: str | None = getattr(args, "owner", None) or None
     install_json_path = Path(args.install_json)
     data = json.loads(install_json_path.read_text(encoding="utf-8"))
     manifest_path = Path(data["manifest"])
@@ -777,6 +800,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
     profile_name = args.profile_name or sanitize_folder_name(info.get("name") or "profile")
     game_path = args.game_path or ""
 
+    rep.stage("profile")
     order_report = _compute_order(manifest, entries)
     warnings: list[str] = list(order_report.warnings)
 
@@ -821,24 +845,34 @@ def cmd_profile(args: argparse.Namespace) -> int:
     _write(settings_path, SETTINGS_INI)
     files_written.append(str(settings_path))
 
+    ini_keys: dict[str, dict[str, list[str]]] = {}
     if args.keep_inis:
-        print("keep-inis: profile INIs left untouched (skipping seeding, tweaks, display settings)")
+        rep.log("keep-inis: profile INIs left untouched (no seeding, tweaks, display settings)")
     else:
         seeded_files, seed_notes = seed_profile_inis(profile_dir, game_name, game_path)
         files_written.extend(seeded_files)
         for note in seed_notes:
-            print(note)
+            rep.log(note)
 
-        ini_notes = apply_collection_ini_tweaks(profile_dir, manifest_path.parent, game_name)
+        ini_notes = apply_collection_ini_tweaks(
+            profile_dir, manifest_path.parent, game_name, ini_keys
+        )
         for note in ini_notes:
-            print(note)
+            rep.log(note)
         warnings.extend(n for n in ini_notes if n.startswith("INI tweak skipped"))
 
         display_notes = apply_display_settings(
-            profile_dir, game_name, args.resolution, args.vsync, args.window
+            profile_dir, game_name, args.resolution, args.vsync, args.window, ini_keys
         )
         for note in display_notes:
-            print(note)
+            rep.log(note)
+
+    if owner:
+        # Record what this layer wrote into the profile INIs, so removing the layer
+        # later can tell its keys apart from the user's own edits.
+        led = ledger_mod.load(mo2_dir)
+        led.record_ini_keys(owner, ini_keys)
+        led.save()
 
     tools = manifest.get("tools") or []
     exe_blocks = build_custom_executables(entries, tools, game_path)
@@ -868,28 +902,35 @@ def cmd_profile(args: argparse.Namespace) -> int:
         "files_written": files_written,
         "warnings": warnings,
     }
-    report_path = mo2_dir / "profile-report.json"
+    report_path = Path(args.report_out) if getattr(args, "report_out", None) else mo2_dir / "profile-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     files_written.append(str(report_path))
 
-    print(f"profile {profile_name!r}: {len(entries)} mod(s) ordered, {len(separators_created)} separator(s)")
-    print(
+    rep.log(
+        f"profile {profile_name!r}: {len(entries)} mod(s) ordered, "
+        f"{len(separators_created)} separator(s)"
+    )
+    rep.log(
         f"modRules: {order_report.rules_total} total, {order_report.rules_applied} applied, "
         f"{order_report.rules_ignored} ignored (unresolvable), {order_report.rules_conflicts} conflicts, "
         f"{order_report.rules_unsupported} unsupported-type, {order_report.cycle_breaks} cycle-break(s)"
     )
-    print(f"phase boundary crossings caused by rules: {order_report.phase_crossings}")
-    print(
+    rep.log(f"phase boundary crossings caused by rules: {order_report.phase_crossings}")
+    rep.log(
         f"plugins written: {len(plugin_order)} "
         f"({plugin_stats['in_manifest']} in manifest order, {plugin_stats['extra']} extra)"
     )
-    print(f"files written: {len(files_written)}")
+    rep.log(f"files written: {len(files_written)}")
     for f in files_written:
-        print(f"  {f}")
-    if warnings:
-        print(f"warnings ({len(warnings)}):")
-        for w in warnings:
-            print(f"  - {w}")
+        rep.log(f"  {f}")
+    for w in warnings:
+        rep.warn(w)
+    rep.done(
+        "profile",
+        f"{profile_name!r}: {len(order_report.folders)} mod(s), "
+        f"{len(separators_created)} separator(s), {len(plugin_order)} plugin(s)",
+    )
     return 0
 
 
@@ -958,6 +999,17 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         default="keep",
         help="profile window mode (bFull Screen/bBorderless): fullscreen, borderless, "
         "windowed, or keep (default: keep)",
+    )
+    p.add_argument(
+        "--report-out",
+        default=None,
+        help="where to write profile-report.json (default: <mo2-dir>/profile-report.json)",
+    )
+    p.add_argument(
+        "--owner",
+        default=None,
+        help='who this profile belongs to, e.g. "collection:<slug>@<rev>"; the INI keys '
+        "written for it are recorded under that owner in the instance ledger",
     )
     p.add_argument(
         "--keep-inis",

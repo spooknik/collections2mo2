@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "xedit",
+      "name": "xEdit (SSEEdit)",
+      "group": "essential",
+      "default": true,
+      "source": {
+        "type": "github",
+        "repo": "TES5Edit/TES5Edit",
+        "asset": "^xEdit\\..*\\.7z$",
+        "tag": "latest"
+      },
+      "install": {},
+      "executables": [
+        {
+          "title": "xEdit (SSE)",
+          "binary": "xTESEdit64.exe",
+          "arguments": "-sse",
+          "workingDirectory": "tool"
+        },
+        {
+          "title": "xEdit (SSE) - QuickAutoClean",
+          "binary": "xTESEdit64.exe",
+          "arguments": "-sse -quickautoclean",
+          "workingDirectory": "tool"
+        }
+      ],
+      "requires": [],
+      "license_note": "Freeware (custom license), source included; accept the risk/backup warning on first launch.",
+      "size_hint_mb": 31,
+      "verified": "2026-09-02",
+      "verified_notes": "GitHub releases/latest -> tag xedit-4.1.5f, single asset xEdit.4.1.5f.7z (31.3 MB). Listed with sevenzip.list_archive: no wrapping folder; the generic TES-family binary is xTESEdit64.exe (32-bit xTESEdit.exe also present). Confirmed via xeInit.pas (dev-4.1.6 branch) that '-sse' selects SSE mode and 'quickautoclean'/'qac' triggers QuickAutoClean, so 'xEdit64.exe' from the task brief does not exist in 4.1.x builds -- xTESEdit64.exe is correct."
+    },
+    {
+      "id": "bethini-pie",
+      "name": "BethINI Pie",
+      "group": "essential",
+      "default": true,
+      "source": {
+        "type": "nexus",
+        "domain": "site",
+        "mod_id": 631,
+        "file": "latest-main"
+      },
+      "install": {
+        "strip_single_root": true
+      },
+      "executables": [
+        {
+          "title": "BethINI Pie",
+          "binary": "Bethini.exe",
+          "arguments": "",
+          "workingDirectory": "tool"
+        }
+      ],
+      "requires": [],
+      "license_note": "Freeware; author-distributed via Nexus 'site' domain mod page.",
+      "size_hint_mb": 21,
+      "verified": "2026-09-02",
+      "verified_notes": "GET /v1/games/site/mods/631/files.json -> newest MAIN file is file_id 6848, 'Bethini Pie-631-4-17-1769903122.7z', version 4.17 (uploaded 2026-01-31). Downloaded with NexusClient (Premium) and listed: single wrapping folder 'Bethini Pie/' containing Bethini.exe -> strip_single_root."
+    },
+    {
+      "id": "loot",
+      "name": "LOOT",
+      "group": "essential",
+      "default": false,
+      "source": {
+        "type": "github",
+        "repo": "loot/loot",
+        "asset": "^loot_.*-win64\\.7z$",
+        "tag": "latest"
+      },
+      "install": {
+        "strip_single_root": true
+      },
+      "executables": [
+        {
+          "title": "LOOT",
+          "binary": "LOOT.exe",
+          "arguments": "",
+          "workingDirectory": "tool"
+        }
+      ],
+      "requires": [],
+      "license_note": "GPL-3.0.",
+      "size_hint_mb": 18,
+      "verified": "2026-09-02",
+      "verified_notes": "GitHub releases/latest -> tag 0.29.2, asset loot_0.29.2-win64.7z (17.7 MB; a .exe installer asset also exists and is deliberately excluded by the regex). Listed with sevenzip.list_archive: wraps everything in one versioned+hash folder (e.g. loot_0.29.2-0-g0402143_0.29.2/) containing LOOT.exe -> strip_single_root."
+    },
+    {
+      "id": "nifskope",
+      "name": "NifSkope",
+      "group": "assets",
+      "default": false,
+      "source": {
+        "type": "github",
+        "repo": "niftools/nifskope",
+        "asset": "^NifSkope_.*x64\\.7z$",
+        "tag": "latest"
+      },
+      "install": {
+        "strip_single_root": true
+      },
+      "executables": [
+        {
+          "title": "NifSkope",
+          "binary": "NifSkope.exe",
+          "arguments": "",
+          "workingDirectory": "tool"
+        }
+      ],
+      "requires": [],
+      "license_note": "GPL-3.0 / BSD mixed (NifTools project).",
+      "size_hint_mb": 8,
+      "verified": "2026-09-02",
+      "verified_notes": "GitHub releases/latest -> tag v2.0.dev7 (2017; this is genuinely the newest non-prerelease win64 release -- dev6/dev5 are marked prerelease, and 1.1.3 predates the 2.0 rewrite), asset NifSkope_2_0_2018-02-22-x64.7z (7.5 MB). Listed with sevenzip.list_archive: single wrapping folder NifSkope_2_0_2018-02-22-x64/ containing NifSkope.exe -> strip_single_root."
+    },
+    {
+      "id": "synthesis",
+      "name": "Synthesis",
+      "group": "patchers",
+      "default": false,
+      "source": {
+        "type": "github",
+        "repo": "Mutagen-Modding/Synthesis",
+        "asset": "^Synthesis\\.zip$",
+        "tag": "latest"
+      },
+      "install": {},
+      "executables": [
+        {
+          "title": "Synthesis",
+          "binary": "Synthesis.exe",
+          "arguments": "",
+          "workingDirectory": "tool"
+        }
+      ],
+      "requires": [".NET Desktop Runtime 8"],
+      "license_note": "GPL-3.0 (Mutagen-Modding).",
+      "size_hint_mb": 294,
+      "verified": "2026-09-02",
+      "verified_notes": "GitHub releases/latest -> tag 0.36.6, single asset Synthesis.zip (293.7 MB). Listed with sevenzip.list_archive: no wrapping folder, Synthesis.exe at root alongside BuildHost-net472/BuildHost-netcore."
+    },
+    {
+      "id": "cao",
+      "name": "Cathedral Assets Optimizer",
+      "group": "assets",
+      "default": false,
+      "source": {
+        "type": "nexus",
+        "domain": "skyrimspecialedition",
+        "mod_id": 23316,
+        "file": "latest-main"
+      },
+      "install": {},
+      "executables": [
+        {
+          "title": "Cathedral Assets Optimizer",
+          "binary": "Cathedral_Assets_Optimizer.exe",
+          "arguments": "",
+          "workingDirectory": "tool"
+        }
+      ],
+      "requires": [],
+      "license_note": "GPL-3.0; bundles bin/hkxcmd.exe (Havok Content Tools) under its own redistribution terms.",
+      "size_hint_mb": 10,
+      "verified": "2026-09-02",
+      "verified_notes": "GET /v1/games/skyrimspecialedition/mods/23316/files.json -> newest MAIN file is file_id 400106, 'Cathedral Assets Optimizer 64-23316-5-3-15-1687526925.7z', version 5.3.15 (2023-06-23). A newer 7.0.i beta exists (file_id 734557) but is category OPTIONAL, not MAIN, so it is not selected by 'latest-main'. Downloaded with NexusClient (Premium) and listed: no wrapping folder, Cathedral_Assets_Optimizer.exe at root."
+    },
+    {
+      "id": "pandora",
+      "name": "Pandora Behaviour Engine+",
+      "group": "patchers",
+      "default": false,
+      "source": {
+        "type": "github",
+        "repo": "Monitor221hz/Pandora-Behaviour-Engine-Plus",
+        "asset": ".*win-x64_net\\.zip$",
+        "tag": "latest"
+      },
+      "install": {},
+      "executables": [
+        {
+          "title": "Pandora Behaviour Engine+",
+          "binary": "Pandora Behaviour Engine+.exe",
+          "arguments": "",
+          "workingDirectory": "tool"
+        }
+      ],
+      "requires": [".NET Desktop Runtime (8 or newer)"],
+      "license_note": "Freeware; source available (Monitor221hz/Pandora-Behaviour-Engine-Plus).",
+      "size_hint_mb": 54,
+      "verified": "2026-09-02",
+      "verified_notes": "The repo in the task brief, Monitor144hz/Pandora-Behaviour-Engine-Plus, now 301-redirects (GitHub API 'Moved Permanently') to Monitor221hz/Pandora-Behaviour-Engine-Plus (repository id 652829080) -- the owner account was renamed; the catalog entry uses the live owner. releases/latest -> tag v4.4.0-beta (prerelease:false), assets include a self-contained zip plus win-x64_net/win-x86_net/win-arm64_net framework-dependent builds; asset regex picks win-x64_net (53.5 MB, needs the .NET Desktop Runtime installed). Listed with sevenzip.list_archive: no wrapping folder, 'Pandora Behaviour Engine+.exe' at root alongside Nemesis_Engine/ and Pandora_Engine/."
+    },
+    {
+      "id": "dyndolod",
+      "name": "DynDOLOD",
+      "group": "lod",
+      "default": false,
+      "status": "v2",
+      "source": null,
+      "install": {
+        "disabled": true,
+        "note": "Needs the DynDOLOD Resources + DLL NG mods installed first and is only distributed from dyndolod.info (no GitHub/Nexus API download); not yet automated by `tools install`."
+      },
+      "executables": [],
+      "requires": [],
+      "license_note": "Freeware; author-distributed only, no redistribution permitted.",
+      "size_hint_mb": null,
+      "verified": "2026-09-02",
+      "verified_notes": "Placeholder catalog entry only, per spec. `tools install dyndolod` reports it as not yet installable and does nothing; `tools list` shows it as 'unavailable'."
+    }
+  ]
+}

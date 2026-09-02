@@ -35,7 +35,6 @@ import json
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 from datetime import UTC, datetime
@@ -43,11 +42,15 @@ from pathlib import Path
 
 import requests
 
+from .reporter import Reporter, get_reporter
 from .sevenzip import extract
 
 # Repo root is two levels above this file: src/collections2wabbajack/build.py
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CACHE_DIR = REPO_ROOT / "tools" / "cache"
+
+DEFAULT_MO2_VERSION = "2.5.2"
+DEFAULT_ROOTBUILDER_VERSION = "5.1.1"
 
 MO2_URL_TEMPLATE = (
     "https://github.com/ModOrganizer2/modorganizer/releases/download/"
@@ -382,11 +385,13 @@ def _rewrite_ini(ini_path: Path, game_path: str, source_game_path: str | None = 
 # -- Command ----------------------------------------------------------------------
 
 
-def cmd_build(args: argparse.Namespace) -> int:
+def cmd_build(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
+    rep = get_reporter(reporter)
     if args.stock_game and not args.game_path:
-        print("error: --stock-game requires --game-path", file=sys.stderr)
+        rep.warn("--stock-game requires --game-path")
         return 1
 
+    rep.stage("build")
     mo2_dir = Path(args.mo2_dir).resolve()  # MO2 needs absolute paths in its ini
     mo2_dir.mkdir(parents=True, exist_ok=True)
 
@@ -402,23 +407,26 @@ def cmd_build(args: argparse.Namespace) -> int:
         msg = f"extracted MO2 {args.mo2_version}: {len(moved)} top-level entries written to {mo2_dir}"
         if skipped:
             msg += f"; preserved existing instance files: {', '.join(skipped)}"
-        print(msg)
+        rep.log(msg)
     else:
-        print(f"MO2 {args.mo2_version} already present at {mo2_exe} (use --force to re-extract)")
+        rep.log(f"MO2 {args.mo2_version} already present at {mo2_exe} (use --force to re-extract)")
 
     rb_dir = mo2_dir / "plugins" / "rootbuilder"
     if args.force or not rb_dir.exists():
         members = _extract_rootbuilder(rb_archive, mo2_dir)
-        print(f"extracted Root Builder {args.rootbuilder_version} into {rb_dir} ({len(members)} item(s))")
+        rep.log(
+            f"extracted Root Builder {args.rootbuilder_version} into {rb_dir} "
+            f"({len(members)} item(s))"
+        )
     else:
-        print(f"Root Builder already present at {rb_dir} (use --force to re-extract)")
+        rep.log(f"Root Builder already present at {rb_dir} (use --force to re-extract)")
 
     stock_dir: Path | None = None
     effective_game_path = args.game_path
     if args.game_path or args.stock_game:
         ini_path = mo2_dir / "ModOrganizer.ini"
         if not ini_path.exists():
-            print(f"error: {ini_path} not found; run `c2wj profile` first", file=sys.stderr)
+            rep.warn(f"{ini_path} not found; run `c2wj profile` first")
             return 1
 
         if args.stock_game:
@@ -426,28 +434,28 @@ def cmd_build(args: argparse.Namespace) -> int:
             effective_game_path = str(stock_dir.resolve())
 
         changes = _rewrite_ini(ini_path, effective_game_path, source_game_path=args.game_path)
-        print(f"rewrote {ini_path}: {len(changes)} change(s)")
+        rep.log(f"rewrote {ini_path}: {len(changes)} change(s)")
         for c in changes:
-            print(f"  - {c}")
+            rep.log(f"  - {c}")
 
     # MO2 treats a folder holding portable.txt as a portable instance without asking.
     marker = mo2_dir / "portable.txt"
     if not marker.exists():
         marker.write_text("", encoding="utf-8")
-        print(f"created {marker}")
+        rep.log(f"created {marker}")
 
     resolved = str(mo2_dir.resolve())
     if len(resolved) > 60:
-        print(
-            f"warning: instance path is {len(resolved)} characters long ({resolved}). "
+        rep.warn(
+            f"instance path is {len(resolved)} characters long ({resolved}). "
             "Windows limits full paths to 260 characters and mod files nest deeply; "
             "prefer a short location such as D:\\GTS for real installs."
         )
     if stock_dir is not None:
         resolved_stock = str(stock_dir.resolve())
         if len(resolved_stock) > 60:
-            print(
-                f"warning: stock game path is {len(resolved_stock)} characters long "
+            rep.warn(
+                f"stock game path is {len(resolved_stock)} characters long "
                 f"({resolved_stock}). Game files nest deeply; prefer a short instance "
                 "location such as D:\\GTS for real installs."
             )
@@ -469,10 +477,10 @@ def cmd_build(args: argparse.Namespace) -> int:
         }
     )
     build_meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
-    print(f"wrote {build_meta_path}")
+    rep.log(f"wrote {build_meta_path}")
 
     launch = mo2_dir / "ModOrganizer.exe"
-    print(f"\nDone. Launch with:\n  {launch}")
+    rep.done("build", f"portable instance ready: {launch}")
     return 0
 
 
@@ -491,12 +499,14 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help="path to the game install; rewrites gamePath (and related paths) in ModOrganizer.ini",
     )
     p.add_argument(
-        "--mo2-version", default="2.5.2", help="Mod Organizer 2 release to install (default: 2.5.2)"
+        "--mo2-version",
+        default=DEFAULT_MO2_VERSION,
+        help=f"Mod Organizer 2 release to install (default: {DEFAULT_MO2_VERSION})",
     )
     p.add_argument(
         "--rootbuilder-version",
-        default="5.1.1",
-        help="Root Builder plugin release to install (default: 5.1.1)",
+        default=DEFAULT_ROOTBUILDER_VERSION,
+        help=f"Root Builder plugin release to install (default: {DEFAULT_ROOTBUILDER_VERSION})",
     )
     p.add_argument(
         "--force",

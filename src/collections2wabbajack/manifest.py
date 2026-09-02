@@ -43,14 +43,20 @@ def _extract_archive(archive: Path, dest: Path) -> Path:
 
 
 def fetch_manifest(
-    client: NexusClient, ref: CollectionRef, revision: int | None, work_dir: Path
+    client: NexusClient,
+    ref: CollectionRef,
+    revision: int | None,
+    work_dir: Path,
+    info: RevisionInfo | None = None,
 ) -> tuple[RevisionInfo, Path]:
     """Download the collection archive for a revision and extract collection.json.
 
     Returns (revision info, path to extracted collection.json). The archive is kept
-    next to it so bundled files / patches can be read later.
+    next to it so bundled files / patches can be read later. Pass `info` when the
+    caller has already resolved the revision, to save a second GraphQL round trip.
     """
-    info = client.revision_info(ref, revision)
+    if info is None:
+        info = client.revision_info(ref, revision)
     out_dir = work_dir / ref.slug / str(info.revision_number)
     out_dir.mkdir(parents=True, exist_ok=True)
     extracted = out_dir / "archive"
