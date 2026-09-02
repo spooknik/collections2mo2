@@ -23,3 +23,14 @@ packages = ["src/collections2wabbajack"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "local: requires a local tool (e.g. tools/7za.exe) that may not be present in CI",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

@@ -1,0 +1,30 @@
+{
+  "type": "fomod",
+  "options": [
+    {
+      "name": "Stage",
+      "groups": [
+        {"name": "Type", "choices": [{"name": "TypeA", "idx": 0}]},
+        {"name": "Extras", "choices": [{"name": "Extra1", "idx": 0}, {"name": "Extra2", "idx": 1}]}
+      ]
+    },
+    {
+      "name": "Stage",
+      "groups": [
+        {"name": "AOptions", "choices": [{"name": "Opt1", "idx": 0}, {"name": "Opt2", "idx": 1}]}
+      ]
+    },
+    {
+      "name": "Stage",
+      "groups": [
+        {"name": "BOptions", "choices": []}
+      ]
+    },
+    {
+      "name": "Stage",
+      "groups": [
+        {"name": "HiddenGroup", "choices": []}
+      ]
+    }
+  ]
+}

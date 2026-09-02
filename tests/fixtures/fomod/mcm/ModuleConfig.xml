@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<config>
+  <moduleName>MCM-like Test Mod</moduleName>
+  <requiredInstallFiles>
+    <file source="MCM/mcm_core.dll" destination="SKSE/Plugins/mcm_core.dll" />
+  </requiredInstallFiles>
+  <installSteps order="Explicit">
+    <installStep name="Init">
+      <optionalFileGroups order="Explicit">
+        <group name="InitFlags" type="SelectAll">
+          <plugins order="Explicit">
+            <plugin name="SetHasSKSE">
+              <description>Marks SKSE as present (stands in for a fileDependency check).</description>
+              <conditionFlags>
+                <flag name="HasSKSE">Installed</flag>
+              </conditionFlags>
+              <typeDescriptor>
+                <type name="Required" />
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+    <installStep name="Settings">
+      <optionalFileGroups order="Explicit">
+        <group name="Preset" type="SelectExactlyOne">
+          <plugins order="Explicit">
+            <plugin name="PresetA">
+              <description>Preset A -- recommended once HasSKSE is set.</description>
+              <files>
+                <file source="PresetA/a.esp" destination="Data/PresetA.esp" />
+              </files>
+              <typeDescriptor>
+                <dependencyType>
+                  <defaultType name="Optional" />
+                  <patterns>
+                    <pattern>
+                      <dependencies operator="And">
+                        <flagDependency flag="HasSKSE" value="Installed" />
+                      </dependencies>
+                      <type name="Recommended" />
+                    </pattern>
+                  </patterns>
+                </dependencyType>
+              </typeDescriptor>
+            </plugin>
+            <plugin name="PresetB">
+              <description>Preset B -- plain optional.</description>
+              <files>
+                <file source="PresetB/b.esp" />
+              </files>
+              <typeDescriptor>
+                <type name="Optional" />
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+  </installSteps>
+</config>

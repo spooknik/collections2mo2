@@ -1,0 +1,17 @@
+{
+  "type": "fomod",
+  "options": [
+    {
+      "name": "Init",
+      "groups": [
+        {"name": "InitFlags", "choices": [{"name": "SetHasSKSE", "idx": 0}]}
+      ]
+    },
+    {
+      "name": "Settings",
+      "groups": [
+        {"name": "Preset", "choices": [{"name": "PresetB", "idx": 1}]}
+      ]
+    }
+  ]
+}

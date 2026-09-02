@@ -1,0 +1,11 @@
+{
+  "type": "fomod",
+  "options": [
+    {
+      "name": "Patches",
+      "groups": [
+        {"name": "Patches", "choices": [{"name": "PatchA", "idx": 0}]}
+      ]
+    }
+  ]
+}

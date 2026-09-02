@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<config>
+  <moduleName>JBO-like Test Mod</moduleName>
+  <requiredInstallFiles>
+    <folder source="Base" priority="0" />
+    <folder source="Override" priority="10" />
+  </requiredInstallFiles>
+  <installSteps order="Explicit">
+    <installStep name="Stage">
+      <optionalFileGroups order="Explicit">
+        <group name="Type" type="SelectExactlyOne">
+          <plugins order="Explicit">
+            <plugin name="TypeA">
+              <description>Type A</description>
+              <files>
+                <file source="TypeA/a.esp" />
+              </files>
+              <conditionFlags>
+                <flag name="Type">A</flag>
+                <flag name="Chosen">Yes</flag>
+              </conditionFlags>
+              <typeDescriptor>
+                <type name="Optional" />
+              </typeDescriptor>
+            </plugin>
+            <plugin name="TypeB">
+              <description>Type B</description>
+              <files>
+                <file source="TypeB/b.esp" />
+              </files>
+              <conditionFlags>
+                <flag name="Type">B</flag>
+                <flag name="Chosen">Yes</flag>
+              </conditionFlags>
+              <typeDescriptor>
+                <type name="Optional" />
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+        <group name="Extras" type="SelectAll">
+          <plugins order="Explicit">
+            <plugin name="Extra1">
+              <description>Extra 1</description>
+              <files>
+                <file source="Extra1/e1.esp" />
+              </files>
+              <typeDescriptor>
+                <type name="Optional" />
+              </typeDescriptor>
+            </plugin>
+            <plugin name="Extra2">
+              <description>Extra 2</description>
+              <files>
+                <file source="Extra2/e2.esp" />
+              </files>
+              <typeDescriptor>
+                <type name="Optional" />
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+    <installStep name="Stage">
+      <visible operator="And">
+        <flagDependency flag="Type" value="A" />
+        <flagDependency flag="Chosen" value="Yes" />
+      </visible>
+      <optionalFileGroups order="Explicit">
+        <group name="AOptions" type="SelectAny">
+          <plugins order="Explicit">
+            <plugin name="Opt1">
+              <description>Option 1</description>
+              <files>
+                <file source="Opt1/o1.esp" />
+              </files>
+              <typeDescriptor>
+                <type name="Optional" />
+              </typeDescriptor>
+            </plugin>
+            <plugin name="Opt2">
+              <description>Option 2</description>
+              <files>
+                <file source="Opt2/o2.esp" />
+              </files>
+              <typeDescriptor>
+                <type name="Optional" />
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+    <installStep name="Stage">
+      <visible operator="Or">
+        <flagDependency flag="Type" value="B" />
+        <flagDependency flag="NeverSet" value="X" />
+      </visible>
+      <optionalFileGroups order="Explicit">
+        <group name="BOptions" type="SelectAny">
+          <plugins order="Explicit">
+            <plugin name="OptB">
+              <description>Option B</description>
+              <files>
+                <file source="OptB/ob.esp" />
+              </files>
+              <typeDescriptor>
+                <type name="Optional" />
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+    <installStep name="Stage">
+      <visible operator="Or">
+        <flagDependency flag="NeverFlag1" value="X" />
+        <flagDependency flag="NeverFlag2" value="Y" />
+      </visible>
+      <optionalFileGroups order="Explicit">
+        <group name="HiddenGroup" type="SelectExactlyOne">
+          <plugins order="Explicit">
+            <plugin name="ShouldNotAppear">
+              <description>Should never be visible</description>
+              <files>
+                <file source="Hidden/z.esp" />
+              </files>
+              <conditionFlags>
+                <flag name="SecretFlag">Yes</flag>
+              </conditionFlags>
+              <typeDescriptor>
+                <type name="Optional" />
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+  </installSteps>
+</config>
