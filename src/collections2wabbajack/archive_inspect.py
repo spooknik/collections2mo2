@@ -59,7 +59,11 @@ def _find_fomod_dir(entries: list[ArchiveEntry]) -> str | None:
         if e.is_dir:
             continue
         parts = e.path.split("/")
-        if len(parts) >= 2 and parts[-1].lower() == "moduleconfig.xml" and parts[-2].lower() == "fomod":
+        if (
+            len(parts) >= 2
+            and parts[-1].lower() == "moduleconfig.xml"
+            and parts[-2].lower() == "fomod"
+        ):
             return "/".join(parts[:-1])
     return None
 
@@ -95,9 +99,17 @@ def _classify_layout(
 
     if has_data_content(considered):
         return "data"
-    if len(considered) == 1 and considered[0].lower() == "data" and _is_top_folder(considered[0], entries):
+    if (
+        len(considered) == 1
+        and considered[0].lower() == "data"
+        and _is_top_folder(considered[0], entries)
+    ):
         return "data_wrapped"
-    if len(considered) == 1 and considered[0].lower() != "data" and _is_top_folder(considered[0], entries):
+    if (
+        len(considered) == 1
+        and considered[0].lower() != "data"
+        and _is_top_folder(considered[0], entries)
+    ):
         return "single_folder"
     if any(_ext(n) in _ROOT_EXTS for n in considered):
         return "root"
@@ -122,7 +134,12 @@ def inspect_archive(path: Path | str) -> dict[str, Any]:
     has_skse_plugin = False
     for e in files:
         parts = e.path.lower().split("/")
-        if len(parts) >= 3 and parts[-1].endswith(".dll") and parts[-2] == "plugins" and parts[-3] == "skse":
+        if (
+            len(parts) >= 3
+            and parts[-1].endswith(".dll")
+            and parts[-2] == "plugins"
+            and parts[-3] == "skse"
+        ):
             has_skse_plugin = True
             break
 
@@ -236,7 +253,9 @@ def cmd_inspect(args: argparse.Namespace, reporter: Reporter | None = None) -> i
 
 
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
-    p = subparsers.add_parser("inspect", help="inspect downloaded archives (layout, FOMOD, plugins)")
+    p = subparsers.add_parser(
+        "inspect", help="inspect downloaded archives (layout, FOMOD, plugins)"
+    )
     p.add_argument("downloads_json", help="path to downloads.json")
     p.add_argument("--out", default=None, help="output path (default: <same dir>/inspect.json)")
     p.add_argument("--jobs", type=int, default=4, help="parallel archive listings (default: 4)")

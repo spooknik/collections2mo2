@@ -287,7 +287,9 @@ class _FakeClient:
 
 def test_validate_api_key_success(monkeypatch):
     response = _FakeResponse(200, {"name": "Spooknik", "is_premium": True})
-    monkeypatch.setattr(api, "NexusClient", lambda api_key=None: _FakeClient(_FakeSession(response)))
+    monkeypatch.setattr(
+        api, "NexusClient", lambda api_key=None: _FakeClient(_FakeSession(response))
+    )
     result = api.validate_api_key("some-key")
     assert result.name == "Spooknik"
     assert result.is_premium is True
@@ -295,7 +297,9 @@ def test_validate_api_key_success(monkeypatch):
 
 def test_validate_api_key_rejected(monkeypatch):
     response = _FakeResponse(401, {})
-    monkeypatch.setattr(api, "NexusClient", lambda api_key=None: _FakeClient(_FakeSession(response)))
+    monkeypatch.setattr(
+        api, "NexusClient", lambda api_key=None: _FakeClient(_FakeSession(response))
+    )
     with pytest.raises(api.ApiError):
         api.validate_api_key("bad-key")
 

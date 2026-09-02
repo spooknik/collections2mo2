@@ -168,7 +168,13 @@ def test_settings_file_lands_in_the_source_root(instance: Path, led: ledger_mod.
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [(68, "68.0.0"), ("1.2.3.4", "1.2.3.4"), ("2.0", "2.0.0"), ("1.0.0-rc1", "1.0.0.1"), ("", "0.0.1")],
+    [
+        (68, "68.0.0"),
+        ("1.2.3.4", "1.2.3.4"),
+        ("2.0", "2.0.0"),
+        ("1.0.0-rc1", "1.0.0.1"),
+        ("", "0.0.1"),
+    ],
 )
 def test_dotnet_version(value: object, expected: str) -> None:
     assert wabbajack.dotnet_version(value) == expected
@@ -183,7 +189,7 @@ def test_game_name_falls_back_to_the_mo2_name() -> None:
 
 
 def test_safe_name_strips_path_characters() -> None:
-    assert wabbajack.safe_name('A/B:C*D?') == "ABCD"
+    assert wabbajack.safe_name("A/B:C*D?") == "ABCD"
     assert wabbajack.safe_name("   ") == "Modlist"
 
 
@@ -295,7 +301,13 @@ def test_tool_archive_traced_by_nexus_source_when_modname_differs(
     dl = instance / "downloads"
     (dl / "Bethini Pie-631-4-17.7z").write_bytes(b"x" * 10)
     (dl / "Bethini Pie-631-4-17.7z.meta").write_text(
-        _meta(gameName="site", modID="631", fileID="6848", repository="Nexus", modName="something else"),
+        _meta(
+            gameName="site",
+            modID="631",
+            fileID="6848",
+            repository="Nexus",
+            modName="something else",
+        ),
         encoding="utf-8",
     )
 
@@ -347,11 +359,18 @@ def test_tool_owned_companion_mod_traced_via_companion_record_without_meta_ini(
         _meta(gameName="skyrimspecialedition", modID="97720", fileID="793857", repository="Nexus"),
         encoding="utf-8",
     )
-    led.set_mod_owner(folder, ledger_mod.tool_owner("dyndolod"), tag="companion:dyndolod-dll-ng@Alpha-42")
+    led.set_mod_owner(
+        folder, ledger_mod.tool_owner("dyndolod"), tag="companion:dyndolod-dll-ng@Alpha-42"
+    )
     led.data["tools"]["dyndolod"] = {
         "name": "DynDOLOD",
         "version": "Alpha-211",
-        "source": {"type": "nexus", "domain": "skyrimspecialedition", "mod_id": 68518, "file": "latest-main"},
+        "source": {
+            "type": "nexus",
+            "domain": "skyrimspecialedition",
+            "mod_id": 68518,
+            "file": "latest-main",
+        },
         "dir": str(instance / "Tools" / "dyndolod"),
         "executables": [],
         "companion_mods": [
@@ -387,7 +406,9 @@ def test_mo2_program_files_are_not_inlined_when_the_release_archive_is_in_downlo
     )
     (instance / "downloads" / "Mod.Organizer-2.5.2.7z").write_bytes(b"x" * 10)
     (instance / "downloads" / "Mod.Organizer-2.5.2.7z.meta").write_text(
-        _meta(directURL="https://github.com/ModOrganizer2/modorganizer/releases/download/v2.5.2/x.7z"),
+        _meta(
+            directURL="https://github.com/ModOrganizer2/modorganizer/releases/download/v2.5.2/x.7z"
+        ),
         encoding="utf-8",
     )
 
@@ -419,7 +440,9 @@ def test_mo2_program_files_still_inline_when_the_archive_meta_does_not_resolve(
         encoding="utf-8",
     )
     (instance / "downloads" / "Mod.Organizer-2.5.2.7z").write_bytes(b"x" * 10)
-    (instance / "downloads" / "Mod.Organizer-2.5.2.7z.meta").write_text(_meta(url=""), encoding="utf-8")
+    (instance / "downloads" / "Mod.Organizer-2.5.2.7z.meta").write_text(
+        _meta(url=""), encoding="utf-8"
+    )
 
     inlined = {e.path: e for e in wabbajack.check_inlined(instance, led)}
     assert "ModOrganizer.exe" in inlined
@@ -549,7 +572,9 @@ def test_user_mods_are_added_to_nomatchinclude(
 
 def test_missing_ledger_is_refused(tmp_path: Path) -> None:
     (tmp_path / "empty").mkdir()
-    assert wabbajack.cmd_wabbajack(_args(tmp_path / "empty", dry_run=True), reporter=_Nullish()) == 1
+    assert (
+        wabbajack.cmd_wabbajack(_args(tmp_path / "empty", dry_run=True), reporter=_Nullish()) == 1
+    )
 
 
 def test_record_in_ledger_merges_without_losing_layers(

@@ -134,7 +134,9 @@ def _md5(mod: dict[str, Any]) -> str:
     return str(_src(mod).get("md5") or "").lower()
 
 
-def _match_old_mods(old: list[dict[str, Any]], new: list[dict[str, Any]]) -> tuple[list[tuple[int, int]], list[int], list[int]]:
+def _match_old_mods(
+    old: list[dict[str, Any]], new: list[dict[str, Any]]
+) -> tuple[list[tuple[int, int]], list[int], list[int]]:
     """Pair up the two manifests' mods; returns `(pairs, added_idx, removed_idx)`.
 
     Tried in order: `source.tag`, `(modId, fileId)`, `md5`, then `modId` alone. Each old
@@ -204,9 +206,7 @@ def _reasons(old: dict[str, Any], new: dict[str, Any]) -> tuple[list[str], bool]
     return reasons, reinstall
 
 
-def plan_folder_actions(
-    diff: ManifestDiff, mods_dir: Path, exclusive: set[str]
-) -> None:
+def plan_folder_actions(diff: ManifestDiff, mods_dir: Path, exclusive: set[str]) -> None:
     """Decide what happens to each renamed mod's old folder, before anything is fetched.
 
     `exclusive` is the set of `mods/` folders this layer is the *sole* owner of. Those we
@@ -340,7 +340,9 @@ def _as_epoch(stamp: str | None) -> float | None:
     return parsed.timestamp()
 
 
-def looks_user_modified(mod_dir: Path, entry: dict[str, Any] | None, since: str | None = None) -> str:
+def looks_user_modified(
+    mod_dir: Path, entry: dict[str, Any] | None, since: str | None = None
+) -> str:
     """Why `mod_dir` no longer looks like what we installed, or `""` if it still does.
 
     Two cheap checks, both deliberately one-sided so an update never keeps a folder the
@@ -359,7 +361,9 @@ def looks_user_modified(mod_dir: Path, entry: dict[str, Any] | None, since: str 
     recorded = (entry or {}).get("file_count")
     actual = _count_files(mod_dir)
     if isinstance(recorded, int) and recorded > 0 and actual > recorded:
-        return f"{actual - recorded} file(s) more than the install recorded ({actual} vs {recorded})"
+        return (
+            f"{actual - recorded} file(s) more than the install recorded ({actual} vs {recorded})"
+        )
     epoch = _as_epoch(since)
     if epoch is not None and _newest_mtime(mod_dir) > epoch:
         return f"contains file(s) modified after the layer was installed ({since})"
@@ -373,7 +377,9 @@ def _mb(size: int) -> str:
     return f"{size / 1e6:.1f} MB" if size < 1e9 else f"{size / 1e9:.2f} GB"
 
 
-def _instructions_diff(old_manifest: dict, new_manifest: dict, old_rev: Any, new_rev: Any) -> list[str]:
+def _instructions_diff(
+    old_manifest: dict, new_manifest: dict, old_rev: Any, new_rev: Any
+) -> list[str]:
     old_text = ((old_manifest.get("info") or {}).get("installInstructions") or "").splitlines()
     new_text = ((new_manifest.get("info") or {}).get("installInstructions") or "").splitlines()
     if old_text == new_text:
@@ -414,9 +420,11 @@ def render_plan(
 
     if changelog and (changelog.get("description") or "").strip():
         lines.append("")
-        lines.append(f"changelog for revision {changelog.get('revisionNumber', new_revision)}"
-                     + (f" ({changelog.get('createdAt')})" if changelog.get("createdAt") else "")
-                     + ":")
+        lines.append(
+            f"changelog for revision {changelog.get('revisionNumber', new_revision)}"
+            + (f" ({changelog.get('createdAt')})" if changelog.get("createdAt") else "")
+            + ":"
+        )
         body = str(changelog["description"]).strip().splitlines()
         lines.extend(f"  {ln}" for ln in body[:CHANGELOG_LINES])
         if len(body) > CHANGELOG_LINES:
@@ -602,7 +610,7 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     slug = layer.get("slug") or ""
     old_revision = layer.get("revision")
     old_owner = led.layer_owner(layer)
-    is_base = (led.data["layers"][0] is layer)
+    is_base = led.data["layers"][0] is layer
     ref = CollectionRef.parse(
         f"https://www.nexusmods.com/games/{(led.data.get('game') or {}).get('domain') or 'x'}"
         f"/collections/{slug}"
@@ -645,7 +653,9 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         rep.warn(f"the installed revision's manifest is missing ({old_manifest_path})")
         return 2
     try:
-        _, new_manifest_path = fetch_manifest(client, ref, new_revision, paths.collections, info=info)
+        _, new_manifest_path = fetch_manifest(
+            client, ref, new_revision, paths.collections, info=info
+        )
     except (AuthRequired, NexusError, OSError, ValueError) as exc:
         rep.warn(f"could not fetch revision {new_revision}: {exc}")
         return 1
@@ -692,7 +702,9 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
             continue
         owners = led.owners_of(folder)
         if [o for o in owners if o != old_owner]:
-            keep_notes[folder] = f"(kept: also owned by {', '.join(o for o in owners if o != old_owner)})"
+            keep_notes[folder] = (
+                f"(kept: also owned by {', '.join(o for o in owners if o != old_owner)})"
+            )
             continue
         why = looks_user_modified(
             paths.mods / folder,
@@ -715,7 +727,9 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         new_revision=new_revision,
         latest_revision=latest,
         changelog=changelog,
-        instructions_diff=_instructions_diff(old_manifest, new_manifest, old_revision, new_revision),
+        instructions_diff=_instructions_diff(
+            old_manifest, new_manifest, old_revision, new_revision
+        ),
         already_downloaded=sum(
             1
             for d in [*diff.changed, *diff.added]
@@ -742,7 +756,8 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     # -- download / inspect / install the delta ----------------------------------------
     install_tags = diff.install_tags
     delta_mods = [
-        mod for mod in new_manifest.get("mods") or []
+        mod
+        for mod in new_manifest.get("mods") or []
         if str(_src(mod).get("tag") or "") in install_tags
     ]
     missing_names: list[str] = []
@@ -778,7 +793,9 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
             if not args.allow_missing or mismatched or not unavailable:
                 rep.warn("one or more archives failed to download; nothing was changed")
                 return 1
-            rep.warn(f"{len(unavailable)} archive(s) are not available from Nexus (--allow-missing):")
+            rep.warn(
+                f"{len(unavailable)} archive(s) are not available from Nexus (--allow-missing):"
+            )
             for name, error in unavailable:
                 rep.warn(f"  {name}: {error}")
             missing_names = [name for name, _ in unavailable]
@@ -897,16 +914,12 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         if tag in fresh_install:
             install_out.append(fresh_install[tag])
         elif old_tag in old_by_old_tag:
-            delta = next(
-                (d for d in [*diff.unchanged, *diff.changed] if d.new_tag == tag), None
-            )
+            delta = next((d for d in [*diff.unchanged, *diff.changed] if d.new_tag == tag), None)
             folder = delta.new_folder if delta else old_by_old_tag[old_tag].get("folder", "")
             # A mod we meant to reinstall but could not (--allow-missing) keeps the
             # archive it actually has on disk, warning and all.
             stale = bool(delta and delta.needs_install)
-            row = _refresh_entry(
-                old_by_old_tag[old_tag], mod, folder, file_identity=not stale
-            )
+            row = _refresh_entry(old_by_old_tag[old_tag], mod, folder, file_identity=not stale)
             if stale:
                 note = (
                     f"revision {new_revision} re-pinned this mod to a file Nexus would not "
@@ -920,7 +933,8 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         {
             "manifest": str(new_manifest_path.resolve()),
             "domain": old_downloads.get("domain") or (led.data.get("game") or {}).get("domain"),
-            "game_name": old_downloads.get("game_name") or (led.data.get("game") or {}).get("mo2_name"),
+            "game_name": old_downloads.get("game_name")
+            or (led.data.get("game") or {}).get("mo2_name"),
             "entries": downloads_out,
         },
     )
@@ -945,7 +959,9 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         folder = entry.get("folder")
         if not folder:
             continue
-        others = [o for o in led.owners_of(folder) if o not in (old_owner, new_owner, ledger.USER_OWNER)]
+        others = [
+            o for o in led.owners_of(folder) if o not in (old_owner, new_owner, ledger.USER_OWNER)
+        ]
         led.remove_mod_owner(folder, old_owner)
         led.set_mod_owner(
             folder,
@@ -1044,7 +1060,9 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     for delta in replaced[:MAX_LISTED]:
         rep.log(f"    {delta.old_folder} -> {delta.new_folder}")
     if dropped_separators:
-        rep.log(f"  separators dropped: {len(dropped_separators):>4} ({', '.join(dropped_separators)})")
+        rep.log(
+            f"  separators dropped: {len(dropped_separators):>4} ({', '.join(dropped_separators)})"
+        )
     rep.log(f"  folders kept:       {len(kept):>4}")
     for folder in kept[:MAX_LISTED]:
         rep.log(f"    {folder} {keep_notes.get(folder, '')}")
@@ -1154,7 +1172,9 @@ def cmd_status(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     report = _read_json(paths.profile_report)
     rep.log("")
     rep.log(f"profile:   {report.get('profile') or '?'}")
-    rep.log(f"           {'in sync with the ledger' if in_sync else 'OUT OF SYNC: re-render it (c2wj update / add / remove)'}")
+    rep.log(
+        f"           {'in sync with the ledger' if in_sync else 'OUT OF SYNC: re-render it (c2wj update / add / remove)'}"
+    )
     rep.done("status", f"{len(layers)} layer(s), {len(owners)} mod folder(s)")
     return 0
 

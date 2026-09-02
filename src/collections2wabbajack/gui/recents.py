@@ -41,7 +41,9 @@ class RecentInstance:
 
 
 def _settings() -> QSettings:
-    return QSettings(QSettings.defaultFormat(), QSettings.Scope.UserScope, ORGANIZATION, APPLICATION)
+    return QSettings(
+        QSettings.defaultFormat(), QSettings.Scope.UserScope, ORGANIZATION, APPLICATION
+    )
 
 
 def load_recents(*, prune: bool = True) -> list[RecentInstance]:

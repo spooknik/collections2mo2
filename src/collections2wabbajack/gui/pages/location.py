@@ -99,7 +99,9 @@ class LocationPage(WizardPage):
 
     def _browse_game(self) -> None:
         start = self.game_edit.text() or str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(self, "Choose Skyrim Special Edition folder", start)
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose Skyrim Special Edition folder", start
+        )
         if chosen:
             self.game_edit.setText(chosen)
 

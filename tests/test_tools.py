@@ -285,7 +285,9 @@ def test_install_companion_mods_writes_folder_ledger_and_downloads(
     }
     monkeypatch.setattr(tools, "load_companion_catalog", lambda: [fake_companion])
     monkeypatch.setattr(
-        tools, "resolve_source", lambda entry, client: _resolved(52897, 747879, archive.name, "Alpha-59")
+        tools,
+        "resolve_source",
+        lambda entry, client: _resolved(52897, 747879, archive.name, "Alpha-59"),
     )
     monkeypatch.setattr(tools, "_download_cached", lambda url, dest, **kw: archive)
 
@@ -338,7 +340,9 @@ def test_install_companion_mods_skips_reinstall_at_the_same_version(
     }
     monkeypatch.setattr(tools, "load_companion_catalog", lambda: [fake_companion])
     monkeypatch.setattr(
-        tools, "resolve_source", lambda entry, client: _resolved(97720, 793857, archive.name, "Alpha-42")
+        tools,
+        "resolve_source",
+        lambda entry, client: _resolved(97720, 793857, archive.name, "Alpha-42"),
     )
     downloads: list[str] = []
 
@@ -421,7 +425,9 @@ def test_install_companion_mods_installs_a_fomod_with_defaults(
     }
     monkeypatch.setattr(tools, "load_companion_catalog", lambda: [fake_companion])
     monkeypatch.setattr(
-        tools, "resolve_source", lambda entry, client: _resolved(52897, 747879, archive.name, "Alpha-59")
+        tools,
+        "resolve_source",
+        lambda entry, client: _resolved(52897, 747879, archive.name, "Alpha-59"),
     )
     monkeypatch.setattr(tools, "_download_cached", lambda url, dest, **kw: archive)
 
@@ -475,7 +481,11 @@ def test_cmd_tools_remove_deletes_tool_dir_executables_and_solely_owned_companio
             }
         ],
         "companion_mods": [
-            {"id": "dyndolod-resources", "name": "DynDOLOD Resources SE", "folder": "DynDOLOD Resources SE"}
+            {
+                "id": "dyndolod-resources",
+                "name": "DynDOLOD Resources SE",
+                "folder": "DynDOLOD Resources SE",
+            }
         ],
     }
     led.save()
@@ -505,7 +515,9 @@ def test_cmd_tools_remove_keeps_a_companion_mod_owned_by_something_else(tmp_path
         "name": "DynDOLOD",
         "version": "Alpha-211",
         "executables": [],
-        "companion_mods": [{"id": "dyndolod-resources", "name": "Shared Companion", "folder": "Shared Companion"}],
+        "companion_mods": [
+            {"id": "dyndolod-resources", "name": "Shared Companion", "folder": "Shared Companion"}
+        ],
     }
     led.save()
 

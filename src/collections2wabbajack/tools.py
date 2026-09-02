@@ -765,9 +765,7 @@ def cmd_tools_list(args: argparse.Namespace) -> int:
 
     if comp_rows:
         comp_headers = ("tool", "companion id", "name", "status")
-        comp_widths = [
-            max(len(comp_headers[i]), *(len(r[i]) for r in comp_rows)) for i in range(4)
-        ]
+        comp_widths = [max(len(comp_headers[i]), *(len(r[i]) for r in comp_rows)) for i in range(4)]
         print()
         print("companion mods:")
         print("  ".join(h.ljust(comp_widths[i]) for i, h in enumerate(comp_headers)))
@@ -850,7 +848,9 @@ def _install_companion_mods(
         dest_root = mods_dir / folder
         existing = led.data.get("mods", {}).get(folder)
         if existing and existing.get("tag") == tag and dest_root.is_dir() and not force:
-            print(f"[{tool_id}] companion already installed: {companion['name']} {resolved.version}")
+            print(
+                f"[{tool_id}] companion already installed: {companion['name']} {resolved.version}"
+            )
             led.add_mod_owner(folder, owner)
             records.append(
                 {
@@ -907,9 +907,13 @@ def _install_companion_mods(
         dl_dest = downloads_dir / resolved.filename
         if not dl_dest.exists():
             shutil.copyfile(archive, dl_dest)
-        _write_tool_meta(dl_dest.with_name(dl_dest.name + ".meta"), entry=companion, resolved=resolved)
+        _write_tool_meta(
+            dl_dest.with_name(dl_dest.name + ".meta"), entry=companion, resolved=resolved
+        )
 
-        print(f"[{tool_id}] companion installed: {companion['name']} -> {dest_root} ({result.strategy})")
+        print(
+            f"[{tool_id}] companion installed: {companion['name']} -> {dest_root} ({result.strategy})"
+        )
         records.append(
             {
                 "id": companion_id,
@@ -1125,7 +1129,9 @@ def cmd_tools_remove(args: argparse.Namespace) -> int:
                 target = mo2_dir / "mods" / folder
                 if target.is_dir():
                     installer_mod.stamp_owner(target, ", ".join(remaining))
-                print(f"[{tool_id}] companion kept (still owned by {', '.join(remaining)}): {folder}")
+                print(
+                    f"[{tool_id}] companion kept (still owned by {', '.join(remaining)}): {folder}"
+                )
             else:
                 shutil.rmtree(mo2_dir / "mods" / folder, ignore_errors=True)
                 print(f"[{tool_id}] companion removed: {folder}")
@@ -1259,8 +1265,6 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help="rewrite already-installed tools' [customExecutables] entries from the "
         "current catalogue/gamePath, without re-downloading",
     )
-    fp.add_argument(
-        "ids", nargs="*", help="tool ids to refresh (default: every installed tool)"
-    )
+    fp.add_argument("ids", nargs="*", help="tool ids to refresh (default: every installed tool)")
     fp.add_argument("--mo2-dir", required=True, help="portable MO2 instance directory")
     fp.set_defaults(func=cmd_tools_refresh)

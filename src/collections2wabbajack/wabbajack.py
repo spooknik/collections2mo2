@@ -464,7 +464,7 @@ class Defaults:
         if url:
             description = f"{description} Source collection: {url}"
         profile = base.get("profile") or (_first_profile(led) or name)
-        game = (led.data.get("game") or {})
+        game = led.data.get("game") or {}
         return cls(
             name=name,
             author=author,
@@ -506,13 +506,15 @@ def build_settings(
 
     list_name = name or defaults.name
     profiles = _profiles(instance)
-    profile = defaults.profile if defaults.profile in profiles else (profiles[0] if profiles else defaults.profile)
+    profile = (
+        defaults.profile
+        if defaults.profile in profiles
+        else (profiles[0] if profiles else defaults.profile)
+    )
     additional = [p for p in profiles if p != profile]
 
     out_file = (
-        Path(output)
-        if output
-        else instance / OUTPUT_SUBDIR / f"{safe_name(list_name)}.wabbajack"
+        Path(output) if output else instance / OUTPUT_SUBDIR / f"{safe_name(list_name)}.wabbajack"
     )
 
     ignore = list(DEFAULT_IGNORE)
@@ -816,7 +818,10 @@ def _trace_tool_archive(
 
     if name:
         for archive in ok_archives:
-            if name in archive.name.lower() or name in (archive.meta.get("directURL") or "").lower():
+            if (
+                name in archive.name.lower()
+                or name in (archive.meta.get("directURL") or "").lower()
+            ):
                 return archive
     return None
 
@@ -1080,7 +1085,9 @@ def report_checklist(checklist: Checklist, rep: Reporter) -> None:
             "can reference instead of storing"
         )
 
-    rep.log(f"inlined into the modlist: {len(checklist.inlined)} folder(s), {human(checklist.inlined_bytes)}")
+    rep.log(
+        f"inlined into the modlist: {len(checklist.inlined)} folder(s), {human(checklist.inlined_bytes)}"
+    )
     for entry in sorted(checklist.inlined, key=lambda e: -e.size)[:20]:
         rep.log(f"  - {entry.path}  {human(entry.size)}  ({entry.reason})")
     if len(checklist.inlined) > 20:
@@ -1241,7 +1248,9 @@ def cmd_wabbajack(args: argparse.Namespace, reporter: Reporter | None = None) ->
         f"modlist: {settings['ModListName']} {settings['ModlistVersion']} "
         f"by {settings['ModListAuthor']} [{settings['Game']}]"
     )
-    rep.log(f"profile: {settings['Profile']}  additional: {settings['AdditionalProfiles'] or 'none'}")
+    rep.log(
+        f"profile: {settings['Profile']}  additional: {settings['AdditionalProfiles'] or 'none'}"
+    )
     report_checklist(checklist, rep)
 
     output_file = Path(settings["OutputFile"])
@@ -1317,8 +1326,12 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--author", default=None, help="modlist author (default: the curator)")
     p.add_argument("--description", default=None, help="modlist description")
     p.add_argument("--website", default=None, help="modlist website (default: the collection URL)")
-    p.add_argument("--readme", default=None, help="modlist readme URL (default: the collection URL)")
-    p.add_argument("--image", default=None, help="modlist image; a placeholder is generated if omitted")
+    p.add_argument(
+        "--readme", default=None, help="modlist readme URL (default: the collection URL)"
+    )
+    p.add_argument(
+        "--image", default=None, help="modlist image; a placeholder is generated if omitted"
+    )
     p.add_argument(
         "--output",
         default=None,

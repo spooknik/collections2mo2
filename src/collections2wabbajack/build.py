@@ -57,8 +57,7 @@ DEFAULT_MO2_VERSION = "2.5.2"
 DEFAULT_ROOTBUILDER_VERSION = "5.1.1"
 
 MO2_URL_TEMPLATE = (
-    "https://github.com/ModOrganizer2/modorganizer/releases/download/"
-    "v{ver}/Mod.Organizer-{ver}.7z"
+    "https://github.com/ModOrganizer2/modorganizer/releases/download/v{ver}/Mod.Organizer-{ver}.7z"
 )
 ROOTBUILDER_URL_TEMPLATE = (
     "https://github.com/Kezyma/ModOrganizer-Plugins/releases/download/"
@@ -179,7 +178,9 @@ def _extract_rootbuilder(archive: Path, mo2_dir: Path) -> list[str]:
     with tempfile.TemporaryDirectory(prefix="c2wj-rootbuilder-") as tmp:
         tmp_path = Path(tmp)
         extract(archive, tmp_path)
-        candidates = [p for p in tmp_path.iterdir() if p.is_dir() and p.name.lower() == "rootbuilder"]
+        candidates = [
+            p for p in tmp_path.iterdir() if p.is_dir() and p.name.lower() == "rootbuilder"
+        ]
         src = candidates[0] if candidates else tmp_path
         dest = plugins_dir / "rootbuilder"
         if dest.exists():
@@ -225,7 +226,9 @@ def _archive_top_level_names(archive: Path) -> list[str]:
     return top
 
 
-def _ensure_release_download(mo2_dir: Path, archive: Path, url: str, mod_name: str, version: str) -> Path:
+def _ensure_release_download(
+    mo2_dir: Path, archive: Path, url: str, mod_name: str, version: str
+) -> Path:
     """Copy `archive` into `<mo2_dir>/downloads/` with a `directURL` `.meta`, if not there yet."""
     downloads_dir = mo2_dir / "downloads"
     downloads_dir.mkdir(parents=True, exist_ok=True)
@@ -520,7 +523,9 @@ def cmd_build(args: argparse.Namespace, reporter: Reporter | None = None) -> int
     mo2_exe = mo2_dir / "ModOrganizer.exe"
     if args.force or not mo2_exe.exists():
         moved, skipped = _extract_mo2(mo2_archive, mo2_dir)
-        msg = f"extracted MO2 {args.mo2_version}: {len(moved)} top-level entries written to {mo2_dir}"
+        msg = (
+            f"extracted MO2 {args.mo2_version}: {len(moved)} top-level entries written to {mo2_dir}"
+        )
         if skipped:
             msg += f"; preserved existing instance files: {', '.join(skipped)}"
         rep.log(msg)
@@ -541,12 +546,8 @@ def cmd_build(args: argparse.Namespace, reporter: Reporter | None = None) -> int
     # MO2's own binaries by hash instead of inlining them (see the note above
     # `_ensure_release_download`).
     mo2_top_level = _archive_top_level_names(mo2_archive)
-    _ensure_release_download(
-        mo2_dir, mo2_archive, mo2_url, "Mod Organizer 2", args.mo2_version
-    )
-    _ensure_release_download(
-        mo2_dir, rb_archive, rb_url, "Root Builder", args.rootbuilder_version
-    )
+    _ensure_release_download(mo2_dir, mo2_archive, mo2_url, "Mod Organizer 2", args.mo2_version)
+    _ensure_release_download(mo2_dir, rb_archive, rb_url, "Root Builder", args.rootbuilder_version)
     rep.log(
         f"downloads/: cached {mo2_archive.name} and {rb_archive.name} (with .meta) so "
         "Wabbajack can reference MO2's own program files instead of inlining them"

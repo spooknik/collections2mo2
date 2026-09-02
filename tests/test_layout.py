@@ -51,7 +51,9 @@ def test_nemesis_engine_is_root_data_not_a_wrapper():
     files = ["Nemesis_Engine/mod/mymod/mymod.txt"]
     plan = layout.plan_layout(files)
     assert plan.strategy == "data"
-    assert plan.files == [("Nemesis_Engine/mod/mymod/mymod.txt", "Nemesis_Engine/mod/mymod/mymod.txt")]
+    assert plan.files == [
+        ("Nemesis_Engine/mod/mymod/mymod.txt", "Nemesis_Engine/mod/mymod/mymod.txt")
+    ]
 
 
 def test_mapmarkers_is_root_data_not_a_wrapper():

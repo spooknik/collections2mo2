@@ -208,7 +208,9 @@ def test_meta_ini_alone_never_marks_a_folder_as_modified(tmp_path: Path):
     (mod_dir / "one.esp").write_text("", encoding="utf-8")
     old_time = time.time() - 3600
     os.utime(mod_dir / "one.esp", (old_time, old_time))
-    (mod_dir / "meta.ini").write_text("[General]\ncomments=owner: collection:a@2\n", encoding="utf-8")
+    (mod_dir / "meta.ini").write_text(
+        "[General]\ncomments=owner: collection:a@2\n", encoding="utf-8"
+    )
     assert update.looks_user_modified(mod_dir, {"file_count": 1}, "2999-01-01T00:00:00+00:00") == ""
 
 
@@ -320,9 +322,7 @@ def test_render_plan_names_a_rename_by_both_folders():
     old = _manifest([_mod("Old Name", tag="a", mod_id=1, file_id=1, md5="m")])
     new = _manifest([_mod("New Name", tag="b", mod_id=1, file_id=1, md5="m")])
     diff = update.diff_manifests(old, new, old_folders={"a": "Old Name"})
-    text = "\n".join(
-        update.render_plan(diff, slug="s", name="n", old_revision=1, new_revision=2)
-    )
+    text = "\n".join(update.render_plan(diff, slug="s", name="n", old_revision=1, new_revision=2))
     assert "~ Old Name -> New Name" in text
     assert "rename:      1 mod folder(s)" in text
 

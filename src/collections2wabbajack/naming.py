@@ -6,7 +6,14 @@ import hashlib
 import re
 
 _ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+_RESERVED = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
 
 # Windows MAX_PATH is 260 for the whole path. The instance path, the mod folder and the
 # mod's own (often deeply nested) files all share that budget, so keep folder names short.
@@ -95,4 +102,3 @@ def layer_separator_name(collection_name: str, slug: str = "") -> str:
     if label.lower().endswith(SEP_SUFFIX):
         return label
     return sanitize_folder_name(f"{label}{SEP_SUFFIX}")
-

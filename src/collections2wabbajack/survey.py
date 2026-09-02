@@ -70,7 +70,11 @@ def _ext(name: str) -> str:
 def _find_fomod_dir(files: list[str]) -> str | None:
     for p in files:
         parts = p.split("/")
-        if len(parts) >= 2 and parts[-1].lower() == "moduleconfig.xml" and parts[-2].lower() == "fomod":
+        if (
+            len(parts) >= 2
+            and parts[-1].lower() == "moduleconfig.xml"
+            and parts[-2].lower() == "fomod"
+        ):
             return "/".join(parts[:-1])
     return None
 
@@ -101,9 +105,17 @@ def _classify_layout(
 
     if has_data_content(considered):
         return "data"
-    if len(considered) == 1 and considered[0].lower() == "data" and _is_top_folder(considered[0], entries):
+    if (
+        len(considered) == 1
+        and considered[0].lower() == "data"
+        and _is_top_folder(considered[0], entries)
+    ):
         return "data_wrapped"
-    if len(considered) == 1 and considered[0].lower() != "data" and _is_top_folder(considered[0], entries):
+    if (
+        len(considered) == 1
+        and considered[0].lower() != "data"
+        and _is_top_folder(considered[0], entries)
+    ):
         return "single_folder"
     if any(_ext(n) in _ROOT_EXTS for n in considered):
         return "root"
@@ -516,7 +528,9 @@ def run_survey(
                 break
             batch = to_process[idx : idx + jobs]
             idx += jobs
-            futures = {pool.submit(_survey_one, clients, mod, domain, limiter): mod for mod in batch}
+            futures = {
+                pool.submit(_survey_one, clients, mod, domain, limiter): mod for mod in batch
+            }
             try:
                 for fut in as_completed(futures):
                     tag, entry = fut.result()

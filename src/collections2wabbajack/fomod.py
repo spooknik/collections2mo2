@@ -293,7 +293,9 @@ def parse_config(config_xml_path: Path | str) -> Config:
         if visible_el is not None:
             # <visible> may hold the conditions directly or wrap a <dependencies>.
             inner = _kid(visible_el, "dependencies")
-            step.visible = _parse_deps(inner if inner is not None and len(visible_el) == 1 else visible_el)
+            step.visible = _parse_deps(
+                inner if inner is not None and len(visible_el) == 1 else visible_el
+            )
         for group_el in _ordered(_kid(step_el, "optionalfilegroups"), ("group",)):
             gtype = _attr(group_el, "type", "SelectAny") or "SelectAny"
             group = Group(name=_attr(group_el, "name"), type=gtype)
@@ -382,9 +384,7 @@ def _eval_deps(
     return value, influential
 
 
-def _resolve_type(
-    plugin: Plugin, flags: dict[str, str], ctx: _DepContext, blind: list[str]
-) -> str:
+def _resolve_type(plugin: Plugin, flags: dict[str, str], ctx: _DepContext, blind: list[str]) -> str:
     for deps, name in plugin.type_patterns:
         ok, used = _eval_deps(deps, flags, ctx)
         blind.extend(used)
@@ -415,8 +415,7 @@ def _recorded_answered(recorded_step: dict[str, Any] | None) -> bool:
     if not isinstance(groups, list):
         return False
     return any(
-        isinstance(g, dict) and isinstance(g.get("choices"), list) and g["choices"]
-        for g in groups
+        isinstance(g, dict) and isinstance(g.get("choices"), list) and g["choices"] for g in groups
     )
 
 
@@ -496,9 +495,7 @@ def _select_replay(
 def _select_default(
     group: Group, types: dict[int, str], warnings: list[str], where: str
 ) -> list[Plugin]:
-    selected = [
-        p for p in group.plugins if types[id(p)] in (TYPE_REQUIRED, TYPE_RECOMMENDED)
-    ]
+    selected = [p for p in group.plugins if types[id(p)] in (TYPE_REQUIRED, TYPE_RECOMMENDED)]
     return _enforce_group_rules(group, selected, types, warnings, where, recorded=None)
 
 

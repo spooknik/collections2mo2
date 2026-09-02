@@ -113,7 +113,11 @@ class ProgressPage(WizardPage):
     def _remember_instance(self) -> None:
         if self.state.instance_dir is None:
             return
-        name = self.state.collection_summary.name if self.state.collection_summary else self.state.instance_dir.name
+        name = (
+            self.state.collection_summary.name
+            if self.state.collection_summary
+            else self.state.instance_dir.name
+        )
         recents.remember_instance(self.state.instance_dir, name)
 
     def _on_failed(self, message: str) -> None:

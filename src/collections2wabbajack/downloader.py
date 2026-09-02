@@ -152,7 +152,11 @@ class _ByteTracker:
         if report is not None:
             done_files, bytes_done = report
             self._rep.progress(
-                done_files, self.total_files, label, bytes_done=bytes_done, bytes_total=self.total_bytes
+                done_files,
+                self.total_files,
+                label,
+                bytes_done=bytes_done,
+                bytes_total=self.total_bytes,
             )
 
     def file_done(self, label: str, extra_bytes: int = 0) -> int:
@@ -655,9 +659,7 @@ def run_download(
                 src = mod.get("source") or {}
                 source_type = src.get("type") or "unknown"
                 mod_id = int(src["modId"]) if source_type == "nexus" and "modId" in src else None
-                file_id = (
-                    int(src["fileId"]) if source_type == "nexus" and "fileId" in src else None
-                )
+                file_id = int(src["fileId"]) if source_type == "nexus" and "fileId" in src else None
                 entry = DownloadEntry(
                     name=mod.get("name") or "",
                     mod_id=mod_id,
@@ -728,8 +730,7 @@ def cmd_download(args: argparse.Namespace) -> int:
     api_key = os.environ.get("NEXUS_API_KEY") or None
     if not api_key:
         print(
-            "error: NEXUS_API_KEY is required (set it in .env). "
-            "See .env.example.",
+            "error: NEXUS_API_KEY is required (set it in .env). See .env.example.",
             file=sys.stderr,
         )
         return 2

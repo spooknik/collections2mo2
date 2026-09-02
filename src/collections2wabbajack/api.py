@@ -353,18 +353,29 @@ def run_fomod_survey(
 
     if rc == 0:
         return SurveySummary(
-            "ok", "survey complete", len(targets), fetched, len(fresh_fomod),
+            "ok",
+            "survey complete",
+            len(targets),
+            fetched,
+            len(fresh_fomod),
             [e.name for e in fresh_fomod],
         )
     if rc == 3:
         return SurveySummary(
             "rate_limited",
             "Nexus's hourly API budget ran out; re-run later to finish the survey.",
-            len(targets), fetched, len(fresh_fomod), [e.name for e in fresh_fomod],
+            len(targets),
+            fetched,
+            len(fresh_fomod),
+            [e.name for e in fresh_fomod],
         )
     return SurveySummary(
-        "error", "the survey did not complete", len(targets), fetched,
-        len(fresh_fomod), [e.name for e in fresh_fomod],
+        "error",
+        "the survey did not complete",
+        len(targets),
+        fetched,
+        len(fresh_fomod),
+        [e.name for e in fresh_fomod],
     )
 
 
@@ -440,7 +451,9 @@ def _steam_library_paths(steam_root: Path) -> list[Path]:
         text = vdf.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return []
-    return [Path(m.group(1).replace("\\\\", "\\")) for m in re.finditer(r'"path"\s*"([^"]+)"', text)]
+    return [
+        Path(m.group(1).replace("\\\\", "\\")) for m in re.finditer(r'"path"\s*"([^"]+)"', text)
+    ]
 
 
 def detect_skyrim_se_path() -> Path | None:

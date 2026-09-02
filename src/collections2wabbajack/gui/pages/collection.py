@@ -115,7 +115,9 @@ class CollectionPage(WizardPage):
         self.revision_combo.blockSignals(True)
         self.revision_combo.clear()
         for choice in api.list_revisions(summary):
-            self.revision_combo.addItem(f"revision {choice.revision_number}", choice.revision_number)
+            self.revision_combo.addItem(
+                f"revision {choice.revision_number}", choice.revision_number
+            )
         idx = self.revision_combo.findData(summary.revision_number)
         self.revision_combo.setCurrentIndex(max(idx, 0))
         self.revision_combo.blockSignals(False)

@@ -79,8 +79,7 @@ def test_jbo_defaults_select_exactly_one_picks_first_select_all_picks_all():
     )
     assert "default choice -- step 'Stage' group 'Type' [SelectExactlyOne]: TypeA" in plan.warnings
     assert (
-        "default choice -- step 'Stage' group 'Extras' [SelectAll]: Extra1, Extra2"
-        in plan.warnings
+        "default choice -- step 'Stage' group 'Extras' [SelectAll]: Extra1, Extra2" in plan.warnings
     )
     assert "default choice -- step 'Stage' group 'AOptions' [SelectAny]: (nothing)" in plan.warnings
     # The two invisible steps never produced a "default choice" line.
@@ -170,7 +169,9 @@ def test_cc_patch_defaults_no_resolver_installs_nothing():
     assert plan.selections == [("Patches", "Patches", [])]
     assert plan.files == []
     assert plan.unknown_deps == 2
-    assert "default choice -- step 'Patches' group 'Patches' [SelectAny]: (nothing)" in plan.warnings
+    assert (
+        "default choice -- step 'Patches' group 'Patches' [SelectAny]: (nothing)" in plan.warnings
+    )
     # Defaults mode folds the group's unresolved fileDependency checks into the
     # trailing summary line (unlike replay mode, which only surfaces them when
     # they actually changed the outcome).

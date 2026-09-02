@@ -151,7 +151,9 @@ def _looks_like_data(files: list[str], node: str, mod_type: str = "") -> bool:
     dirs, plain = _children(files, node)
     if any(name in DATA_DIRS for name in dirs):
         return True
-    loose_exts = DATA_ISH_LOOSE_EXTS_ROOT_MOD if mod_type == "dinput" else DATA_ISH_LOOSE_EXTS_NON_ROOT
+    loose_exts = (
+        DATA_ISH_LOOSE_EXTS_ROOT_MOD if mod_type == "dinput" else DATA_ISH_LOOSE_EXTS_NON_ROOT
+    )
     return any(_ext(name) in loose_exts for name in plain)
 
 
@@ -194,9 +196,7 @@ def _override_plan(files: list[str], override_path: str, read_text) -> LayoutPla
     return plan
 
 
-def plan_layout(
-    entries: Iterable[Any], mod_type: str = "", read_text=None
-) -> LayoutPlan:
+def plan_layout(entries: Iterable[Any], mod_type: str = "", read_text=None) -> LayoutPlan:
     """Decide where each file of a plain archive goes inside the MO2 mod folder.
 
     `entries` is the archive listing (relative paths, or objects with
@@ -288,7 +288,9 @@ def plan_layout(
     if dropped:
         shown = ", ".join(dropped[:12])
         more = f" (+{len(dropped) - 12} more)" if len(dropped) > 12 else ""
-        plan.warnings.append(f"dropped {len(dropped)} file(s) outside the mod content: {shown}{more}")
+        plan.warnings.append(
+            f"dropped {len(dropped)} file(s) outside the mod content: {shown}{more}"
+        )
     if strategy == "as_is":
         dirs, plain = _children(files, node)
         plan.warnings.append(

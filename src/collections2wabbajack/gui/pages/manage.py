@@ -43,7 +43,9 @@ class _AddLayerDialog(QDialog):
         layout.addWidget(QLabel("Collection URL (an add-on that assumes the base is installed):"))
         self.url_edit = QLineEdit()
         layout.addWidget(self.url_edit)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -419,7 +421,9 @@ class ManagePage(WizardPage):
                 checkboxes[entry.id] = cb
                 box_layout.addWidget(cb)
             layout.addWidget(box)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)

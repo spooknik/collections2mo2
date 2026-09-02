@@ -168,11 +168,7 @@ def _scan_game_data(game_path: Path | None) -> list[str]:
 
 def _walk(base: Path) -> list[str]:
     """Every file under `base`, as '/'-separated relative paths."""
-    return [
-        p.relative_to(base).as_posix()
-        for p in base.rglob("*")
-        if p.is_file()
-    ]
+    return [p.relative_to(base).as_posix() for p in base.rglob("*") if p.is_file()]
 
 
 def _index(base: Path) -> dict[str, str]:
@@ -266,9 +262,7 @@ def _md5(path: Path) -> str:
 # --------------------------------------------------------------------- strategies
 
 
-def _plan_replicate(
-    mod: dict[str, Any], base: Path, warnings: list[str]
-) -> list[tuple[str, str]]:
+def _plan_replicate(mod: dict[str, Any], base: Path, warnings: list[str]) -> list[tuple[str, str]]:
     """`hashes` lists the mod's exact file set, relative to the mod root."""
     if mod.get("patches"):
         warnings.append("patches not implemented")
@@ -462,7 +456,9 @@ def _install_one(
                 plan = layout.plan_layout(
                     _walk(base),
                     result.mod_type,
-                    read_text=lambda rel: (base / rel).read_text(encoding="utf-8-sig", errors="replace"),
+                    read_text=lambda rel: (base / rel).read_text(
+                        encoding="utf-8-sig", errors="replace"
+                    ),
                 )
                 result.strategy = plan.strategy
                 result.warnings.extend(plan.warnings)
@@ -487,9 +483,7 @@ def _install_one(
 
 def _root_plugins(dest_root: Path) -> list[str]:
     return sorted(
-        p.name
-        for p in dest_root.glob("*")
-        if p.is_file() and p.suffix.lower() in PLUGIN_EXTS
+        p.name for p in dest_root.glob("*") if p.is_file() and p.suffix.lower() in PLUGIN_EXTS
     )
 
 
@@ -611,7 +605,9 @@ def cmd_install(args: argparse.Namespace, reporter: Reporter | None = None) -> i
     inspect_data = json.loads(inspect_json.read_text(encoding="utf-8"))
     entries = inspect_data.get("entries", [])
 
-    downloads_json = Path(inspect_data.get("downloads_json") or inspect_json.parent / "downloads.json")
+    downloads_json = Path(
+        inspect_data.get("downloads_json") or inspect_json.parent / "downloads.json"
+    )
     downloads: dict[str, Any] = {}
     if downloads_json.exists():
         downloads = json.loads(downloads_json.read_text(encoding="utf-8"))
@@ -700,9 +696,7 @@ def cmd_install(args: argparse.Namespace, reporter: Reporter | None = None) -> i
     _rmtree(tmp_root)
 
     out_path = (
-        Path(args.out).resolve()
-        if getattr(args, "out", None)
-        else mods_dir.parent / "install.json"
+        Path(args.out).resolve() if getattr(args, "out", None) else mods_dir.parent / "install.json"
     )
     # A re-run that skips existing folders must not erase what the original install
     # recorded (strategy, warnings such as default FOMOD picks); carry those forward.
@@ -752,10 +746,10 @@ def cmd_install(args: argparse.Namespace, reporter: Reporter | None = None) -> i
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("install", help="build mods/ from the downloaded archives")
     p.add_argument("inspect_json", help="path to inspect.json")
-    p.add_argument("--manifest", default=None, help="collection.json (default: from downloads.json)")
     p.add_argument(
-        "--mods-dir", default=None, help="output mods dir (default: <rev>/mo2/mods)"
+        "--manifest", default=None, help="collection.json (default: from downloads.json)"
     )
+    p.add_argument("--mods-dir", default=None, help="output mods dir (default: <rev>/mo2/mods)")
     p.add_argument("--only", default=None, help="install only mods whose name contains this")
     p.add_argument(
         "--game-path",

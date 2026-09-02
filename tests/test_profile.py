@@ -56,7 +56,11 @@ def test_compute_order_unresolvable_rule_is_ignored():
             {"name": "F", "source": {"md5": "md5F"}},
         ],
         "modRules": [
-            {"type": "before", "source": {"fileMD5": "md5-unknown"}, "reference": {"fileMD5": "md5E"}},
+            {
+                "type": "before",
+                "source": {"fileMD5": "md5-unknown"},
+                "reference": {"fileMD5": "md5E"},
+            },
         ],
     }
     entries = [
@@ -310,7 +314,9 @@ def test_apply_display_settings_updates_every_duplicate_section(tmp_path: Path):
         "bBorderless=0\n",
         encoding="utf-8",
     )
-    profile.apply_display_settings(tmp_path, "SkyrimSE", resolution="keep", vsync="on", window="borderless")
+    profile.apply_display_settings(
+        tmp_path, "SkyrimSE", resolution="keep", vsync="on", window="borderless"
+    )
     lines = target.read_text(encoding="utf-8").splitlines()
     # Every "bBorderless" occurrence -- including the stray one in the second [Display]
     # block, whichever a Bethesda-style parser reads last -- must agree.
@@ -356,9 +362,7 @@ def test_find_winning_file_returns_highest_priority_enabled_mod(tmp_path: Path):
         (mods_dir / name / "thing.txt").write_text("x", encoding="utf-8")
     modlist = tmp_path / "modlist.txt"
     # Top-to-bottom = descending priority; ModDisabled is a "-" row and must be skipped.
-    modlist.write_text(
-        f"{profile.HEADER}\n-ModDisabled\n+ModHigh\n+ModLow\n", encoding="utf-8"
-    )
+    modlist.write_text(f"{profile.HEADER}\n-ModDisabled\n+ModHigh\n+ModLow\n", encoding="utf-8")
     result = profile.find_winning_file(modlist, mods_dir, "thing.txt")
     assert result is not None
     name, path = result

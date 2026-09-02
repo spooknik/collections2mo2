@@ -125,21 +125,24 @@ _XEDIT_ARGS_INI = '-D:\\"C:\\\\OldGame\\\\Data\\" -sse'
 
 
 def _xedit_ini() -> str:
-    return "\n".join(
-        [
-            "[General]",
-            "gameName=Skyrim Special Edition",
-            "gamePath=",
-            "selected_profile=@ByteArray(Default)",
-            "",
-            "[customExecutables]",
-            "size=1",
-            "1\\title=xEdit (SSE)",
-            "1\\binary=C:/OldGame/tools/xedit/xTESEdit64.exe",
-            f"1\\arguments={_XEDIT_ARGS_INI}",
-            "1\\workingDirectory=",
-        ]
-    ) + "\n"
+    return (
+        "\n".join(
+            [
+                "[General]",
+                "gameName=Skyrim Special Edition",
+                "gamePath=",
+                "selected_profile=@ByteArray(Default)",
+                "",
+                "[customExecutables]",
+                "size=1",
+                "1\\title=xEdit (SSE)",
+                "1\\binary=C:/OldGame/tools/xedit/xTESEdit64.exe",
+                f"1\\arguments={_XEDIT_ARGS_INI}",
+                "1\\workingDirectory=",
+            ]
+        )
+        + "\n"
+    )
 
 
 def test_rewrite_ini_rebases_quoted_data_path_in_arguments(tmp_path: Path):
@@ -214,12 +217,16 @@ def test_ensure_release_download_is_idempotent(tmp_path: Path):
     archive = tmp_path / "rootbuilder.5.1.1.zip"
     archive.write_bytes(b"v1")
 
-    _ensure_release_download(mo2_dir, archive, "https://example.test/rb.zip", "Root Builder", "5.1.1")
+    _ensure_release_download(
+        mo2_dir, archive, "https://example.test/rb.zip", "Root Builder", "5.1.1"
+    )
     dest = mo2_dir / "downloads" / "rootbuilder.5.1.1.zip"
     # A cache re-download that changed on disk must not silently overwrite what is
     # already in downloads/ -- same convention as `_download_cached`.
     archive.write_bytes(b"v2-should-not-be-copied")
-    _ensure_release_download(mo2_dir, archive, "https://example.test/rb.zip", "Root Builder", "5.1.1")
+    _ensure_release_download(
+        mo2_dir, archive, "https://example.test/rb.zip", "Root Builder", "5.1.1"
+    )
     assert dest.read_bytes() == b"v1"
 
 

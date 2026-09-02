@@ -300,9 +300,9 @@ def test_new_instance_puts_user_mods_at_the_top(tmp_path: Path):
     profile.render_instance(
         inst, led=led, keep_inis=True, reporter=NullReporter(), profile_name="TestProfile"
     )
-    lines = (inst / "profiles" / "TestProfile" / "modlist.txt").read_text(
-        encoding="utf-8"
-    ).splitlines()
+    lines = (
+        (inst / "profiles" / "TestProfile" / "modlist.txt").read_text(encoding="utf-8").splitlines()
+    )
     assert lines[1] == "+Hand Installed"
 
 
@@ -435,8 +435,12 @@ def test_tool_mod_survives_re_render_at_its_managed_position(tmp_path: Path):
     led.set_mod_owner("DynDOLOD Resources SE", ledger.tool_owner("dyndolod"))
     led.save()
 
-    profile.render_instance(inst, led=led, keep_inis=True, reporter=NullReporter(), profile_name="TestProfile")
-    profile.render_instance(inst, led=led, keep_inis=True, reporter=NullReporter(), profile_name="TestProfile")
+    profile.render_instance(
+        inst, led=led, keep_inis=True, reporter=NullReporter(), profile_name="TestProfile"
+    )
+    profile.render_instance(
+        inst, led=led, keep_inis=True, reporter=NullReporter(), profile_name="TestProfile"
+    )
     rows = [
         name
         for _, name in profile.read_marked_lines(inst / "profiles" / "TestProfile" / "modlist.txt")
@@ -491,7 +495,12 @@ def test_render_instance_generates_sse_display_tweaks_override_at_top_priority(t
     assert rows[0] == profile.DISPLAY_OVERRIDE_MOD_NAME
 
     override_ini = (
-        inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME / "SKSE" / "Plugins" / "SSEDisplayTweaks.ini"
+        inst
+        / "mods"
+        / profile.DISPLAY_OVERRIDE_MOD_NAME
+        / "SKSE"
+        / "Plugins"
+        / "SSEDisplayTweaks.ini"
     )
     text = override_ini.read_text(encoding="utf-8")
     assert "Resolution=2560x1440" in text  # from ModHigh (2048x1152), not ModLow (1280x720)
@@ -594,7 +603,12 @@ def test_render_instance_refreshes_override_from_changed_base_ini_and_stays_on_t
     assert "My Own Mod" in rows
 
     override_ini = (
-        inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME / "SKSE" / "Plugins" / "SSEDisplayTweaks.ini"
+        inst
+        / "mods"
+        / profile.DISPLAY_OVERRIDE_MOD_NAME
+        / "SKSE"
+        / "Plugins"
+        / "SSEDisplayTweaks.ini"
     )
     text = override_ini.read_text(encoding="utf-8")
     # The user's own choice (windowed) still wins...
@@ -616,7 +630,9 @@ class _CollectingReporter(NullReporter):
         self.logs.append(msg)
 
 
-def _make_display_instance(tmp_path: Path, resolution: str = "2048x1152") -> tuple[Path, ledger.Ledger]:
+def _make_display_instance(
+    tmp_path: Path, resolution: str = "2048x1152"
+) -> tuple[Path, ledger.Ledger]:
     inst, led = make_instance(
         tmp_path,
         [
@@ -681,7 +697,12 @@ def test_render_instance_remembers_display_choice_on_later_keep_render(tmp_path:
     assert rows[0] == profile.DISPLAY_OVERRIDE_MOD_NAME
 
     override_ini = (
-        inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME / "SKSE" / "Plugins" / "SSEDisplayTweaks.ini"
+        inst
+        / "mods"
+        / profile.DISPLAY_OVERRIDE_MOD_NAME
+        / "SKSE"
+        / "Plugins"
+        / "SSEDisplayTweaks.ini"
     )
     text = override_ini.read_text(encoding="utf-8")
     assert "Resolution=2560x1440" in text
@@ -717,7 +738,12 @@ def test_render_instance_refreshes_override_from_changed_base_ini_on_keep_render
     profile.render_instance(inst, led=led, reporter=NullReporter(), profile_name="TestProfile")
 
     override_ini = (
-        inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME / "SKSE" / "Plugins" / "SSEDisplayTweaks.ini"
+        inst
+        / "mods"
+        / profile.DISPLAY_OVERRIDE_MOD_NAME
+        / "SKSE"
+        / "Plugins"
+        / "SSEDisplayTweaks.ini"
     )
     text = override_ini.read_text(encoding="utf-8")
     # The remembered choice (windowed, vsync off, 3440x1440) still wins...
@@ -897,9 +923,7 @@ RootBuilder\\hash=true
 def test_drop_executables_renumbers_and_keeps_other_sections(tmp_path: Path):
     ini = tmp_path / "ModOrganizer.ini"
     ini.write_text(_INI, encoding="utf-8")
-    removed = layers.drop_executables(
-        ini, {("d:/games/skyrim/data/pgpatcher/pgpatcher.exe", "")}
-    )
+    removed = layers.drop_executables(ini, {("d:/games/skyrim/data/pgpatcher/pgpatcher.exe", "")})
     assert removed == ["PGPatcher"]
     text = ini.read_text(encoding="utf-8")
     assert "size=1" in text

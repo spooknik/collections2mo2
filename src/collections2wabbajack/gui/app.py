@@ -246,7 +246,7 @@ class WizardWindow(QMainWindow):
             self._navigate_to("manage", push_history=True)
 
     def _reset_wizard(self) -> None:
-        """"Back to start": clear the collection/location/tools/display choices and
+        """ "Back to start": clear the collection/location/tools/display choices and
         any run result, keeping the signed-in account, then rebuild the linear-flow
         pages so no widget (a typed URL, a chosen path, a checked box) keeps stale
         state from the previous run."""

@@ -400,7 +400,9 @@ def test_back_to_start_resets_state_keeps_account(qtbot, monkeypatch, _isolated_
 
     window.state.api_key = "abc123"
     window.state.signin = api.SignInResult(name="Bob", is_premium=True)
-    window.state.collection_url = "https://www.nexusmods.com/games/skyrimspecialedition/collections/xyz"
+    window.state.collection_url = (
+        "https://www.nexusmods.com/games/skyrimspecialedition/collections/xyz"
+    )
     window.state.instance_dir = Path("C:/somewhere")
     window.state.game_path = Path("C:/games/skyrim")
     window.state.tool_ids = ["loot", "nemesis"]
@@ -576,7 +578,10 @@ def test_manage_page_busy_state_blocks_buttons_and_second_operation(qtbot, monke
     page.busy_changed.connect(busy_events.append)
 
     page._run_action(
-        "Add collection", api.add_collection_layer, {"instance_dir": page._instance, "url": "x"}, lambda rc: None
+        "Add collection",
+        api.add_collection_layer,
+        {"instance_dir": page._instance, "url": "x"},
+        lambda rc: None,
     )
 
     assert page._busy is True
@@ -634,7 +639,10 @@ def test_window_close_while_busy_prompts_and_can_be_declined(qtbot, monkeypatch)
     manage = window.pages["manage"]
     manage._instance = Path("C:/fake/instance")
     manage._run_action(
-        "Export to Wabbajack", api.export_to_wabbajack, {"instance_dir": manage._instance}, lambda rc: None
+        "Export to Wabbajack",
+        api.export_to_wabbajack,
+        {"instance_dir": manage._instance},
+        lambda rc: None,
     )
     assert window._busy is True
 
@@ -681,7 +689,10 @@ def test_window_close_while_busy_confirmed_cancels_and_accepts(qtbot, monkeypatc
     # this test drives the worker directly rather than through a button click.
     window._current = "manage"
     manage._run_action(
-        "Export to Wabbajack", api.export_to_wabbajack, {"instance_dir": manage._instance}, lambda rc: None
+        "Export to Wabbajack",
+        api.export_to_wabbajack,
+        {"instance_dir": manage._instance},
+        lambda rc: None,
     )
     assert window._busy is True
     worker = manage._action_worker

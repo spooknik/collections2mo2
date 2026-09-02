@@ -320,10 +320,7 @@ def cmd_remove(args: argparse.Namespace, reporter: Reporter | None = None) -> in
 
     # -- separators the layer created -------------------------------------------------
     other_separators = {
-        name
-        for entry in layers
-        if entry is not layer
-        for name in (entry.get("separators") or [])
+        name for entry in layers if entry is not layer for name in (entry.get("separators") or [])
     }
     separators_removed: list[str] = []
     for name in layer.get("separators") or []:

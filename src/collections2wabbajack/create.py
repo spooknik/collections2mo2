@@ -296,7 +296,9 @@ def inspect_is_current(lp: LayerPaths) -> bool:
         return False
     if not _same_path(data.get("downloads_json"), lp.downloads_json):
         return False
-    expected = sum(1 for e in downloads.get("entries") or [] if e.get("status") in ("ok", "skipped"))
+    expected = sum(
+        1 for e in downloads.get("entries") or [] if e.get("status") in ("ok", "skipped")
+    )
     return len(data.get("entries") or []) == expected and expected > 0
 
 

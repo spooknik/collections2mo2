@@ -39,7 +39,7 @@ class WizardState:
     run_succeeded: bool | None = None
 
     def reset_for_new_run(self) -> None:
-        """"Back to start": clear every choice made for a create run (or picked up by
+        """ "Back to start": clear every choice made for a create run (or picked up by
         Manage), keeping the signed-in account (`api_key` / `signin`) intact."""
         self.collection_url = ""
         self.collection_summary = None

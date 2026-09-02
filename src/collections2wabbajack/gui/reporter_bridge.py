@@ -32,7 +32,9 @@ from ..api import OperationCancelled
 
 class QtReporter(QObject):
     stageStarted = Signal(str, object, object, object)  # name, total, stage_index, stage_count
-    progressed = Signal(int, object, str, object, object)  # done, total, label, bytes_done, bytes_total
+    progressed = Signal(
+        int, object, str, object, object
+    )  # done, total, label, bytes_done, bytes_total
     logged = Signal(str)
     warned = Signal(str)
     stageDone = Signal(str, str)  # name, summary
