@@ -3,7 +3,7 @@ name = "collections2wabbajack"
 version = "0.0.1"
 description = "Convert Nexus Mods collections into Mod Organizer 2 instances and Wabbajack modlists"
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.12"
 dependencies = [
     "requests>=2.32",
