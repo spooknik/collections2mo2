@@ -363,7 +363,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         print("error: --stock-game requires --game-path", file=sys.stderr)
         return 1
 
-    mo2_dir = Path(args.mo2_dir)
+    mo2_dir = Path(args.mo2_dir).resolve()  # MO2 needs absolute paths in its ini
     mo2_dir.mkdir(parents=True, exist_ok=True)
 
     mo2_url = MO2_URL_TEMPLATE.format(ver=args.mo2_version)
@@ -399,7 +399,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 
         if args.stock_game:
             stock_dir = _ensure_stock_game(args, mo2_dir, ini_path)
-            effective_game_path = str(stock_dir)
+            effective_game_path = str(stock_dir.resolve())
 
         changes = _rewrite_ini(ini_path, effective_game_path)
         print(f"rewrote {ini_path}: {len(changes)} change(s)")
