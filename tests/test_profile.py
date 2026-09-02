@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from collections2wabbajack import profile
+from collections2wabbajack import ledger, profile
 
 # --------------------------------------------------------- _compute_order / order_mods
 
@@ -489,6 +489,125 @@ def test_apply_sse_display_tweaks_override_none_when_no_mod_ships_it(tmp_path: P
         profile_dir, mods_dir, "SkyrimSE", "1920x1080", "on", "fullscreen", _FakeLedger()
     )
     assert notes == []
+
+
+# ------------------------------------------------------------- display: ledger memory
+
+
+def test_ledger_set_display_keep_never_clears(tmp_path: Path):
+    led = ledger.Ledger(tmp_path)
+    led.set_display(resolution="1920x1080", vsync="on", window="windowed")
+    led.set_display()  # a no-op "everything keep" call
+    assert led.data["display"]["resolution"] == "1920x1080"
+    assert led.data["display"]["vsync"] == "on"
+    assert led.data["display"]["window"] == "windowed"
+
+
+def test_ledger_clear_display(tmp_path: Path):
+    led = ledger.Ledger(tmp_path)
+    led.set_display(resolution="1920x1080", vsync="on", window="windowed")
+    led.clear_display()
+    assert led.data["display"] == {
+        "resolution": None,
+        "vsync": None,
+        "window": None,
+        "updated": None,
+    }
+
+
+def test_resolve_effective_display_substitutes_only_keep_fields(tmp_path: Path):
+    led = ledger.Ledger(tmp_path)
+    led.set_display(resolution="2560x1440", vsync="on", window="borderless")
+    resolution, vsync, window, remembered = profile._resolve_effective_display(
+        led, "keep", "off", "keep"
+    )
+    assert resolution == "2560x1440"
+    assert vsync == "off"  # explicit request, not the stored one
+    assert window == "borderless"
+    assert remembered == frozenset({"resolution", "window"})
+
+
+def test_resolve_effective_display_fresh_ledger_keeps_keep(tmp_path: Path):
+    led = ledger.Ledger(tmp_path)
+    resolution, vsync, window, remembered = profile._resolve_effective_display(
+        led, "keep", "keep", "keep"
+    )
+    assert (resolution, vsync, window) == ("keep", "keep", "keep")
+    assert remembered == frozenset()
+
+
+def test_persist_display_choice_stores_only_concrete_values(tmp_path: Path):
+    led = ledger.Ledger(tmp_path)
+    profile._persist_display_choice(led, "keep", "keep", "keep")
+    assert led.data["display"] == {
+        "resolution": None,
+        "vsync": None,
+        "window": None,
+        "updated": None,
+    }
+
+    profile._persist_display_choice(led, "2560x1440", "on", "borderless")
+    display = led.data["display"]
+    assert display["resolution"] == "2560x1440"
+    assert display["vsync"] == "on"
+    assert display["window"] == "borderless"
+    assert display["updated"] is not None
+
+
+def test_apply_display_settings_remembered_annotation(tmp_path: Path):
+    notes = profile.apply_display_settings(
+        tmp_path,
+        "SkyrimSE",
+        "2560x1440",
+        "on",
+        "borderless",
+        remembered=frozenset({"resolution"}),
+    )
+    assert "2560x1440 (remembered)" in notes[0]
+    assert "vsync on (remembered)" not in notes[0]
+    assert "window borderless (remembered)" not in notes[0]
+
+
+def test_apply_sse_display_tweaks_override_keep_reports_override_in_effect(tmp_path: Path):
+    mods_dir = tmp_path / "mods"
+    profile_dir = tmp_path / "profile"
+    profile_dir.mkdir()
+    base_tweaks = mods_dir / "OnlyMod" / "SKSE" / "Plugins"
+    base_tweaks.mkdir(parents=True)
+    (base_tweaks / "SSEDisplayTweaks.ini").write_text(
+        "[Render]\nResolution = 1920x1080\nFullscreen = false\nBorderless = false\n"
+        "EnableVSync = false\n",
+        encoding="utf-8",
+    )
+    override_dir = mods_dir / profile.DISPLAY_OVERRIDE_MOD_NAME / "SKSE" / "Plugins"
+    override_dir.mkdir(parents=True)
+    (override_dir / "SSEDisplayTweaks.ini").write_text(
+        "[Render]\nResolution=2560x1440\nFullscreen=false\nBorderless=true\nEnableVSync=true\n",
+        encoding="utf-8",
+    )
+    (profile_dir / "modlist.txt").write_text(
+        f"{profile.HEADER}\n+OnlyMod\n+{profile.DISPLAY_OVERRIDE_MOD_NAME}\n", encoding="utf-8"
+    )
+
+    class _FakeLedger:
+        def __init__(self):
+            self.data = {
+                "mods": {
+                    profile.DISPLAY_OVERRIDE_MOD_NAME: {
+                        "owner": "user",
+                        "generated_by": profile.DISPLAY_OVERRIDE_MARKER,
+                    }
+                }
+            }
+
+    notes = profile.apply_sse_display_tweaks_override(
+        profile_dir, mods_dir, "SkyrimSE", "keep", "keep", "keep", _FakeLedger()
+    )
+    assert len(notes) == 1
+    assert "in effect" in notes[0]
+    assert "2560x1440" in notes[0]
+    assert "OnlyMod" in notes[0]
+    assert "governs the display" not in notes[0]
 
 
 # --------------------------------------------------------------------- render_mo2_ini

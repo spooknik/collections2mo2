@@ -606,6 +606,202 @@ def test_render_instance_refreshes_override_from_changed_base_ini_and_stays_on_t
     assert "Resolution=3440x1440" in text
 
 
+class _CollectingReporter(NullReporter):
+    """A `NullReporter` that also remembers every `log()` line, for summary assertions."""
+
+    def __init__(self):
+        self.logs: list[str] = []
+
+    def log(self, msg: str) -> None:
+        self.logs.append(msg)
+
+
+def _make_display_instance(tmp_path: Path, resolution: str = "2048x1152") -> tuple[Path, ledger.Ledger]:
+    inst, led = make_instance(
+        tmp_path,
+        [
+            {
+                "slug": "base",
+                "revision": 1,
+                "name": "Base List",
+                "manifest": {"mods": [_mod("ModA", "md5a")], "info": {}},
+                "entries": [_entry("ModA", "md5a")],
+            }
+        ],
+    )
+    tweaks = inst / "mods" / "ModA" / "SKSE" / "Plugins"
+    tweaks.mkdir(parents=True)
+    (tweaks / "SSEDisplayTweaks.ini").write_text(
+        f"[Render]\nResolution = {resolution}\n\n"
+        "[Fullscreen]\nFullscreen = false\nBorderless = true\n\n"
+        "[VSync]\nEnableVSync = false\n",
+        encoding="utf-8",
+    )
+    return inst, led
+
+
+def test_render_instance_keep_on_fresh_instance_stores_nothing_in_ledger(tmp_path: Path):
+    inst, led = _make_display_instance(tmp_path)
+    profile.render_instance(inst, led=led, reporter=NullReporter(), profile_name="TestProfile")
+    assert led.data["display"] == {
+        "resolution": None,
+        "vsync": None,
+        "window": None,
+        "updated": None,
+    }
+    assert not (inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME).exists()
+
+
+def test_render_instance_remembers_display_choice_on_later_keep_render(tmp_path: Path):
+    # Simulates what `add`/`remove`/`update` do: they never pass --resolution/--vsync/
+    # --window themselves, so every render they trigger is 'keep' on all three fields.
+    inst, led = _make_display_instance(tmp_path)
+    profile.render_instance(
+        inst,
+        led=led,
+        reporter=NullReporter(),
+        profile_name="TestProfile",
+        resolution="2560x1440",
+        vsync="on",
+        window="borderless",
+    )
+    assert led.data["display"] == {
+        "resolution": "2560x1440",
+        "vsync": "on",
+        "window": "borderless",
+        "updated": led.data["display"]["updated"],
+    }
+    assert led.data["display"]["updated"] is not None
+
+    rep = _CollectingReporter()
+    profile.render_instance(inst, led=led, reporter=rep, profile_name="TestProfile")
+
+    profile_dir = inst / "profiles" / "TestProfile"
+    rows = [name for _, name in profile.read_marked_lines(profile_dir / "modlist.txt")]
+    assert rows[0] == profile.DISPLAY_OVERRIDE_MOD_NAME
+
+    override_ini = (
+        inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME / "SKSE" / "Plugins" / "SSEDisplayTweaks.ini"
+    )
+    text = override_ini.read_text(encoding="utf-8")
+    assert "Resolution=2560x1440" in text
+    assert "Borderless=true" in text
+    assert "EnableVSync=true" in text
+
+    summary = next(m for m in rep.logs if m.startswith("display:"))
+    assert "2560x1440 (remembered)" in summary
+    assert "vsync on (remembered)" in summary
+    assert "window borderless (remembered)" in summary
+
+
+def test_render_instance_refreshes_override_from_changed_base_ini_on_keep_render(tmp_path: Path):
+    inst, led = _make_display_instance(tmp_path, resolution="1280x720")
+    ini_path = inst / "mods" / "ModA" / "SKSE" / "Plugins" / "SSEDisplayTweaks.ini"
+    profile.render_instance(
+        inst,
+        led=led,
+        reporter=NullReporter(),
+        profile_name="TestProfile",
+        resolution="3440x1440",
+        vsync="off",
+        window="windowed",
+    )
+
+    # The collection publishes a revision that changes its own Display Tweaks defaults.
+    ini_path.write_text(
+        "[Render]\nResolution = 800x600\n\n"
+        "[Fullscreen]\nFullscreen = true\nBorderless = false\n\n"
+        "[VSync]\nEnableVSync = true\n",
+        encoding="utf-8",
+    )
+    profile.render_instance(inst, led=led, reporter=NullReporter(), profile_name="TestProfile")
+
+    override_ini = (
+        inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME / "SKSE" / "Plugins" / "SSEDisplayTweaks.ini"
+    )
+    text = override_ini.read_text(encoding="utf-8")
+    # The remembered choice (windowed, vsync off, 3440x1440) still wins...
+    assert "Resolution=3440x1440" in text
+    assert "Fullscreen=false" in text
+    assert "Borderless=false" in text
+    assert "EnableVSync=false" in text
+
+
+def test_render_instance_all_keep_summary_says_override_in_effect_not_governs(tmp_path: Path):
+    inst, led = _make_display_instance(tmp_path)
+    profile.render_instance(
+        inst,
+        led=led,
+        reporter=NullReporter(),
+        profile_name="TestProfile",
+        resolution="2560x1440",
+        vsync="on",
+        window="borderless",
+    )
+
+    rep = _CollectingReporter()
+    profile.render_instance(inst, led=led, reporter=rep, profile_name="TestProfile")
+    summary = next(m for m in rep.logs if m.startswith("SSE Display Tweaks"))
+    assert "in effect" in summary
+    assert "governs the display" not in summary
+
+
+def test_render_instance_no_override_summary_still_says_governs(tmp_path: Path):
+    inst, led = _make_display_instance(tmp_path)
+    rep = _CollectingReporter()
+    profile.render_instance(inst, led=led, reporter=rep, profile_name="TestProfile")
+    summary = next(m for m in rep.logs if m.startswith("SSE Display Tweaks"))
+    assert "governs the display" in summary
+    assert "in effect" not in summary
+
+
+def test_forget_display_removes_override_mod_and_clears_ledger_key(tmp_path: Path):
+    inst, led = _make_display_instance(tmp_path)
+    profile.render_instance(
+        inst,
+        led=led,
+        reporter=NullReporter(),
+        profile_name="TestProfile",
+        resolution="2560x1440",
+        vsync="on",
+        window="borderless",
+    )
+    assert (inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME).exists()
+    assert led.data["display"]["resolution"] == "2560x1440"
+
+    notes = profile.forget_display_choice(inst, led)
+    led.save()
+    assert any("removed generated override mod" in n for n in notes)
+    assert not (inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME).exists()
+    assert profile.DISPLAY_OVERRIDE_MOD_NAME not in led.data["mods"]
+    assert led.data["display"] == {
+        "resolution": None,
+        "vsync": None,
+        "window": None,
+        "updated": None,
+    }
+
+    rep = _CollectingReporter()
+    profile.render_instance(inst, led=led, reporter=rep, profile_name="TestProfile")
+    assert not (inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME).exists()
+    summary = next(m for m in rep.logs if m.startswith("SSE Display Tweaks"))
+    assert "governs the display" in summary
+
+
+def test_forget_display_leaves_user_repurposed_folder_alone(tmp_path: Path):
+    inst, led = _make_display_instance(tmp_path)
+    override_dir = inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME
+    override_dir.mkdir(parents=True)
+    (override_dir / "meta.ini").write_text("[General]\n", encoding="utf-8")
+    led.set_mod_owner(profile.DISPLAY_OVERRIDE_MOD_NAME, ledger.USER_OWNER)  # not ours: no marker
+    led.set_display(resolution="1920x1080")
+
+    notes = profile.forget_display_choice(inst, led)
+    assert not any("removed generated override mod" in n for n in notes)
+    assert override_dir.exists()  # user's own folder, left alone
+    assert led.data["display"]["resolution"] is None
+
+
 def test_splice_preserved_puts_a_run_of_user_mods_back_in_order():
     new = ["A", "B", "C"]
     old = ["A", "U1", "U2", "B", "C"]

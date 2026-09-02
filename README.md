@@ -62,6 +62,11 @@ shared ones, reverts exactly the INI keys it set (the ledger records the value e
 had before it), and re-renders the profile. Archives stay in `downloads/` unless you pass
 `--purge-downloads`. Removing the base layer is refused without `--force`.
 
+A `--resolution`/`--vsync`/`--window` choice made with `create` or `profile-instance` is
+remembered in `c2wj-instance.json` and re-applied (refreshing the generated SSE Display
+Tweaks override mod from whatever now wins the collection) on every later `add`, `remove`
+and `update`; `c2wj profile-instance --forget-display` clears it.
+
 ## Updating a collection
 
 Collections move: the curator publishes a new revision every few weeks, a handful of mods

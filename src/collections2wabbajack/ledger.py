@@ -13,6 +13,10 @@ ledger next to `ModOrganizer.exe`:
     mods        folder name -> {owner, owners, tag, md5, install_mode, strategy, plugins}
     tools       tool id -> record (written by the `tools` command)
     ini_keys    owner -> {ini file -> {section -> {key -> {value, previous}}}}
+    display     {resolution, vsync, window, updated} -- the last explicit --resolution/
+                --vsync/--window the user asked for, re-applied on every render that is
+                given 'keep' for a field (see `profile.render_instance`); 'keep' never
+                clears it, only `profile-instance --forget-display` does
 
 `owner` is `"collection:<slug>@<rev>"`, `"tool:<id>"` or `"user"`. A folder in
 `mods/` that the ledger has never heard of is a user mod (`owners_of` says so),
@@ -80,6 +84,7 @@ def _empty(now: str) -> dict[str, Any]:
         "mods": {},
         "tools": {},
         "ini_keys": {},
+        "display": {"resolution": None, "vsync": None, "window": None, "updated": None},
     }
 
 
@@ -372,6 +377,38 @@ class Ledger:
 
     def drop_ini_keys(self, owner: str) -> None:
         self.data["ini_keys"].pop(owner, None)
+
+    def set_display(
+        self,
+        *,
+        resolution: str | None = None,
+        vsync: str | None = None,
+        window: str | None = None,
+    ) -> None:
+        """Persist an effective (already keep-substituted) display field.
+
+        Each argument is `None` when that field's render call was 'keep' and the ledger
+        had nothing stored to fall back on -- 'keep' never clears a stored field, only
+        `clear_display` does. A field given a concrete value (whether freshly requested
+        or itself remembered from the ledger) is written; `updated` is refreshed only
+        when something actually changed.
+        """
+        if resolution is None and vsync is None and window is None:
+            return
+        display = self.data.setdefault(
+            "display", {"resolution": None, "vsync": None, "window": None, "updated": None}
+        )
+        if resolution is not None:
+            display["resolution"] = resolution
+        if vsync is not None:
+            display["vsync"] = vsync
+        if window is not None:
+            display["window"] = window
+        display["updated"] = now_iso()
+
+    def clear_display(self) -> None:
+        """Forget the stored display choice (`profile-instance --forget-display`)."""
+        self.data["display"] = {"resolution": None, "vsync": None, "window": None, "updated": None}
 
     # -- queries -----------------------------------------------------------------
 

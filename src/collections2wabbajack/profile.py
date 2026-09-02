@@ -934,12 +934,19 @@ class DisplayChoice:
         return self.resolution_wh is None and self.vsync_on is None and self.window_word is None
 
 
-def _resolve_display_choice(resolution: str, vsync: str, window: str) -> DisplayChoice:
+def _resolve_display_choice(
+    resolution: str, vsync: str, window: str, remembered: frozenset[str] = frozenset()
+) -> DisplayChoice:
     """Turn the raw --resolution/--vsync/--window strings into a `DisplayChoice`.
 
     `resolution` is `auto` (detect the primary monitor via Windows APIs, falling back to
     `keep` if that's not possible), `keep`, or an explicit `WxH` string. `vsync` is
     `on`/`off`/`keep`; `window` is `fullscreen`/`borderless`/`windowed`/`keep`.
+
+    `remembered` names which of these strings were themselves substituted in for a
+    caller's 'keep' from a value stored in the ledger (`_resolve_effective_display`) --
+    that field's label gets a `(remembered)` suffix so a render's log/summary makes the
+    provenance visible.
     """
     if resolution == "keep":
         res_wh, res_label = None, "kept"
@@ -955,6 +962,8 @@ def _resolve_display_choice(resolution: str, vsync: str, window: str) -> Display
             raise ValueError(f"--resolution must be 'auto', 'keep', or WxH (got {resolution!r})")
         res_wh = (int(m.group(1)), int(m.group(2)))
         res_label = f"{res_wh[0]}x{res_wh[1]}"
+    if "resolution" in remembered and res_wh is not None:
+        res_label = f"{res_label} (remembered)"
 
     if vsync == "on":
         vsync_on, vsync_label = True, "on"
@@ -962,13 +971,59 @@ def _resolve_display_choice(resolution: str, vsync: str, window: str) -> Display
         vsync_on, vsync_label = False, "off"
     else:
         vsync_on, vsync_label = None, "kept"
+    if "vsync" in remembered and vsync_on is not None:
+        vsync_label = f"{vsync_label} (remembered)"
 
     if window in ("fullscreen", "borderless", "windowed"):
         window_word, window_label = window, window
     else:
         window_word, window_label = None, "kept"
+    if "window" in remembered and window_word is not None:
+        window_label = f"{window_label} (remembered)"
 
     return DisplayChoice(res_wh, res_label, vsync_on, vsync_label, window_word, window_label)
+
+
+def _resolve_effective_display(
+    led: ledger_mod.Ledger, resolution: str, vsync: str, window: str
+) -> tuple[str, str, str, frozenset[str]]:
+    """Substitute the ledger's stored display choice for any field still asking 'keep'.
+
+    Returns `(resolution, vsync, window, remembered)`: the effective strings to render
+    with (unchanged for any field that was not 'keep', or that had nothing stored), and
+    which fields (if any) came from the ledger rather than this call's own arguments --
+    used to annotate the render's summary with `(remembered)`.
+    """
+    stored = led.data.get("display") or {}
+    remembered: set[str] = set()
+    if resolution == "keep" and stored.get("resolution"):
+        resolution = stored["resolution"]
+        remembered.add("resolution")
+    if vsync == "keep" and stored.get("vsync"):
+        vsync = stored["vsync"]
+        remembered.add("vsync")
+    if window == "keep" and stored.get("window"):
+        window = stored["window"]
+        remembered.add("window")
+    return resolution, vsync, window, frozenset(remembered)
+
+
+def _persist_display_choice(led: ledger_mod.Ledger, resolution: str, vsync: str, window: str) -> None:
+    """Store the effective (already keep-substituted) display choice, if any field is set.
+
+    `resolution`/`vsync`/`window` are the strings actually rendered with (post
+    `_resolve_effective_display`). 'keep' with nothing stored resolves to `None` here and
+    writes nothing -- a fresh instance rendered with 'keep' stores no display choice at
+    all (`Ledger.set_display`).
+    """
+    choice = _resolve_display_choice(resolution, vsync, window)
+    led.set_display(
+        resolution=(
+            f"{choice.resolution_wh[0]}x{choice.resolution_wh[1]}" if choice.resolution_wh else None
+        ),
+        vsync=("on" if choice.vsync_on else "off") if choice.vsync_on is not None else None,
+        window=choice.window_word,
+    )
 
 
 def apply_display_settings(
@@ -978,20 +1033,24 @@ def apply_display_settings(
     vsync: str,
     window: str,
     record: dict[str, dict[str, dict[str, Any]]] | None = None,
+    *,
+    remembered: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Apply --resolution/--vsync/--window overrides to the profile's `*Prefs.ini` [Display].
 
     Applied after the collection's own INI Tweaks, so these settings win over them --
     though not over a collection's SSE Display Tweaks file, which bypasses SkyrimPrefs.ini
-    entirely when present; see `apply_sse_display_tweaks_override`. Returns a
-    single-element list with a human-readable summary line of the values actually written
-    (empty list if the game has no known Prefs INI).
+    entirely when present; see `apply_sse_display_tweaks_override`. `remembered` (see
+    `_resolve_effective_display`) marks which of `resolution`/`vsync`/`window` were
+    substituted in from the ledger rather than requested this call, for the `(remembered)`
+    summary annotation. Returns a single-element list with a human-readable summary line
+    of the values actually written (empty list if the game has no known Prefs INI).
     """
     target_name = _prefs_ini_name(game_name)
     if not target_name:
         return []
     target = profile_dir / target_name
-    choice = _resolve_display_choice(resolution, vsync, window)
+    choice = _resolve_display_choice(resolution, vsync, window, remembered)
 
     values: dict[str, str] = {}
     if choice.resolution_wh is not None:
@@ -1074,8 +1133,8 @@ def _read_ini_key_anywhere(text: str, key: str) -> str | None:
     return None
 
 
-def _sse_display_tweaks_summary(mod_name: str, text: str) -> str:
-    """The informative 'keep' line: what the winning SSE Display Tweaks file will do."""
+def _parse_display_tweaks(text: str) -> tuple[str, str, str]:
+    """`(resolution, window_word, vsync_word)` as read from an SSEDisplayTweaks.ini's active keys."""
     resolution = _read_ini_key_anywhere(text, "Resolution") or "?"
     fullscreen = (_read_ini_key_anywhere(text, "Fullscreen") or "").strip().lower()
     borderless = (_read_ini_key_anywhere(text, "Borderless") or "").strip().lower()
@@ -1087,10 +1146,34 @@ def _sse_display_tweaks_summary(mod_name: str, text: str) -> str:
     else:
         window_word = "windowed"
     vsync_word = "on" if vsync in ("true", "1") else "off"
+    return resolution, window_word, vsync_word
+
+
+def _sse_display_tweaks_summary(mod_name: str, text: str) -> str:
+    """The informative 'keep' line: what the winning SSE Display Tweaks file will do.
+
+    Only accurate when no `DISPLAY_OVERRIDE_MOD_NAME` mod is in effect over it -- see
+    `_sse_display_tweaks_override_summary` for that case.
+    """
+    resolution, window_word, vsync_word = _parse_display_tweaks(text)
     return (
         f"SSE Display Tweaks (from mod {mod_name!r}) governs the display: "
         f"Resolution {resolution}, {window_word}, vsync {vsync_word} -- SkyrimPrefs "
         "values are ignored while it is enabled; set --resolution/--window/--vsync to override"
+    )
+
+
+def _sse_display_tweaks_override_summary(mod_name: str, text: str) -> str:
+    """The 'keep' line once our own override mod is already the one in effect.
+
+    `text` is the override mod's own SSEDisplayTweaks.ini, so this reports what it is
+    actually doing right now rather than the collection's (superseded) copy.
+    """
+    resolution, window_word, vsync_word = _parse_display_tweaks(text)
+    return (
+        f"SSE Display Tweaks: override {DISPLAY_OVERRIDE_MOD_NAME!r} in effect "
+        f"(resolution {resolution}, vsync {vsync_word}, window {window_word}) "
+        f"over the copy from mod {mod_name!r}"
     )
 
 
@@ -1176,6 +1259,19 @@ converted=false
 """
 
 
+def _override_is_active(mods_dir: Path, led: ledger_mod.Ledger) -> bool:
+    """Whether `DISPLAY_OVERRIDE_MOD_NAME` is ours and still has its file on disk.
+
+    Checked via the ledger's `generated_by` marker and the filesystem rather than
+    `modlist.txt`, so it stays accurate even mid-render (before that file's rows for
+    this pass are finalised).
+    """
+    record = led.data.get("mods", {}).get(DISPLAY_OVERRIDE_MOD_NAME) or {}
+    if record.get("generated_by") != DISPLAY_OVERRIDE_MARKER:
+        return False
+    return (mods_dir / DISPLAY_OVERRIDE_MOD_NAME / Path(DISPLAY_TWEAKS_RELPATH)).is_file()
+
+
 def apply_sse_display_tweaks_override(
     profile_dir: Path,
     mods_dir: Path,
@@ -1184,15 +1280,21 @@ def apply_sse_display_tweaks_override(
     vsync: str,
     window: str,
     led: ledger_mod.Ledger,
+    *,
+    remembered: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Keep the user's display choice in effect over a collection's SSE Display Tweaks.
 
     Call after `apply_display_settings` and after `modlist.txt` has been written for this
     render. No-op (returns `[]`) if no enabled mod ships
     `SKSE/Plugins/SSEDisplayTweaks.ini`. Otherwise: if the user asked for anything other
-    than 'keep', creates/refreshes the `DISPLAY_OVERRIDE_MOD_NAME` mod and pins it to the
-    top of `modlist.txt`; if everything is 'keep', touches nothing and just reports what
-    the winning file will do.
+    than 'keep' (including a field filled in from the ledger -- see `remembered`),
+    creates/refreshes the `DISPLAY_OVERRIDE_MOD_NAME` mod and pins it to the top of
+    `modlist.txt`. If everything is genuinely 'keep', touches nothing: reports what our
+    own override is already doing when it is the one in effect
+    (`_sse_display_tweaks_override_summary`), or what the winning collection file will do
+    when there is no override (`_sse_display_tweaks_summary`) -- never the misleading
+    "governs the display" line for a file our override has already superseded.
     """
     modlist_path = profile_dir / "modlist.txt"
     winning = find_winning_file(
@@ -1202,9 +1304,14 @@ def apply_sse_display_tweaks_override(
         return []
     mod_name, source_path = winning
     source_text = source_path.read_text(encoding="utf-8-sig")
-    choice = _resolve_display_choice(resolution, vsync, window)
+    choice = _resolve_display_choice(resolution, vsync, window, remembered)
 
     if choice.is_keep:
+        if _override_is_active(mods_dir, led):
+            override_text = (mods_dir / DISPLAY_OVERRIDE_MOD_NAME / Path(DISPLAY_TWEAKS_RELPATH)).read_text(
+                encoding="utf-8-sig"
+            )
+            return [_sse_display_tweaks_override_summary(mod_name, override_text)]
         return [_sse_display_tweaks_summary(mod_name, source_text)]
 
     override_root = mods_dir / DISPLAY_OVERRIDE_MOD_NAME
@@ -1230,9 +1337,9 @@ def apply_sse_display_tweaks_override(
 
     return [
         (
-            f"SSE Display Tweaks override: {DISPLAY_OVERRIDE_MOD_NAME!r} generated from "
-            f"{mod_name!r}, pinned to top priority (resolution {choice.resolution_label}, "
-            f"vsync {choice.vsync_label}, window {choice.window_label})"
+            f"SSE Display Tweaks: override {DISPLAY_OVERRIDE_MOD_NAME!r} in effect "
+            f"(resolution {choice.resolution_label}, vsync {choice.vsync_label}, "
+            f"window {choice.window_label}) over the copy from mod {mod_name!r}"
         )
     ]
 
@@ -1783,9 +1890,22 @@ def render_instance(
                 rep.log(f"[{layer.slug}] {note}")
             warnings.extend(n for n in notes if n.startswith("INI tweak skipped"))
             led.record_ini_keys(layer.owner, record)
+
+        # 'keep' falls back to whatever --resolution/--vsync/--window the ledger last
+        # remembered for a field that was actually set (never for a field still asking
+        # 'keep' with nothing stored) -- so add/remove/update, which never pass these
+        # flags themselves, re-apply the user's choice and refresh the override mod
+        # below from the *current* winning base file, instead of silently reverting to
+        # 'keep' on every render that is not `create`/`profile-instance` with explicit
+        # flags.
+        resolution, vsync, window, remembered = _resolve_effective_display(
+            led, resolution, vsync, window
+        )
+        _persist_display_choice(led, resolution, vsync, window)
+
         display_record: dict[str, dict[str, dict[str, Any]]] = {}
         for note in apply_display_settings(
-            profile_dir, game_name, resolution, vsync, window, display_record
+            profile_dir, game_name, resolution, vsync, window, display_record, remembered=remembered
         ):
             rep.log(note)
         led.record_ini_keys(base.owner, display_record)
@@ -1793,7 +1913,7 @@ def render_instance(
         # SkyrimPrefs.ini's [Display] is ignored while a collection's SSE Display Tweaks
         # is enabled; make sure the choice above still applies (or say so if it can't).
         for note in apply_sse_display_tweaks_override(
-            profile_dir, mods_dir, game_name, resolution, vsync, window, led
+            profile_dir, mods_dir, game_name, resolution, vsync, window, led, remembered=remembered
         ):
             rep.log(note)
 
@@ -2115,6 +2235,31 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     p.set_defaults(func=cmd_profile)
 
 
+def forget_display_choice(
+    instance_dir: Path, led: ledger_mod.Ledger, reporter: Reporter | None = None
+) -> list[str]:
+    """Clear the ledger's stored display choice; remove the generated override mod if ours.
+
+    The `DISPLAY_OVERRIDE_MOD_NAME` folder is only deleted when the ledger still marks it
+    with `generated_by == DISPLAY_OVERRIDE_MARKER` -- if the user has repurposed that mod
+    folder for something else since, it is left alone (and the ledger's owner record for
+    it, along with it). Does not save the ledger; the caller re-renders (and saves)
+    afterwards. Returns human-readable notes.
+    """
+    notes: list[str] = []
+    mods_dir = instance_dir / "mods"
+    record = led.data.get("mods", {}).get(DISPLAY_OVERRIDE_MOD_NAME) or {}
+    if record.get("generated_by") == DISPLAY_OVERRIDE_MARKER:
+        override_dir = mods_dir / DISPLAY_OVERRIDE_MOD_NAME
+        if override_dir.exists():
+            shutil.rmtree(override_dir, ignore_errors=True)
+        del led.data["mods"][DISPLAY_OVERRIDE_MOD_NAME]
+        notes.append(f"removed generated override mod {DISPLAY_OVERRIDE_MOD_NAME!r}")
+    led.clear_display()
+    notes.append("forgot stored display choice")
+    return notes
+
+
 def cmd_profile_instance(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
     """Re-render an existing instance's profile from its ledger.
 
@@ -2122,8 +2267,16 @@ def cmd_profile_instance(args: argparse.Namespace, reporter: Reporter | None = N
     profile straight from one `install.json`), this re-renders every layer of an
     *existing* instance -- exactly what `create`/`add`/`remove` do -- so it can be used
     on its own to re-apply --resolution/--vsync/--window (or re-seed INI tweaks) without
-    touching mods or layers at all.
+    touching mods or layers at all. `--forget-display` clears the remembered display
+    choice (and the generated override mod, if it is still ours) before that re-render.
     """
+    rep = get_reporter(reporter)
+    if getattr(args, "forget_display", False):
+        instance_dir = Path(args.instance).expanduser().resolve()
+        led = ledger_mod.load(instance_dir)
+        for note in forget_display_choice(instance_dir, led, reporter=rep):
+            rep.log(note)
+        led.save()
     render_instance(
         args.instance,
         resolution=args.resolution,
@@ -2166,5 +2319,13 @@ def add_instance_parser(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         default=False,
         help="do not touch existing profile INIs at all",
+    )
+    p.add_argument(
+        "--forget-display",
+        dest="forget_display",
+        action="store_true",
+        default=False,
+        help="clear the remembered --resolution/--vsync/--window choice and remove the "
+        "generated override mod (if c2wj still owns it), then re-render",
     )
     p.set_defaults(func=cmd_profile_instance)
