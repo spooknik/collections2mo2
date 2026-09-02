@@ -21,6 +21,7 @@ from . import (
     survey,
     tools,
     update,
+    wabbajack,
 )
 from .manifest import fetch_manifest, load_manifest, non_nexus_sources, summarise
 from .nexus import AuthRequired, CollectionRef, NexusClient, NexusError
@@ -132,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     layers.add_parser(sub)
     update.add_parser(sub)
     tools.add_parser(sub)
+    wabbajack.add_parser(sub)
 
     args = p.parse_args(argv)
     return args.func(args)
