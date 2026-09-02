@@ -297,6 +297,20 @@ def cmd_build(args: argparse.Namespace) -> int:
         for c in changes:
             print(f"  - {c}")
 
+    # MO2 treats a folder holding portable.txt as a portable instance without asking.
+    marker = mo2_dir / "portable.txt"
+    if not marker.exists():
+        marker.write_text("", encoding="utf-8")
+        print(f"created {marker}")
+
+    resolved = str(mo2_dir.resolve())
+    if len(resolved) > 60:
+        print(
+            f"warning: instance path is {len(resolved)} characters long ({resolved}). "
+            "Windows limits full paths to 260 characters and mod files nest deeply; "
+            "prefer a short location such as D:\\GTS for real installs."
+        )
+
     launch = mo2_dir / "ModOrganizer.exe"
     print(f"\nDone. Launch with:\n  {launch}")
     return 0

@@ -472,13 +472,19 @@ def render_mo2_ini(
     exe_blocks: list[dict[str, str]],
 ) -> str:
     display_name = MO2_GAME_DISPLAY_NAMES.get(game_name, game_name)
+    # MO2 stores gamePath as a QByteArray with native separators, backslashes doubled.
+    # Writing it in that form (plus game_edition) makes the instance recognisable as a
+    # portable one without needing `build` to rewrite it afterwards.
+    native = game_path.replace("/", "\\").replace("\\", "\\\\") if game_path else ""
+    game_path_line = f"gamePath=@ByteArray({native})" if game_path else "gamePath="
     lines = [
         "[General]",
         f"gameName={display_name}",
-        f"gamePath={_fwd(game_path)}",
+        game_path_line,
         f"selected_profile=@ByteArray({profile_name})",
         f"version={mo2_version}",
         "first_start=false",
+        "game_edition=Steam",
         "",
         "[Settings]",
         "style=",
