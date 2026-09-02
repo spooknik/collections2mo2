@@ -10,7 +10,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from . import archive_inspect, downloader, installer, profile, survey
+from . import archive_inspect, build, downloader, installer, profile, survey
 from .manifest import fetch_manifest, load_manifest, non_nexus_sources, summarise
 from .nexus import AuthRequired, CollectionRef, NexusClient, NexusError
 
@@ -99,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     installer.add_parser(sub)
     profile.add_parser(sub)
     survey.add_parser(sub)
+    build.add_parser(sub)
 
     args = p.parse_args(argv)
     return args.func(args)
