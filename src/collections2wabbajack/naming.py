@@ -8,9 +8,10 @@ import re
 _ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
-# Windows MAX_PATH is 260 for the whole path and mod folders sit several levels deep, with
-# the mod's own files below them. Some curators use 250+ character names; cap them.
-MAX_FOLDER_NAME = 120
+# Windows MAX_PATH is 260 for the whole path. The instance path, the mod folder and the
+# mod's own (often deeply nested) files all share that budget, so keep folder names short.
+# Some curators use 250+ character names; cap them. 80 leaves ~180 for the rest.
+MAX_FOLDER_NAME = 80
 
 
 def sanitize_folder_name(name: str) -> str:
@@ -34,6 +35,27 @@ def sanitize_folder_name(name: str) -> str:
 def mod_folder_name(mod: dict) -> str:
     """MO2 mod folder / modlist.txt name for a collection manifest mod entry."""
     return sanitize_folder_name(mod.get("name") or "")
+
+
+def assign_folder_names(mods: list[dict]) -> dict[str, str]:
+    """Map every manifest mod's `source.tag` to a unique MO2 folder name.
+
+    Curators can list the same mod name twice with different files (GTS does). The
+    first occurrence keeps the plain name; later ones get a ` ~<tag>` suffix so they
+    do not overwrite each other. Deterministic for a given manifest.
+    """
+    taken: set[str] = set()
+    result: dict[str, str] = {}
+    for mod in mods:
+        tag = (mod.get("source") or {}).get("tag") or mod.get("name") or ""
+        base = mod_folder_name(mod)
+        folder = base
+        if folder.lower() in taken:
+            suffix = f" ~{tag[:6]}"
+            folder = f"{base[: MAX_FOLDER_NAME - len(suffix)].rstrip('. ')}{suffix}"
+        taken.add(folder.lower())
+        result[tag] = folder
+    return result
 
 
 def separator_name(phase: int) -> str:

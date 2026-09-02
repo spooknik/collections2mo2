@@ -52,13 +52,26 @@ DATA_DIRS = {
     "skypatcher",
     "pandora_engine",
     "netscriptframework",
+    "mapmarkers",
+    "shaders",  # Community Shaders features live in Data/Shaders/
 }
 # Extensions that only make sense inside Data.
 DATA_EXTS = {".esp", ".esm", ".esl", ".bsa", ".ini", ".bsl", ".modgroups"}
 # The subset that is decisive on its own -- an .ini can live anywhere.
 PLUGIN_EXTS = {".esp", ".esm", ".esl", ".bsa"}
+# A loose file with one of these extensions sitting directly in a level marks
+# that level as Data, even with no recognised subdirectory (rule C). For dinput
+# (root-folder) mods only plugins/BSAs count: their loose .dll/.exe/.ini/.json
+# files (SKSE loader, Runtime Swapper manifest, preloader configs) belong under
+# Root/, so they must not make the level look like Data and stop the descent.
+DATA_ISH_LOOSE_EXTS_NON_ROOT = {".esp", ".esm", ".esl", ".bsa", ".ini", ".json", ".pex", ".dll"}
+DATA_ISH_LOOSE_EXTS_ROOT_MOD = PLUGIN_EXTS
 # Loose files at the top of an archive that are documentation, never content.
 README_EXTS = {".txt", ".md", ".pdf", ".url", ".jpg", ".jpeg", ".png"}
+# Junk that installers/zip tools leave behind. Never content, never counts
+# towards "this folder has loose files", never blocks unwrapping.
+JUNK_DIR_NAMES = {"__macosx"}
+JUNK_FILE_NAMES = {".ds_store", "thumbs.db", "desktop.ini"}
 
 OVERRIDE_JSON = "vortex_override_instructions.json"
 MAX_DESCEND = 3
@@ -82,6 +95,17 @@ def _norm(path: str) -> str:
     return path.replace("\\", "/").strip().strip("/")
 
 
+def _is_junk(path: str) -> bool:
+    """True for Mac/Windows zip cruft that never counts as real content (rule A)."""
+    parts = path.split("/")
+    if any(part.lower() in JUNK_DIR_NAMES for part in parts[:-1]):
+        return True
+    name = parts[-1]
+    if name.lower() in JUNK_FILE_NAMES:
+        return True
+    return name.startswith("._")
+
+
 def _paths(entries: Iterable[Any]) -> list[str]:
     """Accept plain relative paths or sevenzip ArchiveEntry-ish objects."""
     out: list[str] = []
@@ -92,7 +116,7 @@ def _paths(entries: Iterable[Any]) -> list[str]:
             path = getattr(entry, "path", "") or ""
             is_dir = bool(getattr(entry, "is_dir", False))
         path = _norm(path)
-        if path and not is_dir:
+        if path and not is_dir and not _is_junk(path):
             out.append(path)
     return out
 
@@ -123,11 +147,12 @@ def _children(files: list[str], node: str) -> tuple[dict[str, str], list[str]]:
     return dirs, plain
 
 
-def _looks_like_data(files: list[str], node: str) -> bool:
+def _looks_like_data(files: list[str], node: str, mod_type: str = "") -> bool:
     dirs, plain = _children(files, node)
     if any(name in DATA_DIRS for name in dirs):
         return True
-    return any(_ext(name) in PLUGIN_EXTS for name in plain)
+    loose_exts = DATA_ISH_LOOSE_EXTS_ROOT_MOD if mod_type == "dinput" else DATA_ISH_LOOSE_EXTS_NON_ROOT
+    return any(_ext(name) in loose_exts for name in plain)
 
 
 def _find_override(files: list[str]) -> str | None:
@@ -191,10 +216,13 @@ def plan_layout(
             return plan
 
     # 1. Walk down to the directory that is (or contains) the game's Data folder.
+    # Only descend into a single subfolder while doing so still might land on
+    # Data; if it dead-ends on an unrecognised folder/file, roll all the way
+    # back to the root and install as-is instead of unwrapping blindly (rule B).
     node = ""
     descended = 0
     while True:
-        if _looks_like_data(files, node):
+        if _looks_like_data(files, node, mod_type):
             data_root, terminal = node, "data"
             break
         dirs, _plain = _children(files, node)
@@ -208,6 +236,10 @@ def plan_layout(
             node = f"{node}/{candidates[0]}" if node else candidates[0]
             descended += 1
             continue
+        # Dead end: this level is neither Data-like nor a single wrapper we
+        # can keep unwrapping. Roll back to the root rather than trusting
+        # whatever depth we happened to reach (e.g. __MACOSX, MyStuff/Weird).
+        node, descended = "", 0
         data_root, terminal = node, "as_is"
         break
 
@@ -217,7 +249,12 @@ def plan_layout(
         # the whole archive is game-folder content.
         data_root, terminal = None, "root"
 
-    strategy = "single_folder" if descended and terminal != "root" else terminal
+    if terminal == "root":
+        strategy = "root"
+    elif terminal == "data" and descended:
+        strategy = "single_folder"
+    else:
+        strategy = terminal
     # Everything outside the Data folder is measured from its parent, so SKSE's
     # skse64_2_02_06/skse64_loader.exe becomes Root/skse64_loader.exe.
     if data_root is None:

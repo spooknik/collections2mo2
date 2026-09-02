@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from . import fomod, layout
-from .naming import mod_folder_name
+from .naming import assign_folder_names, mod_folder_name
 from .sevenzip import extract
 
 PLUGIN_EXTS = {".esp", ".esm", ".esl"}
@@ -328,11 +328,12 @@ def _install_one(
     overrides: dict[str, Any],
     force: bool,
     file_state: FileStateIndex | None = None,
+    folder: str | None = None,
 ) -> ModResult:
     tag = entry.get("tag") or ""
     result = ModResult(
         name=mod.get("name") or entry.get("name") or "",
-        folder=mod_folder_name(mod) if mod else (entry.get("name") or ""),
+        folder=folder or (mod_folder_name(mod) if mod else (entry.get("name") or "")),
         tag=tag,
         md5=entry.get("md5") or "",
         mod_id=entry.get("mod_id"),
@@ -509,6 +510,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     mods = manifest.get("mods", [])
     by_tag = {(m.get("source") or {}).get("tag"): m for m in mods}
+    folder_names = assign_folder_names(mods)
     order = {(m.get("source") or {}).get("tag"): i for i, m in enumerate(mods)}
 
     overrides: dict[str, Any] = {}
@@ -554,6 +556,7 @@ def cmd_install(args: argparse.Namespace) -> int:
                 overrides,
                 args.force,
                 file_state,
+                folder_names.get(entry["tag"]),
             ): entry
             for entry in todo
         }
@@ -586,13 +589,24 @@ def cmd_install(args: argparse.Namespace) -> int:
                 r.warnings = list(prev.get("warnings") or [])
                 r.fomod_resolved_deps = int(prev.get("fomod_resolved_deps") or 0)
                 r.fomod_unknown_deps = int(prev.get("fomod_unknown_deps") or 0)
+    else:
+        previous = []
+
+    # A filtered run (--only) only touched some mods; keep the previous entries for
+    # the rest so install.json always describes the whole instance, in manifest order.
+    entries_out: list[dict[str, Any]] = [r.as_json() for r in results]
+    if args.only and previous:
+        done_tags = {r.tag for r in results}
+        entries_out.extend(p for p in previous if p.get("tag") not in done_tags)
+        entries_out.sort(key=lambda p: order.get(p.get("tag"), 0))
+
     out_path.write_text(
         json.dumps(
             {
                 "manifest": str(manifest_path.resolve()),
                 "mods_dir": str(mods_dir),
                 "game_name": game_name,
-                "entries": [r.as_json() for r in results],
+                "entries": entries_out,
             },
             indent=2,
         ),
