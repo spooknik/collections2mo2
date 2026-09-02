@@ -16,7 +16,8 @@ strategy and record which one we used:
 
 The result is ``<mods-dir>/../install.json``, which is the contract the profile
 writer consumes: one entry per mod, in manifest order, carrying the folder name,
-the strategy, the plugins that landed at the mod root, and any warnings.
+the strategy, the plugins that landed at the mod root, how many of the FOMOD's
+``fileDependency`` checks we could actually answer, and any warnings.
 """
 
 from __future__ import annotations
@@ -28,8 +29,10 @@ import os
 import shutil
 import stat
 import sys
+import threading
 import time
 from collections import Counter
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,6 +43,9 @@ from .naming import mod_folder_name
 from .sevenzip import extract
 
 PLUGIN_EXTS = {".esp", ".esm", ".esl"}
+# What a FOMOD <fileDependency> can plausibly name, and what we therefore
+# remember from the mods we have already installed in this run.
+GAME_FILE_EXTS = PLUGIN_EXTS | {".bsa", ".ba2", ".dll", ".exe"}
 MAX_WARNINGS_SHOWN = 8
 
 
@@ -61,12 +67,97 @@ class ModResult:
     file_count: int = 0
     root_file_count: int = 0
     plugins: list[str] = field(default_factory=list)
+    # How much of this FOMOD's <fileDependency> questions we could actually answer.
+    fomod_resolved_deps: int = 0
+    fomod_unknown_deps: int = 0
     warnings: list[str] = field(default_factory=list)
     failed: bool = False
 
     def as_json(self) -> dict[str, Any]:
         data = {k: v for k, v in self.__dict__.items() if k != "failed"}
         return data
+
+
+# --------------------------------------------------------------- file dependencies
+
+
+class FileStateIndex:
+    """Answers a FOMOD ``fileDependency`` -- ``(filename) -> Active/Inactive/Missing``.
+
+    A FOMOD asks about game files ("is ccbgssse002-exoticarrows.esl active?").
+    Assuming ``Missing`` makes every Creation Club / DLC patch resolve to
+    ``NotUsable``, so we answer from what we actually know, in this order:
+
+    1. the manifest's top-level ``plugins`` list -- the curator's real load
+       order, which is the closest thing we have to the machine the choices
+       were recorded on;
+    2. the game's own ``Data`` folder, when ``--game-path`` is given -- this is
+       where the base game masters and the Creation Club content live;
+    3. files earlier mods in *this* run already installed.
+
+    Everything else stays ``Missing``, which also means "we have no idea";
+    :mod:`.fomod` counts those separately so install.json can show the coverage.
+
+    Installs run in parallel, so (3) is best-effort: a mod finishing at the same
+    time as this lookup may not be visible yet. That is deliberate -- (1) covers
+    the common case and serialising the whole run to fix it is not worth it.
+    """
+
+    def __init__(self, plugins: Iterable[dict[str, Any]] | None, game_path: Path | None) -> None:
+        self._known: dict[str, str] = {}
+        for entry in plugins or ():
+            if not isinstance(entry, dict):
+                continue
+            name = _basename(str(entry.get("name") or ""))
+            if name:
+                self._known.setdefault(name, "Active" if entry.get("enabled") else "Inactive")
+        self.manifest_count = len(self._known)
+        # The manifest wins where the two disagree: it is the load order the
+        # choices were recorded against, and it knows about "installed but off".
+        before = len(self._known)
+        for name in _scan_game_data(game_path):
+            self._known.setdefault(name, "Active")
+        self.game_count = len(self._known) - before
+        self._lock = threading.Lock()
+        self._installed: set[str] = set()
+
+    def add_installed(self, names: Iterable[str]) -> None:
+        """Record file basenames a mod just installed, for the mods still to come."""
+        batch = {n for n in (_basename(x) for x in names) if n}
+        if batch:
+            with self._lock:
+                self._installed |= batch
+
+    def __call__(self, filename: str) -> str:
+        name = _basename(filename)
+        state = self._known.get(name)
+        if state is not None:
+            return state
+        with self._lock:
+            if name in self._installed:
+                return "Active"
+        return "Missing"
+
+
+def _basename(path: str) -> str:
+    return path.replace("\\", "/").rsplit("/", 1)[-1].strip().lower()
+
+
+def _scan_game_data(game_path: Path | None) -> list[str]:
+    """Plugin and archive basenames in the game's ``Data`` folder (scanned once)."""
+    if game_path is None:
+        return []
+    data = game_path / "Data"
+    if not data.is_dir():
+        # Tolerate being handed the Data folder itself.
+        data = game_path
+    if not data.is_dir():
+        return []
+    return [
+        p.name.lower()
+        for p in data.iterdir()
+        if p.is_file() and p.suffix.lower() in (PLUGIN_EXTS | {".bsa", ".ba2"})
+    ]
 
 
 # ------------------------------------------------------------------ file plumbing
@@ -91,7 +182,11 @@ def _index(base: Path) -> dict[str, str]:
 
 
 def _copy_pairs(
-    base: Path, pairs: list[tuple[str, str]], dest_root: Path, warnings: list[str]
+    base: Path,
+    pairs: list[tuple[str, str]],
+    dest_root: Path,
+    warnings: list[str],
+    landed: list[str] | None = None,
 ) -> int:
     """Copy `(source, destination)` pairs from `base` into `dest_root`.
 
@@ -99,9 +194,17 @@ def _copy_pairs(
     casing and FOMOD authors are worse). A source that resolves to a directory
     copies its whole tree under the destination; later pairs overwrite earlier
     ones, which is how FOMOD priority ordering is meant to work.
+
+    `landed` collects the basenames of the game files we wrote, so later mods in
+    the run can answer ``fileDependency`` questions about them.
     """
     index = _index(base)
     copied = 0
+
+    def note(target: Path) -> None:
+        if landed is not None and target.suffix.lower() in GAME_FILE_EXTS:
+            landed.append(target.name)
+
     for source, destination in pairs:
         actual = index.get(source.strip("/").lower())
         if actual is None:
@@ -115,9 +218,11 @@ def _copy_pairs(
                 rel = child.relative_to(src).as_posix()
                 target = dest_root / destination / rel if destination else dest_root / rel
                 copied += _copy_file(child, target)
+                note(target)
         else:
             target = dest_root / destination if destination else dest_root / src.name
             copied += _copy_file(src, target)
+            note(target)
     return copied
 
 
@@ -191,8 +296,11 @@ def _find_module_config(base: Path) -> Path | None:
 
 
 def _plan_fomod(
-    base: Path, choices: dict[str, Any] | None, warnings: list[str]
-) -> tuple[Path, list[tuple[str, str]]] | None:
+    base: Path,
+    choices: dict[str, Any] | None,
+    warnings: list[str],
+    file_state: fomod.FileState | None,
+) -> tuple[Path, fomod.InstallPlan] | None:
     config = _find_module_config(base)
     if config is None:
         return None
@@ -200,12 +308,12 @@ def _plan_fomod(
     # and <folder> source in ModuleConfig.xml is relative to it.
     root = config.parent.parent
     try:
-        plan = fomod.evaluate(config, _walk(root), choices)
+        plan = fomod.evaluate(config, _walk(root), choices, file_state)
     except Exception as exc:  # noqa: BLE001 - one bad installer must not stop the run
         warnings.append(f"FOMOD evaluation failed ({exc}); falling back to layout rules")
         return None
     warnings.extend(plan.warnings)
-    return root, plan.files
+    return root, plan
 
 
 # ------------------------------------------------------------------------ one mod
@@ -219,6 +327,7 @@ def _install_one(
     game_name: str,
     overrides: dict[str, Any],
     force: bool,
+    file_state: FileStateIndex | None = None,
 ) -> ModResult:
     tag = entry.get("tag") or ""
     result = ModResult(
@@ -239,6 +348,8 @@ def _install_one(
         result.file_count = sum(1 for p in dest_root.rglob("*") if p.is_file())
         result.plugins = _root_plugins(dest_root)
         result.root_file_count = _root_folder_count(dest_root)
+        if file_state is not None:
+            file_state.add_installed(result.plugins)
         return result
 
     tmp = tmp_root / (tag or result.folder)
@@ -263,10 +374,13 @@ def _install_one(
                     choices, strategy = overrides[tag], "fomod-overrides"
                 else:
                     choices, strategy = None, "fomod-defaults"
-                fomod_plan = _plan_fomod(base, choices, result.warnings)
+                fomod_plan = _plan_fomod(base, choices, result.warnings, file_state)
                 if fomod_plan is not None:
                     result.strategy = strategy
-                    base, pairs = fomod_plan
+                    base, plan = fomod_plan
+                    pairs = plan.files
+                    result.fomod_resolved_deps = plan.resolved_deps
+                    result.fomod_unknown_deps = plan.unknown_deps
             if fomod_plan is None:
                 plan = layout.plan_layout(
                     _walk(base),
@@ -277,10 +391,14 @@ def _install_one(
                 result.warnings.extend(plan.warnings)
                 pairs = plan.files
 
-        result.file_count = _copy_pairs(base, pairs, dest_root, result.warnings)
+        landed: list[str] = []
+        result.file_count = _copy_pairs(base, pairs, dest_root, result.warnings, landed)
         result.plugins = _root_plugins(dest_root)
         result.root_file_count = _root_folder_count(dest_root)
         _write_meta_ini(dest_root, entry, mod, game_name)
+        if file_state is not None:
+            # Publish before returning: mods still queued can now see these files.
+            file_state.add_installed(landed)
     except Exception as exc:  # noqa: BLE001 - reported per mod, run continues
         result.failed = True
         result.strategy = "failed"
@@ -397,6 +515,16 @@ def cmd_install(args: argparse.Namespace) -> int:
     if args.choices_overrides:
         overrides = json.loads(Path(args.choices_overrides).read_text(encoding="utf-8"))
 
+    game_path = Path(args.game_path).resolve() if args.game_path else None
+    if game_path is not None and not game_path.is_dir():
+        print(f"warning: --game-path {game_path} is not a directory, ignored", file=sys.stderr)
+        game_path = None
+    file_state = FileStateIndex(manifest.get("plugins"), game_path)
+    print(
+        f"fileDependency resolver: {file_state.manifest_count} plugins from the manifest, "
+        f"{file_state.game_count} more from the game folder"
+    )
+
     mods_dir = Path(args.mods_dir).resolve() if args.mods_dir else _default_mods_dir(inspect_json)
     mods_dir.mkdir(parents=True, exist_ok=True)
     tmp_root = mods_dir.parent / ".tmp"
@@ -425,6 +553,7 @@ def cmd_install(args: argparse.Namespace) -> int:
                 game_name,
                 overrides,
                 args.force,
+                file_state,
             ): entry
             for entry in todo
         }
@@ -455,6 +584,8 @@ def cmd_install(args: argparse.Namespace) -> int:
             if r.strategy == "existing" and prev and prev.get("folder") == r.folder:
                 r.strategy = prev.get("strategy") or r.strategy
                 r.warnings = list(prev.get("warnings") or [])
+                r.fomod_resolved_deps = int(prev.get("fomod_resolved_deps") or 0)
+                r.fomod_unknown_deps = int(prev.get("fomod_unknown_deps") or 0)
     out_path.write_text(
         json.dumps(
             {
@@ -480,6 +611,11 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         "--mods-dir", default=None, help="output mods dir (default: <rev>/mo2/mods)"
     )
     p.add_argument("--only", default=None, help="install only mods whose name contains this")
+    p.add_argument(
+        "--game-path",
+        default=None,
+        help="game install dir (its Data folder answers FOMOD fileDependency checks)",
+    )
     p.add_argument("--jobs", type=int, default=4, help="parallel installs (default: 4)")
     p.add_argument("--force", action="store_true", help="reinstall mods that already exist")
     p.add_argument(

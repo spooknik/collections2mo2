@@ -13,11 +13,23 @@ Everything here is a pure function over the XML plus a directory listing, so it
 is unit-testable without extracting anything: :func:`evaluate` returns an
 :class:`InstallPlan` of ``(source, destination)`` pairs, and the caller copies.
 
+Two things decide what a ``<plugin>`` ends up as:
+
+* **The recorded choices win.** A plugin the curator explicitly picked is
+  installed whatever its ``typeDescriptor`` resolves to. The curator's Vortex
+  could see the game; we largely cannot, so a locally-computed ``NotUsable`` is
+  evidence about *our* knowledge, not about the pick. Only a recorded option
+  that is literally absent from the XML is dropped (with a warning). The
+  "Required always / NotUsable never" rules still govern everything that was
+  *not* recorded (defaults mode, and groups the curator never answered).
+* **``fileDependency`` is answered by a resolver**, not assumed. Callers pass
+  ``file_state``: ``(filename) -> "Active" | "Inactive" | "Missing"``. The
+  installer builds one from the manifest's load order, the game's ``Data``
+  folder and the files earlier mods in the batch already installed. With no
+  resolver every file is ``Missing``, which is the old behaviour.
+
 Deliberate simplifications (all recorded as warnings when they bite):
 
-* ``fileDependency`` cannot be answered -- we have no game directory -- so every
-  game file is treated as ``Missing`` and we warn when that actually decided
-  something.
 * ``gameDependency`` / ``fomodDependency`` (version checks) are always satisfied.
 * ``installIfUsable`` is ignored; ``alwaysInstall`` is honoured.
 """
@@ -26,7 +38,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -38,6 +50,15 @@ TYPE_RECOMMENDED = "Recommended"
 TYPE_OPTIONAL = "Optional"
 TYPE_COULD_BE_USABLE = "CouldBeUsable"
 TYPE_NOT_USABLE = "NotUsable"
+
+# The three states a <fileDependency> can ask about, and the resolver signature.
+STATE_ACTIVE = "Active"
+STATE_INACTIVE = "Inactive"
+STATE_MISSING = "Missing"
+
+#: ``(filename) -> "Active" | "Inactive" | "Missing"``. ``Missing`` doubles as
+#: "we have no idea", which is why it is also the answer when no resolver is given.
+FileState = Callable[[str], str]
 
 GROUP_TYPES = {
     "SelectExactlyOne",
@@ -125,6 +146,10 @@ class InstallPlan:
     flags: dict[str, str] = field(default_factory=dict)
     selections: list[tuple[str, str, list[str]]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    #: ``fileDependency`` checks the resolver could answer (Active/Inactive) ...
+    resolved_deps: int = 0
+    #: ... and the ones it could not, which fall back to ``Missing``.
+    unknown_deps: int = 0
 
 
 # --------------------------------------------------------------------------- parsing
@@ -293,12 +318,43 @@ def parse_config(config_xml_path: Path | str) -> Config:
 # ----------------------------------------------------------------------- evaluation
 
 
-def _eval_deps(deps: Dependencies | None, flags: dict[str, str]) -> tuple[bool, list[str]]:
-    """Evaluate a condition tree. Returns (result, influential file dependencies).
+class _DepContext:
+    """Answers ``fileDependency`` questions and counts what it could answer.
 
-    We cannot see the game directory, so every ``fileDependency`` is answered as
-    if the file were ``Missing``. The second return value lists the file
-    dependencies that actually decided the outcome, so the caller can warn.
+    ``Missing`` is both a real FOMOD state and our "no idea" answer, so the
+    counters split the two: ``resolved`` is Active/Inactive (we know), ``unknown``
+    is everything the resolver could not place.
+    """
+
+    __slots__ = ("_file_state", "resolved", "unknown")
+
+    def __init__(self, file_state: FileState | None) -> None:
+        self._file_state = file_state
+        self.resolved = 0
+        self.unknown = 0
+
+    def state(self, filename: str) -> str:
+        value = ""
+        if self._file_state is not None:
+            try:
+                value = (self._file_state(filename) or "").strip().capitalize()
+            except Exception:  # noqa: BLE001 - a bad resolver must not kill the install
+                value = ""
+        if value in (STATE_ACTIVE, STATE_INACTIVE):
+            self.resolved += 1
+            return value
+        self.unknown += 1
+        return STATE_MISSING
+
+
+def _eval_deps(
+    deps: Dependencies | None, flags: dict[str, str], ctx: _DepContext
+) -> tuple[bool, list[str]]:
+    """Evaluate a condition tree. Returns (result, influential *unknown* file deps).
+
+    The second return value lists only the file dependencies the resolver could
+    not answer *and* that decided the outcome, so the caller can warn about the
+    ones where our guess may be wrong.
     """
     if deps is None or deps.is_empty():
         return True, []
@@ -306,11 +362,13 @@ def _eval_deps(deps: Dependencies | None, flags: dict[str, str]) -> tuple[bool, 
     results: list[tuple[bool, list[str]]] = []
     for name, value in deps.flags:
         results.append((flags.get(name) == value, []))
-    for name, state in deps.files:
-        ok = state.lower() == "missing"
-        results.append((ok, [f"{name} (expected {state}, assumed Missing)"]))
+    for name, wanted in deps.files:
+        actual = ctx.state(name)
+        ok = actual.lower() == (wanted or STATE_ACTIVE).strip().lower()
+        blind = [f"{name} (wanted {wanted}, unknown so assumed Missing)"]
+        results.append((ok, blind if actual == STATE_MISSING else []))
     for child in deps.children:
-        results.append(_eval_deps(child, flags))
+        results.append(_eval_deps(child, flags, ctx))
     for _ in range(deps.ignored):
         results.append((True, []))
 
@@ -324,10 +382,12 @@ def _eval_deps(deps: Dependencies | None, flags: dict[str, str]) -> tuple[bool, 
     return value, influential
 
 
-def _resolve_type(plugin: Plugin, flags: dict[str, str], file_deps: list[str]) -> str:
+def _resolve_type(
+    plugin: Plugin, flags: dict[str, str], ctx: _DepContext, blind: list[str]
+) -> str:
     for deps, name in plugin.type_patterns:
-        ok, used = _eval_deps(deps, flags)
-        file_deps.extend(used)
+        ok, used = _eval_deps(deps, flags, ctx)
+        blind.extend(used)
         if ok:
             return name
     return plugin.default_type
@@ -342,6 +402,22 @@ def _recorded_steps(choices: dict[str, Any] | None) -> list[dict[str, Any]]:
         return []
     options = choices.get("options")
     return [o for o in options if isinstance(o, dict)] if isinstance(options, list) else []
+
+
+def _recorded_answered(recorded_step: dict[str, Any] | None) -> bool:
+    """Did the curator actually tick anything in this step?
+
+    Vortex writes an entry for every step, including ones it never showed; those
+    come through with every group's ``choices`` empty. A non-empty one is proof
+    the step *was* visible to the curator.
+    """
+    groups = (recorded_step or {}).get("groups")
+    if not isinstance(groups, list):
+        return False
+    return any(
+        isinstance(g, dict) and isinstance(g.get("choices"), list) and g["choices"]
+        for g in groups
+    )
 
 
 def _match_recorded(
@@ -395,7 +471,8 @@ def _select_replay(
     types: dict[int, str],
     warnings: list[str],
     where: str,
-) -> list[Plugin]:
+) -> tuple[list[Plugin], list[Plugin]]:
+    """Replay one group. Returns (what the curator recorded, what we install)."""
     selected: list[Plugin] = []
     raw = (recorded_group or {}).get("choices")
     entries = [c for c in raw if isinstance(c, dict)] if isinstance(raw, list) else []
@@ -412,7 +489,8 @@ def _select_replay(
                 continue
         if hit not in selected:
             selected.append(hit)
-    return _enforce_group_rules(group, selected, types, warnings, where, replay=True)
+    chosen = _enforce_group_rules(group, selected, types, warnings, where, recorded=selected)
+    return selected, chosen
 
 
 def _select_default(
@@ -421,7 +499,7 @@ def _select_default(
     selected = [
         p for p in group.plugins if types[id(p)] in (TYPE_REQUIRED, TYPE_RECOMMENDED)
     ]
-    return _enforce_group_rules(group, selected, types, warnings, where, replay=False)
+    return _enforce_group_rules(group, selected, types, warnings, where, recorded=None)
 
 
 def _enforce_group_rules(
@@ -430,9 +508,22 @@ def _enforce_group_rules(
     types: dict[int, str],
     warnings: list[str],
     where: str,
-    replay: bool,
+    recorded: list[Plugin] | None,
 ) -> list[Plugin]:
-    chosen = [p for p in selected if _selectable(types[id(p)])]
+    """Apply the group's own rules to a proposed selection.
+
+    ``recorded`` is the curator's explicit picks (``None`` in defaults mode).
+    Those are immune to ``NotUsable``: the curator's installer could see the
+    game, so a ``NotUsable`` we computed without that knowledge is not a reason
+    to overrule them.
+    """
+    replay = recorded is not None
+    pinned = {id(p) for p in recorded or ()}
+
+    def keep(plugin: Plugin) -> bool:
+        return _selectable(types[id(plugin)]) or id(plugin) in pinned
+
+    chosen = [p for p in selected if keep(p)]
     if len(chosen) != len(selected):
         warnings.append(f"{where}: dropped NotUsable option(s)")
 
@@ -441,7 +532,7 @@ def _enforce_group_rules(
             chosen.append(plugin)
 
     if group.type == "SelectAll":
-        chosen = [p for p in group.plugins if _selectable(types[id(p)])]
+        chosen = [p for p in group.plugins if keep(p)]
     elif group.type in ("SelectExactlyOne", "SelectAtLeastOne") and not chosen:
         fallback = next(
             (p for p in group.plugins if types[id(p)] == TYPE_RECOMMENDED),
@@ -484,18 +575,25 @@ def evaluate(
     config_xml_path: Path | str,
     fomod_root_listing: Iterable[str] | None = None,
     choices: dict[str, Any] | None = None,
+    file_state: FileState | None = None,
 ) -> InstallPlan:
     """Run a FOMOD headlessly.
 
     `fomod_root_listing` is an optional iterable of paths (relative to the FOMOD
     root) used to resolve sources case-insensitively and to warn about sources
     the archive does not actually contain. `choices` is the Vortex
-    ``mod["choices"]`` object; when absent, defaults are used.
+    ``mod["choices"]`` object; when absent, defaults are used. `file_state`
+    answers ``fileDependency`` questions -- see :data:`FileState`; without one
+    every file reads as ``Missing``.
     """
     config = parse_config(config_xml_path)
     plan = InstallPlan()
     flags: dict[str, str] = {}
-    file_deps: list[str] = []
+    ctx = _DepContext(file_state)
+    # Unknown file dependencies that actually decided something, plus the places
+    # where our answer disagreed with what the curator recorded.
+    blind: list[str] = []
+    diverged: list[str] = []
     collected: list[tuple[int, int, FileSpec]] = []
     seq = 0
 
@@ -508,20 +606,42 @@ def evaluate(
     matched = _match_recorded(config.steps, recorded, plan.warnings) if replay else []
 
     for index, step in enumerate(config.steps):
-        visible, used = _eval_deps(step.visible, flags)
-        file_deps.extend(used)
+        recorded_step = matched[index] if replay and index < len(matched) else None
+        visible, used = _eval_deps(step.visible, flags, ctx)
+        blind.extend(used)
+        if not visible and _recorded_answered(recorded_step):
+            # The curator ticked boxes here, so the step was on screen for them;
+            # our <visible> verdict is the thing that is wrong.
+            visible = True
+            diverged.append(
+                f"step {step.name!r}: evaluated as hidden but the curator recorded "
+                "choices in it; treated as visible"
+            )
         if not visible:
             continue
-        recorded_step = matched[index] if replay and index < len(matched) else None
         for gi, group in enumerate(step.groups):
             where = f"step {step.name!r} group {group.name!r}"
             if group.type not in GROUP_TYPES:
-                plan.warnings.append(f"{where}: unknown group type {group.type!r}, treated as SelectAny")
-            types = {id(p): _resolve_type(p, flags, file_deps) for p in group.plugins}
+                plan.warnings.append(
+                    f"{where}: unknown group type {group.type!r}, treated as SelectAny"
+                )
+            group_blind: list[str] = []
+            types = {id(p): _resolve_type(p, flags, ctx, group_blind) for p in group.plugins}
             if replay:
-                chosen = _select_replay(group, _recorded_group(group, gi, recorded_step), types, plan.warnings, where)
+                picked, chosen = _select_replay(
+                    group, _recorded_group(group, gi, recorded_step), types, plan.warnings, where
+                )
+                if group_blind and {p.name for p in chosen} != {p.name for p in picked}:
+                    added = sorted({p.name for p in chosen} - {p.name for p in picked})
+                    dropped = sorted({p.name for p in picked} - {p.name for p in chosen})
+                    diverged.append(
+                        f"{where}: unresolved fileDependency changed the selection "
+                        f"(added {added or 'nothing'}, dropped {dropped or 'nothing'})"
+                    )
+                    blind.extend(group_blind)
             else:
                 chosen = _select_default(group, types, plan.warnings, where)
+                blind.extend(group_blind)
                 plan.warnings.append(
                     f"default choice -- {where} [{group.type}]: "
                     + (", ".join(p.name for p in chosen) or "(nothing)")
@@ -541,8 +661,8 @@ def evaluate(
                             seq += 1
 
     for deps, specs in config.conditional:
-        ok, used = _eval_deps(deps, flags)
-        file_deps.extend(used)
+        ok, used = _eval_deps(deps, flags, ctx)
+        blind.extend(used)
         if ok:
             for spec in specs:
                 collected.append((spec.priority, seq, spec))
@@ -563,6 +683,14 @@ def evaluate(
             destination = "" if spec.is_folder else source.rsplit("/", 1)[-1]
         plan.files.append((source, destination))
 
-    for dep in dict.fromkeys(file_deps):
-        plan.warnings.append(f"fileDependency assumed Missing (no game directory): {dep}")
+    plan.resolved_deps = ctx.resolved
+    plan.unknown_deps = ctx.unknown
+    plan.warnings.extend(diverged)
+    if diverged or blind:
+        # One summary line per mod, not one per check: the detail lives in the
+        # counters, which the installer records in install.json.
+        plan.warnings.append(
+            f"{ctx.resolved} fileDependency checks resolved via manifest/game/installed; "
+            f"{ctx.unknown} still unknown"
+        )
     return plan
