@@ -17,7 +17,22 @@ without Vortex.
 Development collection: [SKSE and Behaviours Essentials (h2uqa3)](https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3),
 292 mods, about 1 GB, with FOMOD choices, optionals, phases and rules.
 
-## Setup
+## Quick start
+
+```
+uv sync
+copy .env.example .env      # then paste your personal Nexus API key into .env
+uv run c2wj create https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3 ^
+    --out "E:\c2wj-test\h2uqa3" --game-path "E:\Games\Skyrim Special Edition" --stock-game
+uv run c2wj tools install xedit bethini-pie --mo2-dir "E:\c2wj-test\h2uqa3"
+```
+
+`create` runs every stage below into one self-contained MO2 instance (resumable; re-running
+skips finished stages), copies the game into `Stock Game` so patchers never touch your Steam
+install, and records ownership of every mod in `c2wj-instance.json`. `tools` installs optional
+modding tools under `Tools\` and registers them as MO2 executables (`c2wj tools list`).
+
+## Stage-by-stage
 
 ```
 uv sync
