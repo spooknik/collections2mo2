@@ -62,6 +62,56 @@ shared ones, reverts exactly the INI keys it set (the ledger records the value e
 had before it), and re-renders the profile. Archives stay in `downloads/` unless you pass
 `--purge-downloads`. Removing the base layer is refused without `--force`.
 
+## Updating a collection
+
+Collections move: the curator publishes a new revision every few weeks, a handful of mods
+different from the last. `update` works out that difference and applies only it.
+
+```
+uv run c2wj update --instance "E:\c2wj-test\h2uqa3" --dry-run
+uv run c2wj update --instance "E:\c2wj-test\h2uqa3" --yes
+```
+
+Without `--to` it goes to the latest published revision; `--to 67` pins a specific one
+(older is allowed and is applied as a delta like any other). `--layer <slug>` picks which
+collection to move when the instance has more than one. `--dry-run` prints the plan --
+the curator's changelog for the target revision, a diff of the collection's install
+instructions, and every mod it would add, change or remove -- and stops; without
+`--yes` the same plan is printed and confirmed on stdin first.
+
+What "only the delta" means, per mod:
+
+- **unchanged** (same file, same FOMOD answers, same name): nothing is downloaded or
+  extracted. The folder simply changes hands to `collection:<slug>@<newrev>`.
+- **changed**: a new file, new `choices` or a new file list is re-downloaded and
+  reinstalled over the same folder; a mod the curator merely renamed has its folder
+  renamed; a mod that only moved `phase` or became optional costs nothing but a
+  re-render.
+- **added**: downloaded and installed.
+- **removed**: the folder is deleted when this layer is its only owner. If it has more
+  files than the install recorded, or files newer than the install, it is kept and
+  reported instead -- that is how a mod you edited by hand survives an update.
+
+Mods are matched between the two revisions by `(modId, fileId)`, then `md5`, then
+`modId`: Vortex re-issues `source.tag` on every revision, so the tags never line up.
+
+Afterwards the profile is re-rendered from every layer, so your own mods keep their
+place in `modlist.txt`, MO2's DLC/Creation Club rows stay put, and the INI keys the old
+revision set are reverted before the new one's are applied. The ledger records the new
+revision and remembers the old one in `previous_revisions`; the old manifest is kept
+under `c2wj/collections/<slug>/<oldrev>/` for diffing (pass `--purge-old` to delete it).
+
+`status` is the read-only view of an instance -- it never writes anything:
+
+```
+uv run c2wj status --instance "E:\c2wj-test\h2uqa3"
+```
+
+It lists each layer with its installed revision against the newest published one (one
+GraphQL call per layer, `--offline` skips them), how many `mods/` folders belong to a
+collection, a tool or to you, the tools installed, and whether the rendered profile still
+matches the ledger.
+
 ## Stage-by-stage
 
 ```

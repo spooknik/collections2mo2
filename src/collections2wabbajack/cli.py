@@ -20,6 +20,7 @@ from . import (
     profile,
     survey,
     tools,
+    update,
 )
 from .manifest import fetch_manifest, load_manifest, non_nexus_sources, summarise
 from .nexus import AuthRequired, CollectionRef, NexusClient, NexusError
@@ -87,7 +88,24 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _tolerant_output() -> None:
+    """Never let a mod name or a curator's changelog kill a run on an encoding error.
+
+    Redirected output on Windows lands in cp1252, and collection text is full of emoji
+    and typographic dashes; `errors="replace"` turns what would be a `UnicodeEncodeError`
+    mid-report into a `?`.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _tolerant_output()
     p = argparse.ArgumentParser(prog="c2wj", description="Nexus collections -> MO2 / Wabbajack")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -112,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     build.add_parser(sub)
     create.add_parser(sub)
     layers.add_parser(sub)
+    update.add_parser(sub)
     tools.add_parser(sub)
 
     args = p.parse_args(argv)

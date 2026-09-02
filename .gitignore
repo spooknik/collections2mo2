@@ -10,3 +10,7 @@ tools/
 # any .env variant except the committed template
 .env*
 !.env.example
+
+# PyInstaller output
+build/
+dist/

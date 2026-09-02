@@ -32,6 +32,11 @@ Layering (schema 2) made two of those fields plural:
 Each layer also records the stage JSON it produced (`files`), named per layer
 (`c2wj/<slug>-<rev>.install.json` and friends) so layers never clobber each other.
 
+A layer is re-pinned rather than replaced when the collection publishes a new
+revision (`update_layer_revision`, used by `c2wj update`): it keeps its position in
+`layers`, its `added` timestamp and its `profile`, gains an `updated` timestamp, and
+appends the revision it left to `previous_revisions`.
+
 Writes are atomic (temp file in the same directory, then `os.replace`) because
 this file is the only record of the above and the pipeline updates it while a
 long install is in flight.
@@ -188,9 +193,51 @@ class Ledger:
                 layer["added"] = existing.get("added") or layer["added"]
                 if not layer["files"]:
                     layer["files"] = dict(existing.get("files") or {})
+                # An `update` history belongs to the layer, not to one revision of it.
+                for key in ("previous_revisions", "updated"):
+                    if existing.get(key):
+                        layer[key] = existing[key]
                 self.data["layers"][i] = layer
                 return layer
         self.data["layers"].append(layer)
+        return layer
+
+    def update_layer_revision(
+        self,
+        slug: str,
+        old_revision: int | str,
+        new_revision: int | str,
+        *,
+        name: str = "",
+        author: str = "",
+        manifest: str = "",
+        files: dict[str, str] | None = None,
+    ) -> dict[str, Any] | None:
+        """Re-pin an existing layer to `new_revision`, in place; returns the layer record.
+
+        `c2wj update` moves a layer forward without changing what it *is*: it keeps its
+        position in `layers` (which is the order the profile renders them in), its
+        `added` timestamp, its `profile` and the separators it owns, and appends the
+        revision it is leaving to `previous_revisions`. Registering a second layer for
+        the same slug instead would render the collection twice.
+        """
+        layer = self.layer(slug, old_revision)
+        if layer is None:
+            return None
+        if str(old_revision) != str(new_revision):
+            previous = list(layer.get("previous_revisions") or [])
+            previous.append(old_revision)
+            layer["previous_revisions"] = previous
+        layer["revision"] = new_revision
+        layer["updated"] = now_iso()
+        if name:
+            layer["name"] = name
+        if author:
+            layer["author"] = author
+        if manifest:
+            layer["manifest"] = manifest
+        if files:
+            layer["files"] = dict(files)
         return layer
 
     def layer(self, slug: str, revision: int | str) -> dict[str, Any] | None:

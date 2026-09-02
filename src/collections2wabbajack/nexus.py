@@ -115,6 +115,68 @@ class NexusClient:
             download_link_path=rev["downloadLink"],
         )
 
+    def latest_revision(self, ref: CollectionRef) -> int | None:
+        """The newest published revision number, or `None` if the API does not say.
+
+        One small GraphQL call, so `status` can ask it once per layer without pulling a
+        whole revision record down.
+        """
+        query = """
+        query($slug: String!) {
+          collection(slug: $slug, viewAdultContent: true) {
+            latestPublishedRevision { revisionNumber }
+          }
+        }
+        """
+        data = self.graphql(query, {"slug": ref.slug})
+        coll = data.get("collection")
+        if not coll:
+            raise NexusError(f"collection '{ref.slug}' not found")
+        latest = (coll.get("latestPublishedRevision") or {}).get("revisionNumber")
+        return int(latest) if latest is not None else None
+
+    def collection_revisions(self, ref: CollectionRef) -> list[dict[str, Any]]:
+        """Every revision of a collection, newest first.
+
+        Observed shape (2026-09): `{"revisionNumber", "revisionStatus", "modCount",
+        "totalSize", "updatedAt"}`; `revisionStatus == "published"` is the only state a
+        revision can actually be fetched in.
+        """
+        query = """
+        query($slug: String!) {
+          collection(slug: $slug, viewAdultContent: true) {
+            revisions { revisionNumber revisionStatus modCount totalSize updatedAt }
+          }
+        }
+        """
+        data = self.graphql(query, {"slug": ref.slug})
+        coll = data.get("collection")
+        if not coll:
+            raise NexusError(f"collection '{ref.slug}' not found")
+        return list(coll.get("revisions") or [])
+
+    def collection_changelog(
+        self, ref: CollectionRef, revision: int | None
+    ) -> dict[str, Any] | None:
+        """The curator's changelog for a revision, or `None` when they wrote none.
+
+        `CollectionRevision.collectionChangelog` carries `{id, collectionRevisionId,
+        revisionNumber, description, createdAt, updatedAt}` (schema introspected
+        2026-09); `description` is the free text shown on the collection page.
+        """
+        query = """
+        query($slug: String!, $revision: Int) {
+          collectionRevision(slug: $slug, revision: $revision, viewAdultContent: true) {
+            revisionNumber
+            collectionChangelog { revisionNumber description createdAt }
+          }
+        }
+        """
+        data = self.graphql(query, {"slug": ref.slug, "revision": revision})
+        rev = data.get("collectionRevision") or {}
+        changelog = rev.get("collectionChangelog")
+        return changelog if isinstance(changelog, dict) else None
+
     # -- Collection archive ---------------------------------------------------
 
     def collection_download_url(self, info: RevisionInfo) -> str:

@@ -23,6 +23,8 @@ SUBCOMMANDS = [
     "create",
     "add",
     "remove",
+    "update",
+    "status",
 ]
 
 
