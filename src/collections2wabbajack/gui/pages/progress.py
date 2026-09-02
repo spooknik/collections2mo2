@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout
 
-from ... import api
+from ... import api, ledger
 from ..progress_widget import ProgressWidget
 from ..reporter_bridge import QtReporter
 from ..worker import EngineWorker
 from .base import WizardPage
+
+# MO2's first start on a freshly built instance indexes every mod folder before its UI
+# is usable, which for a large collection can take well over a minute; without this the
+# window just looks hung. Matches `create.py`'s CLI summary hint.
+MO2_FIRST_START_SECONDS = 60
 
 
 class ProgressPage(WizardPage):
@@ -17,6 +23,7 @@ class ProgressPage(WizardPage):
     def __init__(self, state, parent=None):
         super().__init__(state, parent)
         self._worker: EngineWorker | None = None
+        self._launch_timer: QTimer | None = None
 
         layout = QVBoxLayout(self)
         self.panel = ProgressWidget()
@@ -100,8 +107,35 @@ class ProgressPage(WizardPage):
         self.state.run_succeeded = False
 
     def _launch(self) -> None:
-        if self.state.instance_dir is not None:
-            api.launch_mod_organizer(self.state.instance_dir)
+        if self.state.instance_dir is None:
+            return
+        api.launch_mod_organizer(self.state.instance_dir)
+
+        mod_count = self._mod_count()
+        self.launch_btn.setEnabled(False)
+        self.panel.progress_bar.setRange(0, 0)  # indeterminate
+        self.panel.stage_label.setText(
+            f"Mod Organizer is starting and indexing {mod_count} mods "
+            "(first start can take a minute or more)"
+        )
+        self._launch_timer = QTimer(self)
+        self._launch_timer.setSingleShot(True)
+        self._launch_timer.timeout.connect(self._on_launch_settled)
+        self._launch_timer.start(MO2_FIRST_START_SECONDS * 1000)
+
+    def _mod_count(self) -> int:
+        if self.state.instance_dir is None:
+            return 0
+        try:
+            return len(ledger.load(self.state.instance_dir).data.get("mods") or {})
+        except Exception:  # noqa: BLE001 - this is a cosmetic hint, never worth failing over
+            return 0
+
+    def _on_launch_settled(self) -> None:
+        self.launch_btn.setEnabled(True)
+        self.panel.progress_bar.setRange(0, 1)
+        self.panel.progress_bar.setValue(1)
+        self.panel.stage_label.setText("Done.")
 
     def _open_folder(self) -> None:
         if self.state.instance_dir is not None:

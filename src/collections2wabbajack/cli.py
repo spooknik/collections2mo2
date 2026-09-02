@@ -127,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     archive_inspect.add_parser(sub)
     installer.add_parser(sub)
     profile.add_parser(sub)
+    profile.add_instance_parser(sub)
     survey.add_parser(sub)
     build.add_parser(sub)
     create.add_parser(sub)

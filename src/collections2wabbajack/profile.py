@@ -672,17 +672,32 @@ def seed_profile_inis(profile_dir: Path, game_name: str, game_path: str) -> tupl
 _INI_TWEAK_TARGET = re.compile(r"\[([^\[\]]+)\]\.ini$", re.IGNORECASE)
 
 
+def _section_ranges(lines: list[str], section: str) -> list[tuple[int, int]]:
+    """`(header index, first line after the section)` for every `[section]` block.
+
+    Bethesda game INIs occasionally end up with a section duplicated -- BethINI, the
+    vanilla launcher, and hand edits over a long modding history all just append rather
+    than merge, and a Vortex/My Games INI we seed a profile from can already carry one.
+    Their own INI reader (and Windows' GetPrivateProfileString-style parsing) resolves a
+    duplicate key by taking the *last* occurrence, so a writer that only ever touches the
+    first `[section]` it finds can leave a stale duplicate elsewhere in the file silently
+    winning at runtime -- see `merge_ini_values`.
+    """
+    starts = [i for i, ln in enumerate(lines) if ln.strip().lower() == f"[{section.lower()}]"]
+    ranges = []
+    for start in starts:
+        end = next(
+            (i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("[")),
+            len(lines),
+        )
+        ranges.append((start, end))
+    return ranges
+
+
 def _section_bounds(lines: list[str], section: str) -> tuple[int, int] | None:
-    """`(header index, first line after the section)` for `[section]`, or None if absent."""
-    start = next(
-        (i for i, ln in enumerate(lines) if ln.strip().lower() == f"[{section.lower()}]"), None
-    )
-    if start is None:
-        return None
-    end = next(
-        (i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("[")), len(lines)
-    )
-    return start, end
+    """`(header index, first line after the section)` for the first `[section]`, or None."""
+    ranges = _section_ranges(lines, section)
+    return ranges[0] if ranges else None
 
 
 def _find_key(lines: list[str], start: int, end: int, key: str) -> int | None:
@@ -708,31 +723,39 @@ def merge_ini_values(
     at the end of the file if missing, and unknown keys are appended within it. Returns the
     number of keys applied.
 
+    If `[section]` is duplicated in the file, every existing occurrence of a key is set to
+    the same value (not just the first one found), and a key with no existing occurrence at
+    all is inserted into the *last* `[section]` block. Bethesda's INI reader resolves a
+    duplicate key by taking the last occurrence, so this is what makes the applied value the
+    one that actually wins at runtime instead of a stale earlier duplicate silently
+    overriding it (see `_section_ranges`).
+
     When `record` is given it collects `{key: {"value", "previous"}}`: the value written and
     the one that was there before it (`None` when the key did not exist). That pair is what
     lets a collection layer be removed later without disturbing keys the user -- or an
     earlier layer -- set.
     """
     lines = target.read_text(encoding="utf-8-sig").splitlines() if target.exists() else []
-    bounds = _section_bounds(lines, section)
-    if bounds is None:
+    if not _section_ranges(lines, section):
         if lines and lines[-1].strip():
             lines.append("")
         lines.append(f"[{section}]")
-        start, end = len(lines) - 1, len(lines)
-    else:
-        start, end = bounds
+
     applied = 0
     for key, value in values.items():
         new_line = f"{key}={value}"
-        hit = _find_key(lines, start, end, key)
-        if hit is None:
-            previous = None
-            lines.insert(end, new_line)
-            end += 1
+        # Re-resolved every iteration: an earlier key in this same call may have inserted
+        # a line and shifted every range after it.
+        ranges = _section_ranges(lines, section)
+        hits = [h for start, end in ranges for h in (_find_key(lines, start, end, key),) if h is not None]
+        if hits:
+            previous = lines[hits[0]].split("=", 1)[1] if "=" in lines[hits[0]] else None
+            for hit in hits:
+                lines[hit] = new_line
         else:
-            previous = lines[hit].split("=", 1)[1] if "=" in lines[hit] else None
-            lines[hit] = new_line
+            previous = None
+            _, last_end = ranges[-1]
+            lines.insert(last_end, new_line)
         if record is not None:
             record[key] = {"value": str(value), "previous": previous}
         applied += 1
@@ -745,31 +768,32 @@ def restore_ini_values(target: Path, section: str, values: dict[str, Any]) -> tu
 
     `values` is `{key: {"value", "previous"}}` as recorded in the ledger. A key whose current
     value no longer matches what the layer wrote has been changed by hand since, so it is
-    left alone. Returns `(restored, deleted)`.
+    left alone. Mirrors `merge_ini_values`: every occurrence of the key across a duplicated
+    `[section]` is put back (or removed), not just the first one. Returns `(restored, deleted)`.
     """
     if not target.exists():
         return 0, 0
     lines = target.read_text(encoding="utf-8-sig").splitlines()
-    bounds = _section_bounds(lines, section)
-    if bounds is None:
+    if not _section_ranges(lines, section):
         return 0, 0
-    start, end = bounds
     restored = deleted = 0
     for key, info in values.items():
-        hit = _find_key(lines, start, end, key)
-        if hit is None:
+        ranges = _section_ranges(lines, section)
+        hits = [h for start, end in ranges for h in (_find_key(lines, start, end, key),) if h is not None]
+        if not hits:
             continue
-        current = lines[hit].split("=", 1)[1] if "=" in lines[hit] else None
+        current = lines[hits[0]].split("=", 1)[1] if "=" in lines[hits[0]] else None
         wrote = info.get("value")
         if wrote is not None and current is not None and current.strip() != str(wrote).strip():
             continue  # edited since we wrote it; not ours to undo
         previous = info.get("previous")
         if previous is None:
-            del lines[hit]
-            end -= 1
+            for hit in sorted(hits, reverse=True):
+                del lines[hit]
             deleted += 1
         else:
-            lines[hit] = f"{key}={previous}"
+            for hit in hits:
+                lines[hit] = f"{key}={previous}"
             restored += 1
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return restored, deleted
@@ -887,6 +911,66 @@ def _parse_resolution_arg(value: str) -> str:
     raise argparse.ArgumentTypeError(f"must be 'auto', 'keep', or WxH e.g. 3440x1440 (got {value!r})")
 
 
+@dataclass
+class DisplayChoice:
+    """The user's --resolution/--vsync/--window request, resolved to concrete values.
+
+    `None` on any field means "keep" (or, for resolution, that `auto`-detection failed).
+    Shared between `apply_display_settings` (writes `*Prefs.ini` `[Display]`) and
+    `apply_sse_display_tweaks_override` (writes the SSE Display Tweaks override mod) so
+    'auto' detection and the fullscreen/borderless/windowed mapping are computed exactly
+    once and applied identically to both files.
+    """
+
+    resolution_wh: tuple[int, int] | None
+    resolution_label: str
+    vsync_on: bool | None
+    vsync_label: str
+    window_word: str | None  # "fullscreen" | "borderless" | "windowed" | None (keep)
+    window_label: str
+
+    @property
+    def is_keep(self) -> bool:
+        return self.resolution_wh is None and self.vsync_on is None and self.window_word is None
+
+
+def _resolve_display_choice(resolution: str, vsync: str, window: str) -> DisplayChoice:
+    """Turn the raw --resolution/--vsync/--window strings into a `DisplayChoice`.
+
+    `resolution` is `auto` (detect the primary monitor via Windows APIs, falling back to
+    `keep` if that's not possible), `keep`, or an explicit `WxH` string. `vsync` is
+    `on`/`off`/`keep`; `window` is `fullscreen`/`borderless`/`windowed`/`keep`.
+    """
+    if resolution == "keep":
+        res_wh, res_label = None, "kept"
+    elif resolution == "auto":
+        detected = _detect_resolution()
+        if detected:
+            res_wh, res_label = detected, f"{detected[0]}x{detected[1]}"
+        else:
+            res_wh, res_label = None, "kept (auto-detect unavailable)"
+    else:
+        m = _RESOLUTION_RE.match(resolution)
+        if not m:
+            raise ValueError(f"--resolution must be 'auto', 'keep', or WxH (got {resolution!r})")
+        res_wh = (int(m.group(1)), int(m.group(2)))
+        res_label = f"{res_wh[0]}x{res_wh[1]}"
+
+    if vsync == "on":
+        vsync_on, vsync_label = True, "on"
+    elif vsync == "off":
+        vsync_on, vsync_label = False, "off"
+    else:
+        vsync_on, vsync_label = None, "kept"
+
+    if window in ("fullscreen", "borderless", "windowed"):
+        window_word, window_label = window, window
+    else:
+        window_word, window_label = None, "kept"
+
+    return DisplayChoice(res_wh, res_label, vsync_on, vsync_label, window_word, window_label)
+
+
 def apply_display_settings(
     profile_dir: Path,
     game_name: str,
@@ -897,69 +981,260 @@ def apply_display_settings(
 ) -> list[str]:
     """Apply --resolution/--vsync/--window overrides to the profile's `*Prefs.ini` [Display].
 
-    `resolution` is `auto` (detect the primary monitor via Windows APIs, falling back to
-    `keep` if that's not possible), `keep`, or an explicit `WxH` string. `vsync` is
-    `on`/`off`/`keep`; `window` is `fullscreen`/`borderless`/`windowed`/`keep`. Applied after
-    the collection's own INI Tweaks, so these settings win. Returns a single-element list with
-    a human-readable summary line (empty list if the game has no known Prefs INI).
+    Applied after the collection's own INI Tweaks, so these settings win over them --
+    though not over a collection's SSE Display Tweaks file, which bypasses SkyrimPrefs.ini
+    entirely when present; see `apply_sse_display_tweaks_override`. Returns a
+    single-element list with a human-readable summary line of the values actually written
+    (empty list if the game has no known Prefs INI).
     """
     target_name = _prefs_ini_name(game_name)
     if not target_name:
         return []
     target = profile_dir / target_name
+    choice = _resolve_display_choice(resolution, vsync, window)
 
     values: dict[str, str] = {}
-
-    if resolution == "keep":
-        res_label = "kept"
-    elif resolution == "auto":
-        detected = _detect_resolution()
-        if detected:
-            w, h = detected
-            values["iSize W"] = str(w)
-            values["iSize H"] = str(h)
-            res_label = f"{w}x{h}"
-        else:
-            res_label = "kept (auto-detect unavailable)"
-    else:
-        m = _RESOLUTION_RE.match(resolution)
-        if not m:
-            raise ValueError(f"--resolution must be 'auto', 'keep', or WxH (got {resolution!r})")
-        w, h = int(m.group(1)), int(m.group(2))
-        values["iSize W"] = str(w)
-        values["iSize H"] = str(h)
-        res_label = f"{w}x{h}"
-
-    if vsync == "on":
-        values["iVSyncPresentInterval"] = "1"
-        vsync_label = "on"
-    elif vsync == "off":
-        values["iVSyncPresentInterval"] = "0"
-        vsync_label = "off"
-    else:
-        vsync_label = "kept"
-
+    if choice.resolution_wh is not None:
+        values["iSize W"] = str(choice.resolution_wh[0])
+        values["iSize H"] = str(choice.resolution_wh[1])
+    if choice.vsync_on is not None:
+        values["iVSyncPresentInterval"] = "1" if choice.vsync_on else "0"
     # Skyrim SE's launcher writes borderless as bFull Screen=1 + bBorderless=1.
-    if window == "fullscreen":
+    if choice.window_word == "fullscreen":
         values["bFull Screen"] = "1"
         values["bBorderless"] = "0"
-        window_label = "fullscreen"
-    elif window == "borderless":
+    elif choice.window_word == "borderless":
         values["bFull Screen"] = "1"
         values["bBorderless"] = "1"
-        window_label = "borderless"
-    elif window == "windowed":
+    elif choice.window_word == "windowed":
         values["bFull Screen"] = "0"
         values["bBorderless"] = "0"
-        window_label = "windowed"
-    else:
-        window_label = "kept"
 
     if values:
         bucket = record.setdefault(target_name, {}).setdefault("[Display]", {}) if record else None
         merge_ini_values(target, "Display", values, bucket)
 
-    return [f"display: {res_label}, vsync {vsync_label}, window {window_label} ({target_name})"]
+    return [
+        (
+            f"display: {choice.resolution_label}, vsync {choice.vsync_label}, "
+            f"window {choice.window_label} ({target_name})"
+        )
+    ]
+
+
+# -- SSE Display Tweaks awareness -------------------------------------------------------
+#
+# SSE Display Tweaks (`SKSE/Plugins/SSEDisplayTweaks.ini`) replaces SkyrimPrefs.ini's
+# `[Display]` section wholesale when the SKSE plugin is present -- the game never
+# consults SkyrimPrefs.ini's resolution/fullscreen/vsync keys at all in that case, so
+# `apply_display_settings` alone can be silently overridden by a collection that ships
+# it. When that happens we instead layer a small, user-owned mod on top carrying our own
+# copy of the *winning* collection file with just the requested keys rewritten --
+# refreshed from that file on every render (so a collection update to its own Display
+# Tweaks settings is still picked up) and pinned to the top of modlist.txt (so it always
+# wins the MO2 virtual filesystem merge).
+
+DISPLAY_TWEAKS_RELPATH = "SKSE/Plugins/SSEDisplayTweaks.ini"
+DISPLAY_OVERRIDE_MOD_NAME = "c2wj Display Settings"
+DISPLAY_OVERRIDE_MARKER = "c2wj-display"
+
+def find_winning_file(
+    modlist_path: Path, mods_dir: Path, relpath: str, *, skip: set[str] | None = None
+) -> tuple[str, Path] | None:
+    """The highest-priority *enabled* mod carrying `relpath`, per `modlist_path`.
+
+    `modlist_path` is an already-rendered `modlist.txt`: top-to-bottom is MO2's own
+    descending-priority view (the row nearest the top wins the virtual-filesystem merge),
+    so this returns the first enabled row whose mod folder has the file. Disabled (`-`)
+    rows and MO2's own DLC/Creation-Club pseudo-rows are skipped, as is anything named in
+    `skip` (used to keep our own generated override mod from "winning" against itself on
+    a later render). Returns `(mod_folder, path)`, or `None` if no enabled mod has it.
+    """
+    skip = skip or set()
+    relpath = relpath.replace("\\", "/")
+    for marker, name in read_marked_lines(modlist_path):
+        if marker == "-" or name.startswith(MO2_PSEUDO_PREFIXES) or name in skip:
+            continue
+        candidate = mods_dir / name / Path(relpath)
+        if candidate.is_file():
+            return name, candidate
+    return None
+
+
+def _read_ini_key_anywhere(text: str, key: str) -> str | None:
+    """First value for `key` anywhere in an INI's text, ignoring section boundaries."""
+    low = key.lower()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith((";", "#")) or "=" not in stripped:
+            continue
+        k, _, v = stripped.partition("=")
+        if k.strip().lower() == low:
+            return v.strip()
+    return None
+
+
+def _sse_display_tweaks_summary(mod_name: str, text: str) -> str:
+    """The informative 'keep' line: what the winning SSE Display Tweaks file will do."""
+    resolution = _read_ini_key_anywhere(text, "Resolution") or "?"
+    fullscreen = (_read_ini_key_anywhere(text, "Fullscreen") or "").strip().lower()
+    borderless = (_read_ini_key_anywhere(text, "Borderless") or "").strip().lower()
+    vsync = (_read_ini_key_anywhere(text, "EnableVSync") or "").strip().lower()
+    if borderless in ("true", "1"):
+        window_word = "borderless"
+    elif fullscreen in ("true", "1"):
+        window_word = "fullscreen"
+    else:
+        window_word = "windowed"
+    vsync_word = "on" if vsync in ("true", "1") else "off"
+    return (
+        f"SSE Display Tweaks (from mod {mod_name!r}) governs the display: "
+        f"Resolution {resolution}, {window_word}, vsync {vsync_word} -- SkyrimPrefs "
+        "values are ignored while it is enabled; set --resolution/--window/--vsync to override"
+    )
+
+
+def _display_tweaks_key(line: str) -> str | None:
+    """The key a line sets, lower-cased -- whether the line is commented out or not.
+
+    SSE Display Tweaks ships every key commented out with its default value as
+    documentation (`#Fullscreen=false`); a plain key search that skips comments (as
+    `_read_ini_key_anywhere` deliberately does, to know what is *actually* active) would
+    never find where to put our own value. This is only for locating the right line to
+    overwrite/uncomment.
+    """
+    body = line.strip().lstrip("#;").strip()
+    if "=" not in body:
+        return None
+    return body.split("=", 1)[0].strip().lower()
+
+
+def _rewrite_display_tweaks_ini(dest: Path, source_text: str, choice: DisplayChoice) -> None:
+    """Write `dest` as a copy of `source_text` with `choice`'s keys rewritten in place.
+
+    Every other line -- comments, ordering, unrelated keys -- survives untouched. A key
+    already present (active or commented-out, wherever it lives -- this SKSE plugin's own
+    schema is not assumed) is overwritten/uncommented in place; every duplicate occurrence
+    is set the same way, since which one a parser honours is not something to gamble on.
+    A key missing entirely is appended to its `[Render]` section (where every known
+    version of this SKSE plugin keeps these four), or the end of the file if there is
+    none.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    wanted: dict[str, str] = {}
+    if choice.resolution_wh is not None:
+        wanted["Resolution"] = f"{choice.resolution_wh[0]}x{choice.resolution_wh[1]}"
+    if choice.window_word == "fullscreen":
+        wanted["Fullscreen"], wanted["Borderless"] = "true", "false"
+    elif choice.window_word == "borderless":
+        wanted["Fullscreen"], wanted["Borderless"] = "false", "true"
+    elif choice.window_word == "windowed":
+        wanted["Fullscreen"], wanted["Borderless"] = "false", "false"
+    if choice.vsync_on is not None:
+        wanted["EnableVSync"] = "true" if choice.vsync_on else "false"
+
+    lines = source_text.splitlines()
+    for key, value in wanted.items():
+        hits = [i for i, ln in enumerate(lines) if _display_tweaks_key(ln) == key.lower()]
+        if hits:
+            for i in hits:
+                lines[i] = f"{key}={value}"
+            continue
+        start = next(
+            (i for i, ln in enumerate(lines) if ln.strip().lower() == "[render]"), None
+        )
+        if start is None:
+            lines.append(f"{key}={value}")
+        else:
+            end = next(
+                (i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("[")),
+                len(lines),
+            )
+            lines.insert(end, f"{key}={value}")
+
+    dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+_DISPLAY_OVERRIDE_META_TEMPLATE = """[General]
+modid=0
+version=
+newestVersion=
+category=0
+installationFile=
+repository=
+gameName={game_name}
+comments=owner: user
+notes=Generated by c2wj ({marker}) to keep your --resolution/--window/--vsync choice in \
+effect over this collection's SSE Display Tweaks. Refreshed from the winning \
+SSEDisplayTweaks.ini on every render; delete this mod to fall back to the collection's \
+own settings.
+nexusFileStatus=1
+hasCustomURL=false
+validated=true
+converted=false
+"""
+
+
+def apply_sse_display_tweaks_override(
+    profile_dir: Path,
+    mods_dir: Path,
+    game_name: str,
+    resolution: str,
+    vsync: str,
+    window: str,
+    led: ledger_mod.Ledger,
+) -> list[str]:
+    """Keep the user's display choice in effect over a collection's SSE Display Tweaks.
+
+    Call after `apply_display_settings` and after `modlist.txt` has been written for this
+    render. No-op (returns `[]`) if no enabled mod ships
+    `SKSE/Plugins/SSEDisplayTweaks.ini`. Otherwise: if the user asked for anything other
+    than 'keep', creates/refreshes the `DISPLAY_OVERRIDE_MOD_NAME` mod and pins it to the
+    top of `modlist.txt`; if everything is 'keep', touches nothing and just reports what
+    the winning file will do.
+    """
+    modlist_path = profile_dir / "modlist.txt"
+    winning = find_winning_file(
+        modlist_path, mods_dir, DISPLAY_TWEAKS_RELPATH, skip={DISPLAY_OVERRIDE_MOD_NAME}
+    )
+    if winning is None:
+        return []
+    mod_name, source_path = winning
+    source_text = source_path.read_text(encoding="utf-8-sig")
+    choice = _resolve_display_choice(resolution, vsync, window)
+
+    if choice.is_keep:
+        return [_sse_display_tweaks_summary(mod_name, source_text)]
+
+    override_root = mods_dir / DISPLAY_OVERRIDE_MOD_NAME
+    dest = override_root / Path(DISPLAY_TWEAKS_RELPATH)
+    _rewrite_display_tweaks_ini(dest, source_text, choice)
+
+    meta = override_root / "meta.ini"
+    if not meta.exists():
+        _write(
+            meta,
+            _DISPLAY_OVERRIDE_META_TEMPLATE.format(
+                game_name=game_name, marker=f"generated_by: {DISPLAY_OVERRIDE_MARKER}"
+            ),
+        )
+
+    record = led.set_mod_owner(DISPLAY_OVERRIDE_MOD_NAME, ledger_mod.USER_OWNER)
+    record["generated_by"] = DISPLAY_OVERRIDE_MARKER
+
+    # Pin to the very top of modlist.txt (highest priority) so it wins the merge.
+    rows = [(m, n) for m, n in read_marked_lines(modlist_path) if n != DISPLAY_OVERRIDE_MOD_NAME]
+    rows.insert(0, ("+", DISPLAY_OVERRIDE_MOD_NAME))
+    _write_keeping_newlines(modlist_path, render_marked_lines(list(reversed(rows)), False))
+
+    return [
+        (
+            f"SSE Display Tweaks override: {DISPLAY_OVERRIDE_MOD_NAME!r} generated from "
+            f"{mod_name!r}, pinned to top priority (resolution {choice.resolution_label}, "
+            f"vsync {choice.vsync_label}, window {choice.window_label})"
+        )
+    ]
 
 
 # -- Layered instances --------------------------------------------------------------
@@ -1515,6 +1790,13 @@ def render_instance(
             rep.log(note)
         led.record_ini_keys(base.owner, display_record)
 
+        # SkyrimPrefs.ini's [Display] is ignored while a collection's SSE Display Tweaks
+        # is enabled; make sure the choice above still applies (or say so if it can't).
+        for note in apply_sse_display_tweaks_override(
+            profile_dir, mods_dir, game_name, resolution, vsync, window, led
+        ):
+            rep.log(note)
+
     # -- ModOrganizer.ini -------------------------------------------------------------
     all_tools = [t for layer in layers for t in (layer.manifest.get("tools") or [])]
     exe_blocks = build_custom_executables(order.entries, all_tools, game_path)
@@ -1831,3 +2113,58 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         "tweaks, and display settings (for hand-edited INIs)",
     )
     p.set_defaults(func=cmd_profile)
+
+
+def cmd_profile_instance(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
+    """Re-render an existing instance's profile from its ledger.
+
+    A thin `render_instance` wrapper: unlike `c2wj profile` (which builds a single-layer
+    profile straight from one `install.json`), this re-renders every layer of an
+    *existing* instance -- exactly what `create`/`add`/`remove` do -- so it can be used
+    on its own to re-apply --resolution/--vsync/--window (or re-seed INI tweaks) without
+    touching mods or layers at all.
+    """
+    render_instance(
+        args.instance,
+        resolution=args.resolution,
+        vsync=args.vsync,
+        window=args.window,
+        keep_inis=args.keep_inis,
+        reporter=reporter,
+    )
+    return 0
+
+
+def add_instance_parser(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "profile-instance",
+        help="re-render an existing instance's profile from its ledger (e.g. to change "
+        "display settings without a full add/update)",
+    )
+    p.add_argument("--instance", required=True, help="instance directory (has c2wj-instance.json)")
+    p.add_argument(
+        "--resolution",
+        type=_parse_resolution_arg,
+        default="keep",
+        help="profile display resolution: 'auto', 'keep', or WxH (default: keep)",
+    )
+    p.add_argument(
+        "--vsync",
+        choices=["on", "off", "keep"],
+        default="keep",
+        help="profile display vsync (default: keep)",
+    )
+    p.add_argument(
+        "--window",
+        choices=["fullscreen", "borderless", "windowed", "keep"],
+        default="keep",
+        help="profile window mode (default: keep)",
+    )
+    p.add_argument(
+        "--keep-inis",
+        dest="keep_inis",
+        action="store_true",
+        default=False,
+        help="do not touch existing profile INIs at all",
+    )
+    p.set_defaults(func=cmd_profile_instance)

@@ -276,6 +276,49 @@ def test_apply_display_settings_resolution_vsync_window_combo(tmp_path: Path):
     assert "window windowed" in notes[0]
 
 
+def test_apply_display_settings_borderless_sets_bfullscreen_and_bborderless(tmp_path: Path):
+    notes = profile.apply_display_settings(
+        tmp_path, "SkyrimSE", resolution="keep", vsync="on", window="borderless"
+    )
+    text = (tmp_path / "SkyrimPrefs.ini").read_text(encoding="utf-8")
+    lines = text.splitlines()
+    assert "bFull Screen=1" in lines
+    assert "bBorderless=1" in lines
+    assert "iVSyncPresentInterval=1" in lines
+    assert "window borderless" in notes[0]
+
+
+def test_apply_display_settings_updates_every_duplicate_section(tmp_path: Path):
+    # Regression: a real "My Games" SkyrimPrefs.ini can end up with [Display] duplicated
+    # (BethINI / the vanilla launcher / hand edits append rather than merge). Bethesda's
+    # own INI reader takes the *last* occurrence of a duplicate key, so if we only patch
+    # the first [Display] block, a stale "bBorderless=0" left in a later block silently
+    # wins in-game even though our summary line (and the first block) say "borderless".
+    target = tmp_path / "SkyrimPrefs.ini"
+    target.write_text(
+        "[Display]\n"
+        "iSize W=1920\n"
+        "iSize H=1080\n"
+        "bFull Screen=1\n"
+        "bBorderless=0\n"
+        "iVSyncPresentInterval=1\n"
+        "\n"
+        "[Controls]\n"
+        "foo=bar\n"
+        "\n"
+        "[Display]\n"
+        "bBorderless=0\n",
+        encoding="utf-8",
+    )
+    profile.apply_display_settings(tmp_path, "SkyrimSE", resolution="keep", vsync="on", window="borderless")
+    lines = target.read_text(encoding="utf-8").splitlines()
+    # Every "bBorderless" occurrence -- including the stray one in the second [Display]
+    # block, whichever a Bethesda-style parser reads last -- must agree.
+    borderless_lines = [ln for ln in lines if ln.split("=", 1)[0].strip() == "bBorderless"]
+    assert borderless_lines == ["bBorderless=1"] * len(borderless_lines)
+    assert len(borderless_lines) == 2
+
+
 def test_apply_display_settings_keep_does_not_touch_resolution(tmp_path: Path):
     notes = profile.apply_display_settings(
         tmp_path, "SkyrimSE", resolution="keep", vsync="on", window="fullscreen"
@@ -301,6 +344,151 @@ def test_parse_resolution_arg_validates():
     assert profile._parse_resolution_arg("1920x1080") == "1920x1080"
     with pytest.raises(argparse.ArgumentTypeError):
         profile._parse_resolution_arg("not-a-resolution")
+
+
+# -------------------------------------------------------- SSE Display Tweaks awareness
+
+
+def test_find_winning_file_returns_highest_priority_enabled_mod(tmp_path: Path):
+    mods_dir = tmp_path / "mods"
+    for name in ("ModLow", "ModHigh", "ModDisabled"):
+        (mods_dir / name).mkdir(parents=True)
+        (mods_dir / name / "thing.txt").write_text("x", encoding="utf-8")
+    modlist = tmp_path / "modlist.txt"
+    # Top-to-bottom = descending priority; ModDisabled is a "-" row and must be skipped.
+    modlist.write_text(
+        f"{profile.HEADER}\n-ModDisabled\n+ModHigh\n+ModLow\n", encoding="utf-8"
+    )
+    result = profile.find_winning_file(modlist, mods_dir, "thing.txt")
+    assert result is not None
+    name, path = result
+    assert name == "ModHigh"
+    assert path == mods_dir / "ModHigh" / "thing.txt"
+
+
+def test_find_winning_file_none_when_nobody_ships_it(tmp_path: Path):
+    mods_dir = tmp_path / "mods"
+    (mods_dir / "ModA").mkdir(parents=True)
+    modlist = tmp_path / "modlist.txt"
+    modlist.write_text(f"{profile.HEADER}\n+ModA\n", encoding="utf-8")
+    assert profile.find_winning_file(modlist, mods_dir, "thing.txt") is None
+
+
+def test_find_winning_file_skips_named_folder(tmp_path: Path):
+    mods_dir = tmp_path / "mods"
+    for name in ("Override", "ModA"):
+        (mods_dir / name).mkdir(parents=True)
+        (mods_dir / name / "thing.txt").write_text("x", encoding="utf-8")
+    modlist = tmp_path / "modlist.txt"
+    modlist.write_text(f"{profile.HEADER}\n+Override\n+ModA\n", encoding="utf-8")
+    result = profile.find_winning_file(modlist, mods_dir, "thing.txt", skip={"Override"})
+    assert result is not None
+    assert result[0] == "ModA"
+
+
+def test_apply_sse_display_tweaks_override_keep_prints_and_creates_nothing(tmp_path: Path):
+    mods_dir = tmp_path / "mods"
+    profile_dir = tmp_path / "profile"
+    profile_dir.mkdir()
+    tweaks = mods_dir / "OnlyMod" / "SKSE" / "Plugins"
+    tweaks.mkdir(parents=True)
+    (tweaks / "SSEDisplayTweaks.ini").write_text(
+        "[Render]\nResolution = 2048x1152\n\n"
+        "[Fullscreen]\nFullscreen = false\nBorderless = true\n\n"
+        "[VSync]\nEnableVSync = false\n",
+        encoding="utf-8",
+    )
+    (profile_dir / "modlist.txt").write_text(f"{profile.HEADER}\n+OnlyMod\n", encoding="utf-8")
+
+    class _FakeLedger:
+        def __init__(self):
+            self.data = {"mods": {}}
+
+    notes = profile.apply_sse_display_tweaks_override(
+        profile_dir, mods_dir, "SkyrimSE", "keep", "keep", "keep", _FakeLedger()
+    )
+    assert len(notes) == 1
+    assert "OnlyMod" in notes[0]
+    assert "2048x1152" in notes[0]
+    assert "borderless" in notes[0]
+    assert "vsync off" in notes[0]
+    assert not (mods_dir / profile.DISPLAY_OVERRIDE_MOD_NAME).exists()
+
+
+def test_apply_sse_display_tweaks_override_uncomments_keys_in_one_render_section(
+    tmp_path: Path,
+):
+    # Regression: the real SSE Display Tweaks SKSE plugin keeps Resolution, Fullscreen,
+    # Borderless *and* EnableVSync all inside one `[Render]` section, commented out by
+    # default with example values (`#Fullscreen=false`) -- not the four-separate-active-
+    # sections schema this code originally (wrongly) assumed. A key search that only
+    # matches active (uncommented) lines, or that looks in the wrong section, silently
+    # writes nothing and the requested override never takes effect in-game.
+    mods_dir = tmp_path / "mods"
+    profile_dir = tmp_path / "profile"
+    profile_dir.mkdir()
+    tweaks = mods_dir / "SSE Display Tweaks" / "SKSE" / "Plugins"
+    tweaks.mkdir(parents=True)
+    (tweaks / "SSEDisplayTweaks.ini").write_text(
+        "[Main]\nLogLevel=debug\n\n"
+        "[Render]\n"
+        "#Fullscreen=false\n"
+        "#Borderless=true\n"
+        "BorderlessUpscale=false\n"
+        "#Resolution=1920x1080\n"
+        "EnableVSync=true\n"
+        "\n"
+        "[Window]\nSomeOtherKey=1\n",
+        encoding="utf-8",
+    )
+    (profile_dir / "modlist.txt").write_text(
+        f"{profile.HEADER}\n+SSE Display Tweaks\n", encoding="utf-8"
+    )
+
+    class _FakeLedger:
+        def __init__(self):
+            self.data = {"mods": {}}
+
+        def set_mod_owner(self, folder, owner, **kw):
+            rec = {"owner": owner, "owners": [owner]}
+            self.data["mods"][folder] = rec
+            return rec
+
+    profile.apply_sse_display_tweaks_override(
+        profile_dir, mods_dir, "SkyrimSE", "2560x1440", "off", "borderless", _FakeLedger()
+    )
+    text = (
+        mods_dir / profile.DISPLAY_OVERRIDE_MOD_NAME / "SKSE" / "Plugins" / "SSEDisplayTweaks.ini"
+    ).read_text(encoding="utf-8")
+    lines = text.splitlines()
+    assert "Resolution=2560x1440" in lines
+    assert "Fullscreen=false" in lines
+    assert "Borderless=true" in lines
+    assert "EnableVSync=false" in lines
+    # No stray commented-out duplicates of the keys we set are left behind.
+    assert "#Fullscreen=false" not in lines
+    assert "#Borderless=true" not in lines
+    assert "#Resolution=1920x1080" not in lines
+    # Untouched content survives.
+    assert "BorderlessUpscale=false" in lines
+    assert "SomeOtherKey=1" in lines
+
+
+def test_apply_sse_display_tweaks_override_none_when_no_mod_ships_it(tmp_path: Path):
+    mods_dir = tmp_path / "mods"
+    profile_dir = tmp_path / "profile"
+    (mods_dir / "Plain").mkdir(parents=True)
+    profile_dir.mkdir()
+    (profile_dir / "modlist.txt").write_text(f"{profile.HEADER}\n+Plain\n", encoding="utf-8")
+
+    class _FakeLedger:
+        def __init__(self):
+            self.data = {"mods": {}}
+
+    notes = profile.apply_sse_display_tweaks_override(
+        profile_dir, mods_dir, "SkyrimSE", "1920x1080", "on", "fullscreen", _FakeLedger()
+    )
+    assert notes == []
 
 
 # --------------------------------------------------------------------- render_mo2_ini

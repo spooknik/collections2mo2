@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ... import profile
 from .base import WizardPage
 
 
@@ -24,17 +25,32 @@ class DisplayPage(WizardPage):
         layout = QVBoxLayout(self)
         layout.addWidget(
             QLabel(
-                "The profile's INIs start from your own <code>My Games</code> INIs (plus any "
-                "tweaks the collection itself specifies), so 'Keep' is a safe default -- these "
-                "settings only override what's already there."
+                "<b>Keep</b> uses your own <code>My Games</code> INIs as-is -- or, if the "
+                "collection ships its own display settings (SSE Display Tweaks), those. "
+                "<b>Auto-detect</b> reads this PC's primary monitor. Anything else is applied "
+                "as an explicit override."
             )
         )
+        note = QLabel(
+            "If a collection ships SSE Display Tweaks, it overrides SkyrimPrefs.ini's display "
+            "settings entirely -- so when you choose anything other than Keep here, c2wj also "
+            "writes a small override mod on top of it, so your choice still applies."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: palette(mid);")
+        layout.addWidget(note)
 
         res_box = QGroupBox("Resolution")
         res_layout = QVBoxLayout(res_box)
         self.res_group = QButtonGroup(self)
         self.res_keep = QRadioButton("Keep (recommended)")
-        self.res_auto = QRadioButton("Auto-detect from this PC's primary monitor")
+        self._detected = profile._detect_resolution()
+        auto_label = (
+            f"Auto-detect ({self._detected[0]}x{self._detected[1]})"
+            if self._detected
+            else "Auto-detect from this PC's primary monitor"
+        )
+        self.res_auto = QRadioButton(auto_label)
         self.res_custom = QRadioButton("Custom:")
         self.res_keep.setChecked(True)
         for i, btn in enumerate((self.res_keep, self.res_auto, self.res_custom)):

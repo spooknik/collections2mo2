@@ -792,8 +792,9 @@ def cmd_create(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     led.set_game(stock_game_dir=(_read_json(paths.build_meta) or {}).get("stock_game_dir"))
     led.save()
 
+    mods_on_disk = led.scan_mods_dir(paths.mods)
     owned = len(led.mods_owned_by(ctx.owner))
-    user_mods = [f for f, owners in led.scan_mods_dir(paths.mods).items() if owners == ["user"]]
+    user_mods = [f for f, owners in mods_on_disk.items() if owners == ["user"]]
     detail = f"{owned} mods owned by {ctx.owner}"
     if user_mods:
         detail += f", {len(user_mods)} user mod(s)"
@@ -806,10 +807,17 @@ def cmd_create(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         if len(user_mods) > 20:
             rep.log(f"  ... +{len(user_mods) - 20} more")
 
-    return _finish(run, rep, paths, started)
+    return _finish(run, rep, paths, started, mod_count=len(mods_on_disk))
 
 
-def _finish(run: Run, rep: Reporter, paths: Paths, started: float, label: str = "create") -> int:
+def _finish(
+    run: Run,
+    rep: Reporter,
+    paths: Paths,
+    started: float,
+    label: str = "create",
+    mod_count: int | None = None,
+) -> int:
     elapsed = time.monotonic() - started
     rep.stage("summary")
     for stage in run.stages:
@@ -824,6 +832,8 @@ def _finish(run: Run, rep: Reporter, paths: Paths, started: float, label: str = 
     rep.log("")
     rep.log(f"launch MO2:  {paths.out / 'ModOrganizer.exe'}")
     rep.log(f"ledger:      {paths.out / ledger.LEDGER_NAME}")
+    if mod_count:
+        rep.log(f"note: first start indexes {mod_count} mods and may take a minute")
     return 0
 
 

@@ -445,6 +445,167 @@ def test_tool_mod_survives_re_render_at_its_managed_position(tmp_path: Path):
     assert rows == ["DynDOLOD Resources SE", "Phase 0_separator", "A"]
 
 
+# -------------------------------------------------------- SSE Display Tweaks override
+
+
+def test_render_instance_generates_sse_display_tweaks_override_at_top_priority(tmp_path: Path):
+    # ModHigh (higher priority: nearer the top of modlist.txt) and ModLow both ship
+    # SSEDisplayTweaks.ini. ModHigh's copy is the one that should be used as the base
+    # for the override -- and refreshing must not touch ModLow's.
+    inst, led = make_instance(
+        tmp_path,
+        [
+            {
+                "slug": "base",
+                "revision": 1,
+                "name": "Base List",
+                "manifest": {
+                    "mods": [_mod("ModLow", "md5lo"), _mod("ModHigh", "md5hi")],
+                    "info": {},
+                },
+                "entries": [_entry("ModLow", "md5lo"), _entry("ModHigh", "md5hi")],
+            }
+        ],
+    )
+    for name, resolution in (("ModLow", "1280x720"), ("ModHigh", "2048x1152")):
+        tweaks = inst / "mods" / name / "SKSE" / "Plugins"
+        tweaks.mkdir(parents=True)
+        (tweaks / "SSEDisplayTweaks.ini").write_text(
+            f"[Render]\nResolution = {resolution}\n\n"
+            "[Fullscreen]\nFullscreen = false\nBorderless = true\n\n"
+            "[VSync]\nEnableVSync = false\n",
+            encoding="utf-8",
+        )
+
+    report = profile.render_instance(
+        inst,
+        led=led,
+        reporter=NullReporter(),
+        profile_name="TestProfile",
+        resolution="2560x1440",
+        vsync="off",
+        window="borderless",
+    )
+    profile_dir = inst / "profiles" / "TestProfile"
+    rows = [name for _, name in profile.read_marked_lines(profile_dir / "modlist.txt")]
+    assert rows[0] == profile.DISPLAY_OVERRIDE_MOD_NAME
+
+    override_ini = (
+        inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME / "SKSE" / "Plugins" / "SSEDisplayTweaks.ini"
+    )
+    text = override_ini.read_text(encoding="utf-8")
+    assert "Resolution=2560x1440" in text  # from ModHigh (2048x1152), not ModLow (1280x720)
+    assert "Borderless=true" in text
+    assert "EnableVSync=false" in text
+
+    low_ini = (inst / "mods" / "ModLow" / "SKSE" / "Plugins" / "SSEDisplayTweaks.ini").read_text(
+        encoding="utf-8"
+    )
+    assert "Resolution = 1280x720" in low_ini  # untouched
+
+    mods = led.data["mods"][profile.DISPLAY_OVERRIDE_MOD_NAME]
+    assert mods["owner"] == ledger.USER_OWNER
+    assert mods["generated_by"] == profile.DISPLAY_OVERRIDE_MARKER
+    assert profile.DISPLAY_OVERRIDE_MOD_NAME not in report["mod_order"]
+
+
+def test_render_instance_keep_display_settings_does_not_create_override(tmp_path: Path):
+    inst, led = make_instance(
+        tmp_path,
+        [
+            {
+                "slug": "base",
+                "revision": 1,
+                "name": "Base List",
+                "manifest": {"mods": [_mod("ModA", "md5a")], "info": {}},
+                "entries": [_entry("ModA", "md5a")],
+            }
+        ],
+    )
+    tweaks = inst / "mods" / "ModA" / "SKSE" / "Plugins"
+    tweaks.mkdir(parents=True)
+    (tweaks / "SSEDisplayTweaks.ini").write_text(
+        "[Render]\nResolution = 2048x1152\n\n"
+        "[Fullscreen]\nFullscreen = false\nBorderless = true\n\n"
+        "[VSync]\nEnableVSync = false\n",
+        encoding="utf-8",
+    )
+
+    profile.render_instance(inst, led=led, reporter=NullReporter(), profile_name="TestProfile")
+    assert not (inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME).exists()
+    assert profile.DISPLAY_OVERRIDE_MOD_NAME not in led.data["mods"]
+
+
+def test_render_instance_refreshes_override_from_changed_base_ini_and_stays_on_top(tmp_path: Path):
+    inst, led = make_instance(
+        tmp_path,
+        [
+            {
+                "slug": "base",
+                "revision": 1,
+                "name": "Base List",
+                "manifest": {"mods": [_mod("ModA", "md5a")], "info": {}},
+                "entries": [_entry("ModA", "md5a")],
+            }
+        ],
+    )
+    tweaks = inst / "mods" / "ModA" / "SKSE" / "Plugins"
+    tweaks.mkdir(parents=True)
+    ini_path = tweaks / "SSEDisplayTweaks.ini"
+    ini_path.write_text(
+        "[Render]\nResolution = 1920x1080\n\n"
+        "[Fullscreen]\nFullscreen = true\nBorderless = false\n\n"
+        "[VSync]\nEnableVSync = true\n",
+        encoding="utf-8",
+    )
+    profile.render_instance(
+        inst,
+        led=led,
+        reporter=NullReporter(),
+        profile_name="TestProfile",
+        resolution="3440x1440",
+        vsync="on",
+        window="windowed",
+    )
+
+    # A collection update changes the base file's own settings.
+    ini_path.write_text(
+        "[Render]\nResolution = 800x600\n\n"
+        "[Fullscreen]\nFullscreen = false\nBorderless = true\n\n"
+        "[VSync]\nEnableVSync = false\n",
+        encoding="utf-8",
+    )
+    (inst / "mods" / "My Own Mod").mkdir()  # a user mod -- still below the override, which
+    # has to be *the* top row (not merely above the collection) to reliably win MO2's
+    # virtual-filesystem merge against any SSEDisplayTweaks.ini a user mod might also ship.
+    profile.render_instance(
+        inst,
+        led=led,
+        reporter=NullReporter(),
+        profile_name="TestProfile",
+        resolution="3440x1440",
+        vsync="on",
+        window="windowed",
+    )
+
+    profile_dir = inst / "profiles" / "TestProfile"
+    rows = [name for _, name in profile.read_marked_lines(profile_dir / "modlist.txt")]
+    assert rows[0] == profile.DISPLAY_OVERRIDE_MOD_NAME
+    assert "My Own Mod" in rows
+
+    override_ini = (
+        inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME / "SKSE" / "Plugins" / "SSEDisplayTweaks.ini"
+    )
+    text = override_ini.read_text(encoding="utf-8")
+    # The user's own choice (windowed) still wins...
+    assert "Fullscreen=false" in text
+    assert "Borderless=false" in text
+    # ...but the resolution requested is fixed, and unrelated keys still come from the
+    # refreshed base file (the point being that the override mod is one folder, kept in
+    # sync, not a stale one-time snapshot).
+    assert "Resolution=3440x1440" in text
+
+
 def test_splice_preserved_puts_a_run_of_user_mods_back_in_order():
     new = ["A", "B", "C"]
     old = ["A", "U1", "U2", "B", "C"]
