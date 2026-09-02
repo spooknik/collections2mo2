@@ -60,6 +60,187 @@ def test_every_companion_mods_id_referenced_by_a_tool_exists_in_the_catalogue():
             assert cid in companion_ids, f"{entry['id']} references unknown companion {cid!r}"
 
 
+def test_xedit_and_dyndolod_executables_carry_the_data_path_switch():
+    # Regression test for the "launching xEdit/DynDOLOD from MO2 in a Stock Game
+    # instance shows only base-game plugins" bug: without -D:"<gamePath>\Data", these
+    # xEdit-family tools locate the game via the registry (the real Steam install)
+    # instead of MO2's VFS-managed Stock Game copy.
+    catalog = tools.load_catalog()
+    xedit = next(e for e in catalog if e["id"] == "xedit")
+    dyndolod = next(e for e in catalog if e["id"] == "dyndolod")
+    for exe in xedit["executables"] + dyndolod["executables"]:
+        assert '-D:"{game_data}"' in exe["arguments"]
+
+
+# -- placeholder expansion / Qt-escaping for `arguments` --------------------------------
+
+
+def test_expand_arg_template_matches_a_verified_wabbajack_stock_game_instance():
+    # Byte-for-byte against E:\Games\Lorerim\ModOrganizer.ini (a working Wabbajack
+    # Stock Game build): `12\arguments=-D:\"E:\\Games\\Lorerim\\Stock Game\\Data\" -sse`
+    # for TexGen -- MO2/Qt doubles every backslash then escapes every quote.
+    expanded = tools._expand_arg_template(
+        '-D:"{game_data}" -sse',
+        game_path="E:/Games/Lorerim/Stock Game",
+        tool_dir_fwd="E:/Games/Lorerim/Tools/dyndolod",
+    )
+    assert expanded == '-D:\\"E:\\\\Games\\\\Lorerim\\\\Stock Game\\\\Data\\" -sse'
+
+
+def test_expand_arg_template_empty_game_path_yields_empty_game_data():
+    expanded = tools._expand_arg_template(
+        '-D:"{game_data}" -sse', game_path="", tool_dir_fwd="E:/Games/GTS/Tools/xedit"
+    )
+    assert expanded == '-D:\\"\\" -sse'
+
+
+def test_build_executable_blocks_expands_and_escapes_xedit_arguments(tmp_path: Path):
+    catalog = tools.load_catalog()
+    xedit = next(e for e in catalog if e["id"] == "xedit")
+    tool_dir = tmp_path / "Tools" / "xedit"
+    blocks = tools.build_executable_blocks(xedit, tool_dir, "E:/Games/GTS/Stock Game")
+    normal = next(b for b in blocks if b["title"] == "xEdit (SSE)")
+    tool_dir_fwd = tools._fwd(str(tool_dir.resolve()))
+    assert normal["arguments"] == '-D:\\"E:\\\\Games\\\\GTS\\\\Stock Game\\\\Data\\" -sse'
+    assert normal["binary"] == f"{tool_dir_fwd}/xTESEdit64.exe"
+
+
+# -- replace_executables (tools refresh) -------------------------------------------------
+
+
+def _write_ini(path: Path, *entries: tuple[str, str, str, str]) -> None:
+    lines = ["[General]", "gamePath=", "", "[customExecutables]", f"size={len(entries)}"]
+    for i, (title, binary, arguments, working_dir) in enumerate(entries, start=1):
+        lines += [
+            f"{i}\\title={title}",
+            f"{i}\\binary={binary}",
+            f"{i}\\arguments={arguments}",
+            f"{i}\\workingDirectory={working_dir}",
+            f"{i}\\hide=false",
+            f"{i}\\ownicon=true",
+            f"{i}\\steamAppID=",
+            f"{i}\\toolbar=true",
+        ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_replace_executables_updates_stale_arguments_in_place(tmp_path: Path):
+    ini_path = tmp_path / "ModOrganizer.ini"
+    _write_ini(
+        ini_path,
+        ("xEdit (SSE)", "E:/GTS/Tools/xedit/xTESEdit64.exe", "-sse", ""),
+        ("Some User Tool", "E:/GTS/tools/thing.exe", "-x", ""),
+    )
+
+    new_blocks = [
+        {
+            "title": "xEdit (SSE)",
+            "binary": "E:/GTS/Tools/xedit/xTESEdit64.exe",
+            "arguments": '-D:\\"E:\\\\GTS\\\\Stock Game\\\\Data\\" -sse',
+            "workingDirectory": "E:/GTS/Tools/xedit",
+        }
+    ]
+    changed = tools.replace_executables(ini_path, new_blocks)
+
+    assert changed == ["xEdit (SSE)"]
+    text = ini_path.read_text(encoding="utf-8")
+    assert '1\\arguments=-D:\\"E:\\\\GTS\\\\Stock Game\\\\Data\\" -sse' in text
+    assert "1\\workingDirectory=E:/GTS/Tools/xedit" in text
+    # The unrelated user-registered entry is preserved verbatim.
+    assert "2\\title=Some User Tool" in text
+    assert "2\\arguments=-x" in text
+    # size= and hide/ownicon/etc. of the updated entry are untouched.
+    assert "size=2" in text
+    assert "1\\hide=false" in text
+
+
+def test_replace_executables_appends_a_block_whose_title_is_not_yet_registered(
+    tmp_path: Path,
+):
+    ini_path = tmp_path / "ModOrganizer.ini"
+    _write_ini(ini_path, ("Other Tool", "E:/GTS/tools/other.exe", "", ""))
+
+    new_blocks = [
+        {
+            "title": "TexGen (SSE)",
+            "binary": "E:/GTS/Tools/dyndolod/TexGenx64.exe",
+            "arguments": '-D:\\"E:\\\\GTS\\\\Stock Game\\\\Data\\" -sse',
+            "workingDirectory": "E:/GTS/Tools/dyndolod",
+        }
+    ]
+    changed = tools.replace_executables(ini_path, new_blocks)
+
+    assert changed == ["TexGen (SSE)"]
+    text = ini_path.read_text(encoding="utf-8")
+    assert "size=2" in text
+    assert "2\\title=TexGen (SSE)" in text
+
+
+def test_replace_executables_is_idempotent(tmp_path: Path):
+    ini_path = tmp_path / "ModOrganizer.ini"
+    _write_ini(ini_path, ("xEdit (SSE)", "E:/GTS/Tools/xedit/xTESEdit64.exe", "-sse", ""))
+    new_blocks = [
+        {
+            "title": "xEdit (SSE)",
+            "binary": "E:/GTS/Tools/xedit/xTESEdit64.exe",
+            "arguments": '-D:\\"E:\\\\GTS\\\\Stock Game\\\\Data\\" -sse',
+            "workingDirectory": "E:/GTS/Tools/xedit",
+        }
+    ]
+    tools.replace_executables(ini_path, new_blocks)
+    text_after_first = ini_path.read_text(encoding="utf-8")
+
+    changed_second = tools.replace_executables(ini_path, new_blocks)
+
+    assert changed_second == []
+    assert ini_path.read_text(encoding="utf-8") == text_after_first
+
+
+# -- cmd_tools_refresh --------------------------------------------------------------------
+
+
+def test_cmd_tools_refresh_rewrites_only_the_installed_tools_arguments(tmp_path: Path):
+    mo2_dir = tmp_path / "inst"
+    mo2_dir.mkdir()
+    tool_dir = mo2_dir / "Tools" / "xedit"
+    (tool_dir).mkdir(parents=True)
+    (tool_dir / "xTESEdit64.exe").write_bytes(b"x")
+
+    binary = tools._fwd(str(tool_dir.resolve())) + "/xTESEdit64.exe"
+    ini_path = mo2_dir / "ModOrganizer.ini"
+    _write_ini(
+        ini_path,
+        ("xEdit (SSE)", binary, "-sse", ""),
+        ("xEdit (SSE) - QuickAutoClean", binary, "-sse -quickautoclean", ""),
+        ("User Tool", "E:/other/thing.exe", "-x", ""),
+    )
+    # gamePath must be set for {game_data} to expand to something real.
+    ini_text = ini_path.read_text(encoding="utf-8").replace(
+        "gamePath=", f"gamePath=@ByteArray({mo2_dir / 'Stock Game'!s})"
+    )
+    ini_path.write_text(ini_text, encoding="utf-8")
+
+    led = ledger_mod.Ledger(mo2_dir)
+    led.set_game(domain="skyrimspecialedition", mo2_name="SkyrimSE")
+    led.data["tools"]["xedit"] = {
+        "name": "xEdit (SSEEdit)",
+        "version": "xedit-4.1.5f",
+        "executables": tools._catalog_by_id(tools.load_catalog())["xedit"]["executables"],
+        "companion_mods": [],
+    }
+    led.save()
+
+    rc = tools.cmd_tools_refresh(argparse.Namespace(ids=[], mo2_dir=str(mo2_dir)))
+    assert rc == 0
+
+    text = ini_path.read_text(encoding="utf-8")
+    assert '-D:\\"' in text
+    assert "Stock Game\\\\Data" in text
+    # The unrelated user tool is untouched.
+    assert "3\\title=User Tool" in text
+    assert "3\\arguments=-x" in text
+
+
 # -- companion mod install --------------------------------------------------------------
 
 

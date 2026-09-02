@@ -270,6 +270,43 @@ def _fwd(path: str) -> str:
     return path.replace("\\", "/")
 
 
+def _to_windows_path(path: str) -> str:
+    return path.replace("/", "\\")
+
+
+def _qt_escape(value: str) -> str:
+    """MO2 stores a `customExecutables` `arguments` value the way Qt's IniFormat writer
+    escapes any string: every backslash doubled, then every quote escaped with a
+    backslash. Verified against a working Wabbajack Stock Game instance (Lorerim): the
+    logical argument `-D:"E:\\Games\\Lorerim\\Stock Game\\Data"` is stored on disk as
+    `-D:\\"E:\\\\Games\\\\Lorerim\\\\Stock Game\\\\Data\\"` (mirrored by
+    `build._qt_escape` -- kept local here too, see the module docstring on why tools.py
+    stays self-contained from build.py)."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _expand_arg_template(template: str, *, game_path: str, tool_dir_fwd: str) -> str:
+    """Expand a catalogue executable's `arguments` template (`{game}`, `{game_data}`,
+    `{tool}`) and Qt-escape the result for MO2's ini.
+
+    `{game_data}` is `<game_path>\\Data` -- `game_path` is the decoded `gamePath=` from
+    ModOrganizer.ini (the Stock Game copy when `build --stock-game` made one), so this
+    is how xEdit/DynDOLOD/TexGen-family tools are told to read the VFS-managed Data
+    folder via `-D:"{game_data}"` instead of falling back to their own registry-derived
+    game install (see the module's `tools_catalog.json` entries). Paths are rendered
+    Windows-style (backslash) to match the reference Wabbajack Stock Game instance this
+    was verified against. Empty if `game_path` is not yet known -- callers should not
+    register a `-D:` tool before ModOrganizer.ini has a `gamePath`.
+    """
+    if not template:
+        return ""
+    game_win = _to_windows_path(game_path) if game_path else ""
+    game_data_win = f"{game_win}\\Data" if game_win else ""
+    tool_win = _to_windows_path(tool_dir_fwd)
+    expanded = template.format(game=game_win, game_data=game_data_win, tool=tool_win)
+    return _qt_escape(expanded)
+
+
 def _decode_bytearray(value: str) -> str:
     """Decode MO2's `@ByteArray(...)` (backslashes doubled) or a plain path value."""
     value = value.strip()
@@ -407,6 +444,179 @@ def merge_executables(ini_path: Path, new_blocks: list[dict[str, str]]) -> list[
     return [b["title"] for _, b in to_add]
 
 
+_CE_ANY_KEY_RE = re.compile(r"^(\d+)\\(\w+)=(.*)$")
+
+
+def _parse_customexecutables(
+    lines: list[str],
+) -> tuple[list[str], bool, dict[int, dict[str, str]], list[int], int | None, list[str]]:
+    """Shared line-based parse of `[customExecutables]` used by `replace_executables`
+    and `_drop_executables_by_binary`: everything outside the section is kept verbatim
+    in `out` (including the section's own header and `size=` line, at `size_line_idx`);
+    each numbered entry becomes `blocks[idx]` (insertion order in `order`); any stray
+    non-`N\\key=value` line inside the section is kept in `tail` and re-appended after
+    the rebuilt entries. Returns `(out, has_ce_section, blocks, order, size_line_idx, tail)`.
+    """
+    out: list[str] = []
+    in_ce = False
+    has_ce_section = False
+    blocks: dict[int, dict[str, str]] = {}
+    order: list[int] = []
+    size_line_idx: int | None = None
+    tail: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_ce = stripped[1:-1] == "customExecutables"
+            if in_ce:
+                has_ce_section = True
+            out.append(line)
+            continue
+        if in_ce:
+            if stripped.startswith("size="):
+                size_line_idx = len(out)
+                out.append(line)
+                continue
+            m = _CE_ANY_KEY_RE.match(line)
+            if m:
+                idx = int(m.group(1))
+                if idx not in blocks:
+                    blocks[idx] = {}
+                    order.append(idx)
+                blocks[idx][m.group(2)] = m.group(3)
+                continue
+            if not stripped:
+                continue  # blank lines inside the section are rebuilt below
+            tail.append(line)
+            continue
+        out.append(line)
+
+    return out, has_ce_section, blocks, order, size_line_idx, tail
+
+
+def replace_executables(ini_path: Path, new_blocks: list[dict[str, str]]) -> list[str]:
+    """Rewrite `[customExecutables]` entries in `ini_path` in place, matched by title.
+
+    The `tools refresh` counterpart of `merge_executables` (which dedups by
+    `(binary, arguments)` and only ever appends): here, an existing entry whose title
+    matches one of `new_blocks` has its `binary`/`arguments`/`workingDirectory`
+    overwritten with the recomputed values -- so a stale `-D:"<old game path>"` baked
+    into `arguments` (e.g. by a `build --stock-game` that ran after the tool was
+    installed, or an instance installed before this catalogue added `-D:` at all) gets
+    corrected in place instead of leaving a duplicate entry. `hide`/`ownicon`/
+    `steamAppID`/`toolbar` and any other keys are left untouched (a user may have
+    changed them). A `new_blocks` entry whose title has no existing match is appended,
+    same as `merge_executables`. Returns the titles changed (updated in place or newly
+    added); an empty list if `ini_path` has no `[customExecutables]` section to update
+    (fresh registration goes through `merge_executables`/`_install_one` instead).
+    """
+    if not new_blocks or not ini_path.exists():
+        return []
+    by_title = {b["title"]: b for b in new_blocks}
+
+    lines = ini_path.read_text(encoding="utf-8").splitlines()
+    out, has_ce_section, blocks, order, size_line_idx, tail = _parse_customexecutables(lines)
+    if not has_ce_section:
+        return []
+
+    changed: list[str] = []
+    for idx in order:
+        title = blocks[idx].get("title", "")
+        block = by_title.get(title)
+        if block is None:
+            continue
+        for key in ("binary", "arguments", "workingDirectory"):
+            new_value = block[key]
+            if blocks[idx].get(key) != new_value:
+                blocks[idx][key] = new_value
+                if title not in changed:
+                    changed.append(title)
+
+    existing_titles = {blocks[idx].get("title", "") for idx in order}
+    to_add = [b for b in new_blocks if b["title"] not in existing_titles]
+
+    idx = max(order, default=0)
+    for block in to_add:
+        idx += 1
+        blocks[idx] = {
+            "title": block["title"],
+            "binary": block["binary"],
+            "arguments": block["arguments"],
+            "workingDirectory": block["workingDirectory"],
+            "hide": "false",
+            "ownicon": "true",
+            "steamAppID": "",
+            "toolbar": "true",
+        }
+        order.append(idx)
+        changed.append(block["title"])
+
+    if not changed:
+        return []
+
+    rendered: list[str] = []
+    for i in order:
+        for key, value in blocks[i].items():
+            rendered.append(f"{i}\\{key}={value}")
+    rendered.extend(tail)
+    rendered.append("")
+
+    if size_line_idx is not None:
+        out[size_line_idx] = f"size={len(order)}"
+        out[size_line_idx + 1 : size_line_idx + 1] = rendered
+    else:
+        out.append(f"size={len(order)}")
+        out.extend(rendered)
+
+    ini_path.write_text("\n".join(out) + "\n", encoding="utf-8", newline="\n")
+    return changed
+
+
+def _drop_executables_by_binary(ini_path: Path, binaries: set[str]) -> list[str]:
+    """Remove `[customExecutables]` entries whose `binary` (case-insensitive) is in
+    `binaries`; renumber the rest.
+
+    Tools-local counterpart of `layers.drop_executables` (which matches by exact
+    `(binary, arguments)` -- unsuitable here now that `arguments` can embed a dynamic
+    `-D:"<game path>"`, so a `cmd_tools_remove` that recomputes blocks without a game
+    path would never match the real stored entry). Matching on the binary alone is
+    correct anyway: removal deletes the whole tool, so every entry pointing at one of
+    its binaries should go regardless of what arguments it currently carries. Returns
+    the titles removed.
+    """
+    binaries_lower = {b.strip().lower() for b in binaries}
+    if not binaries_lower or not ini_path.exists():
+        return []
+
+    lines = ini_path.read_text(encoding="utf-8").splitlines()
+    out, has_ce_section, blocks, order, size_line_idx, tail = _parse_customexecutables(lines)
+    if not has_ce_section:
+        return []
+
+    kept = [i for i in order if blocks[i].get("binary", "").strip().lower() not in binaries_lower]
+    removed = [blocks[i].get("title", "") for i in order if i not in kept]
+    if not removed:
+        return []
+
+    rendered: list[str] = []
+    for new_idx, old_idx in enumerate(kept, start=1):
+        for key, value in blocks[old_idx].items():
+            rendered.append(f"{new_idx}\\{key}={value}")
+    rendered.extend(tail)
+    rendered.append("")
+
+    if size_line_idx is not None:
+        out[size_line_idx] = f"size={len(kept)}"
+        out[size_line_idx + 1 : size_line_idx + 1] = rendered
+    else:
+        out.append(f"size={len(kept)}")
+        out.extend(rendered)
+
+    ini_path.write_text("\n".join(out) + "\n", encoding="utf-8", newline="\n")
+    return removed
+
+
 def build_executable_blocks(
     entry: dict[str, Any], tool_dir: Path, game_path: str
 ) -> list[dict[str, str]]:
@@ -425,7 +635,9 @@ def build_executable_blocks(
             {
                 "title": exe.get("title") or entry["name"],
                 "binary": f"{tool_dir_fwd}/{_fwd(binary_rel)}",
-                "arguments": exe.get("arguments") or "",
+                "arguments": _expand_arg_template(
+                    exe.get("arguments") or "", game_path=game_path, tool_dir_fwd=tool_dir_fwd
+                ),
                 "workingDirectory": working_dir,
             }
         )
@@ -893,13 +1105,13 @@ def cmd_tools_remove(args: argparse.Namespace) -> int:
             print(f"[{tool_id}] removed {tool_dir}")
 
         entry = by_id.get(tool_id) or {"executables": record.get("executables") or []}
-        blocks = build_executable_blocks(entry, mo2_dir / "Tools" / tool_id, "")
-        keys = {(b["binary"].strip().lower(), b["arguments"].strip()) for b in blocks}
+        tool_dir_fwd = _fwd(str((mo2_dir / "Tools" / tool_id).resolve()))
+        binaries = {
+            f"{tool_dir_fwd}/{_fwd(exe['binary'])}" for exe in (entry.get("executables") or [])
+        }
         ini_path = mo2_dir / "ModOrganizer.ini"
-        if keys and ini_path.exists():
-            from . import layers as layers_mod  # local: layers.py does not import tools.py
-
-            removed_titles = layers_mod.drop_executables(ini_path, keys)
+        if binaries and ini_path.exists():
+            removed_titles = _drop_executables_by_binary(ini_path, binaries)
             for title in removed_titles:
                 print(f"[{tool_id}] executable removed from ModOrganizer.ini: {title}")
 
@@ -933,6 +1145,73 @@ def cmd_tools_remove(args: argparse.Namespace) -> int:
         except (OSError, ValueError) as e:
             print(f"warning: profile could not be re-rendered: {e}", file=sys.stderr)
 
+    return 0
+
+
+# -- Refresh --------------------------------------------------------------------------
+
+
+def cmd_tools_refresh(args: argparse.Namespace) -> int:
+    """Re-derive `[customExecutables]` entries for already-installed tools from the
+    current catalogue and the instance's current `gamePath`, and rewrite them in place
+    -- no re-download, no re-extraction.
+
+    For fixing an existing instance whose xEdit/DynDOLOD/TexGen entries predate
+    `-D:"{game_data}"` being added to the catalogue (or were registered before
+    `build --stock-game` ran and never got rebased): `c2wj tools refresh --mo2-dir
+    <instance>` rewrites every tool recorded in the ledger; passing ids restricts it to
+    those. Tools no longer in the catalogue (or disabled) are refreshed from the
+    executables recorded at install time, so a stale entry still gets corrected even if
+    the catalogue entry was since removed.
+    """
+    catalog = load_catalog()
+    by_id = _catalog_by_id(catalog)
+    mo2_dir = Path(args.mo2_dir).resolve()
+    if not mo2_dir.exists():
+        print(f"error: {mo2_dir} does not exist", file=sys.stderr)
+        return 1
+
+    ini_path = mo2_dir / "ModOrganizer.ini"
+    if not ini_path.exists():
+        print(f"error: {ini_path} not found", file=sys.stderr)
+        return 1
+
+    led = ledger_mod.load(mo2_dir)
+    installed = led.data.get("tools") or {}
+    ids: list[str] = list(dict.fromkeys(args.ids or list(installed.keys())))
+    if not ids:
+        print("no tools installed; nothing to refresh")
+        return 0
+
+    unknown = [i for i in ids if i not in installed]
+    if unknown:
+        print(f"error: not installed: {', '.join(unknown)}", file=sys.stderr)
+        return 2
+
+    game_path = read_game_path(ini_path)
+    if not game_path:
+        print(f"warning: {ini_path} has no gamePath yet; -D:-style arguments will be empty")
+
+    any_changed = False
+    for tool_id in ids:
+        record = installed[tool_id]
+        entry = by_id.get(tool_id)
+        if entry is None:
+            entry = {"id": tool_id, "name": record.get("name") or tool_id}
+        if entry.get("executables") is None:
+            entry = {**entry, "executables": record.get("executables") or []}
+
+        tool_dir = mo2_dir / "Tools" / tool_id
+        blocks = build_executable_blocks(entry, tool_dir, game_path)
+        changed = replace_executables(ini_path, blocks)
+        if changed:
+            any_changed = True
+            print(f"[{tool_id}] refreshed: {', '.join(changed)}")
+        else:
+            print(f"[{tool_id}] already up to date")
+
+    if not any_changed:
+        print("nothing to refresh")
     return 0
 
 
@@ -974,3 +1253,14 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     rp.add_argument("ids", nargs="+", help="tool ids to remove (see `c2wj tools list`)")
     rp.add_argument("--mo2-dir", required=True, help="portable MO2 instance directory")
     rp.set_defaults(func=cmd_tools_remove)
+
+    fp = tool_sub.add_parser(
+        "refresh",
+        help="rewrite already-installed tools' [customExecutables] entries from the "
+        "current catalogue/gamePath, without re-downloading",
+    )
+    fp.add_argument(
+        "ids", nargs="*", help="tool ids to refresh (default: every installed tool)"
+    )
+    fp.add_argument("--mo2-dir", required=True, help="portable MO2 instance directory")
+    fp.set_defaults(func=cmd_tools_refresh)

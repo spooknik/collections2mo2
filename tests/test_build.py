@@ -116,6 +116,67 @@ def test_rewrite_ini_is_idempotent_on_second_run(tmp_path: Path):
     assert changes_second == []
 
 
+# -- rebasing xEdit/DynDOLOD/TexGen-style -D: arguments -------------------------------
+
+# The escaped form of a logical `-D:"C:\OldGame\Data"` argument, exactly as MO2/Qt
+# writes it to disk (verified against a working Wabbajack Stock Game instance,
+# E:\Games\Lorerim\ModOrganizer.ini: backslashes doubled, quotes escaped with `\`).
+_XEDIT_ARGS_INI = '-D:\\"C:\\\\OldGame\\\\Data\\" -sse'
+
+
+def _xedit_ini() -> str:
+    return "\n".join(
+        [
+            "[General]",
+            "gameName=Skyrim Special Edition",
+            "gamePath=",
+            "selected_profile=@ByteArray(Default)",
+            "",
+            "[customExecutables]",
+            "size=1",
+            "1\\title=xEdit (SSE)",
+            "1\\binary=C:/OldGame/tools/xedit/xTESEdit64.exe",
+            f"1\\arguments={_XEDIT_ARGS_INI}",
+            "1\\workingDirectory=",
+        ]
+    ) + "\n"
+
+
+def test_rewrite_ini_rebases_quoted_data_path_in_arguments(tmp_path: Path):
+    ini_path = tmp_path / "ModOrganizer.ini"
+    ini_path.write_text(_xedit_ini(), encoding="utf-8", newline="\n")
+
+    changes = _rewrite_ini(ini_path, game_path="D:/StockGame", source_game_path="C:/OldGame")
+
+    lines = ini_path.read_text(encoding="utf-8").splitlines()
+    new_args = next(l.split("=", 1)[1] for l in lines if l.startswith("1\\arguments="))
+    assert new_args == '-D:\\"D:\\\\StockGame\\\\Data\\" -sse'
+    assert any("1\\arguments" in c for c in changes)
+
+
+def test_rewrite_ini_leaves_arguments_without_source_path_untouched(tmp_path: Path):
+    ini_path = tmp_path / "ModOrganizer.ini"
+    ini_path.write_text(_base_ini(), encoding="utf-8", newline="\n")
+
+    changes = _rewrite_ini(ini_path, game_path="D:/StockGame", source_game_path="C:/OldGame")
+
+    lines = ini_path.read_text(encoding="utf-8").splitlines()
+    assert "1\\arguments=" in lines  # SKSE's empty arguments= is untouched
+    assert not any("1\\arguments" in c for c in changes)
+
+
+def test_rewrite_ini_arguments_rebase_is_idempotent(tmp_path: Path):
+    ini_path = tmp_path / "ModOrganizer.ini"
+    ini_path.write_text(_xedit_ini(), encoding="utf-8", newline="\n")
+
+    _rewrite_ini(ini_path, game_path="D:/StockGame", source_game_path="C:/OldGame")
+    text_after_first = ini_path.read_text(encoding="utf-8")
+
+    changes_second = _rewrite_ini(ini_path, game_path="D:/StockGame", source_game_path="C:/OldGame")
+    assert ini_path.read_text(encoding="utf-8") == text_after_first
+    assert changes_second == []
+
+
 # -- keeping the release archives as real downloads/ ---------------------------------
 
 

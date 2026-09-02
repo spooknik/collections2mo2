@@ -342,6 +342,49 @@ def _to_forward_slashes(path: str) -> str:
     return path.replace("\\", "/")
 
 
+_QT_QUOTED_RE = re.compile(r'\\"(.*?)\\"')
+
+
+def _qt_unescape(value: str) -> str:
+    """Inverse of `_qt_escape`: Qt's IniFormat writer doubles every backslash then
+    escapes every quote, so undo in the opposite order."""
+    return value.replace('\\"', '"').replace("\\\\", "\\")
+
+
+def _qt_escape(value: str) -> str:
+    """MO2 stores a `customExecutables` `arguments` value the way Qt's IniFormat writer
+    escapes any string: every backslash doubled, then every quote escaped with a
+    backslash. Verified against a working Wabbajack Stock Game instance (Lorerim): the
+    logical argument `-D:"E:\\Games\\Lorerim\\Stock Game\\Data"` is stored on disk as
+    `-D:\\"E:\\\\Games\\\\Lorerim\\\\Stock Game\\\\Data\\"`."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _rebase_arguments(value: str, rebase) -> str | None:
+    """Rebase any Qt-escaped quoted path inside a `customExecutables` `arguments` value
+    (e.g. xEdit/DynDOLOD/TexGen's `-D:"<path>"` data-path switch, registered by
+    `c2wj tools install`) from the source game folder onto `game_path`, same as
+    `binary=`/`workingDirectory=` below -- so a tool registered before
+    `build --stock-game` runs ends up pointing at the Stock Game copy too, and one
+    registered after (already pointing at game_path) is left untouched. Returns None
+    if nothing changed."""
+    if not value or '\\"' not in value:
+        return None
+    changed = False
+
+    def _sub(m: re.Match[str]) -> str:
+        nonlocal changed
+        inner = _qt_unescape(m.group(1))
+        new_path = rebase(inner)
+        if new_path is None:
+            return m.group(0)
+        changed = True
+        return _qt_escape(f'"{new_path.replace("/", chr(92))}"')
+
+    new_value = _QT_QUOTED_RE.sub(_sub, value)
+    return new_value if changed else None
+
+
 def _rewrite_ini(ini_path: Path, game_path: str, source_game_path: str | None = None) -> list[str]:
     """Line-based rewrite of gamePath/game_edition and customExecutables paths.
 
@@ -433,6 +476,16 @@ def _rewrite_ini(ini_path: Path, game_path: str, source_game_path: str | None = 
                 if new_value and new_value != value:
                     out.append(f"{idx}\\workingDirectory={new_value}")
                     changes.append(f"{idx}\\workingDirectory: {value!r} -> {new_value!r}")
+                    continue
+                out.append(line)
+                continue
+            m = re.match(r"^(\d+)\\arguments=(.*)$", line)
+            if m:
+                idx, value = m.group(1), m.group(2)
+                new_value = _rebase_arguments(value, rebase)
+                if new_value and new_value != value:
+                    out.append(f"{idx}\\arguments={new_value}")
+                    changes.append(f"{idx}\\arguments: {value!r} -> {new_value!r}")
                     continue
                 out.append(line)
                 continue

@@ -17,13 +17,13 @@
         {
           "title": "xEdit (SSE)",
           "binary": "xTESEdit64.exe",
-          "arguments": "-sse",
+          "arguments": "-D:\"{game_data}\" -sse",
           "workingDirectory": "tool"
         },
         {
           "title": "xEdit (SSE) - QuickAutoClean",
           "binary": "xTESEdit64.exe",
-          "arguments": "-sse -quickautoclean",
+          "arguments": "-D:\"{game_data}\" -sse -quickautoclean",
           "workingDirectory": "tool"
         }
       ],
@@ -31,7 +31,7 @@
       "license_note": "Freeware (custom license), source included; accept the risk/backup warning on first launch.",
       "size_hint_mb": 31,
       "verified": "2026-09-02",
-      "verified_notes": "GitHub releases/latest -> tag xedit-4.1.5f, single asset xEdit.4.1.5f.7z (31.3 MB). Listed with sevenzip.list_archive: no wrapping folder; the generic TES-family binary is xTESEdit64.exe (32-bit xTESEdit.exe also present). Confirmed via xeInit.pas (dev-4.1.6 branch) that '-sse' selects SSE mode and 'quickautoclean'/'qac' triggers QuickAutoClean, so 'xEdit64.exe' from the task brief does not exist in 4.1.x builds -- xTESEdit64.exe is correct."
+      "verified_notes": "GitHub releases/latest -> tag xedit-4.1.5f, single asset xEdit.4.1.5f.7z (31.3 MB). Listed with sevenzip.list_archive: no wrapping folder; the generic TES-family binary is xTESEdit64.exe (32-bit xTESEdit.exe also present). Confirmed via xeInit.pas (dev-4.1.6 branch) that '-sse' selects SSE mode and 'quickautoclean'/'qac' triggers QuickAutoClean, so 'xEdit64.exe' from the task brief does not exist in 4.1.x builds -- xTESEdit64.exe is correct. '-D:\"{game_data}\"' (expanded to the instance's ModOrganizer.ini gamePath + \\Data, e.g. the Stock Game copy) was added 2026-09-02 to fix xEdit reading the real Steam install's vanilla Data folder via the registry instead of MO2's VFS-managed one -- confirmed against E:\\Games\\Lorerim\\ModOrganizer.ini (a working Wabbajack Stock Game build), which registers xEdit as '-D:\\\"E:\\\\Games\\\\Lorerim\\\\Stock Game\\\\Data\\\"' plus its own extra flags."
     },
     {
       "id": "bethini-pie",
@@ -137,7 +137,9 @@
           "workingDirectory": "tool"
         }
       ],
-      "requires": [".NET Desktop Runtime 8"],
+      "requires": [
+        ".NET Desktop Runtime 8"
+      ],
       "license_note": "GPL-3.0 (Mutagen-Modding).",
       "size_hint_mb": 294,
       "verified": "2026-09-02",
@@ -189,7 +191,9 @@
           "workingDirectory": "tool"
         }
       ],
-      "requires": [".NET Desktop Runtime (8 or newer)"],
+      "requires": [
+        ".NET Desktop Runtime (8 or newer)"
+      ],
       "license_note": "Freeware; source available (Monitor221hz/Pandora-Behaviour-Engine-Plus).",
       "size_hint_mb": 54,
       "verified": "2026-09-02",
@@ -214,22 +218,25 @@
         {
           "title": "TexGen (SSE)",
           "binary": "TexGenx64.exe",
-          "arguments": "-sse",
+          "arguments": "-D:\"{game_data}\" -sse",
           "workingDirectory": "tool"
         },
         {
           "title": "DynDOLOD (SSE)",
           "binary": "DynDOLODx64.exe",
-          "arguments": "-sse",
+          "arguments": "-D:\"{game_data}\" -sse",
           "workingDirectory": "tool"
         }
       ],
       "requires": [],
-      "companion_mods": ["dyndolod-resources", "dyndolod-dll-ng"],
+      "companion_mods": [
+        "dyndolod-resources",
+        "dyndolod-dll-ng"
+      ],
       "license_note": "Freeware; author-distributed (Sheson), also mirrored on Nexus; no redistribution permitted.",
       "size_hint_mb": 36,
       "verified": "2026-09-02",
-      "verified_notes": "GET /v1/games/skyrimspecialedition/mods/68518/files.json -> newest (only) MAIN file_id 798219, 'DynDOLOD 3.00 68518 Alpha-211 2026-08-31T16-23Z Dc5uGkS8r.7z', version Alpha-211, 35595 KB (Alpha builds are the current line, confirming the task brief). content_preview_link 404'd (not generated yet for this upload); downloaded (Premium, ~36 MB) and listed with sevenzip.list_archive: single wrapping folder 'DynDOLOD/' -> strip_single_root; DynDOLODx64.exe and TexGenx64.exe both land at the tool root (verified 32-bit variants do not exist in this build, only x64), 'Edit Scripts/' holds LODGenx64*.exe/Texconvx64.exe and the xEdit .pas scripts DynDOLOD/TexGen actually run under the hood."
+      "verified_notes": "GET /v1/games/skyrimspecialedition/mods/68518/files.json -> newest (only) MAIN file_id 798219, 'DynDOLOD 3.00 68518 Alpha-211 2026-08-31T16-23Z Dc5uGkS8r.7z', version Alpha-211, 35595 KB (Alpha builds are the current line, confirming the task brief). content_preview_link 404'd (not generated yet for this upload); downloaded (Premium, ~36 MB) and listed with sevenzip.list_archive: single wrapping folder 'DynDOLOD/' -> strip_single_root; DynDOLODx64.exe and TexGenx64.exe both land at the tool root (verified 32-bit variants do not exist in this build, only x64), 'Edit Scripts/' holds LODGenx64*.exe/Texconvx64.exe and the xEdit .pas scripts DynDOLOD/TexGen actually run under the hood. '-D:\"{game_data}\"' was added 2026-09-02 for the same reason as xEdit's (both are xEdit-family, same registry-vs-VFS Data-folder bug) -- confirmed against E:\\Games\\Lorerim\\ModOrganizer.ini, which registers both TexGen and DynDOLOD as '-D:\\\"E:\\\\Games\\\\Lorerim\\\\Stock Game\\\\Data\\\" -sse'."
     }
   ],
   "companion_mods": [
