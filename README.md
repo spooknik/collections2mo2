@@ -36,13 +36,23 @@ uv run c2wj inspect work/h2uqa3/68/downloads/downloads.json
 - `install` builds `work/<slug>/<revision>/mo2/mods/<Mod Name>/` for every mod and records what it
   did in `install.json`. FOMODs replay the curator's recorded choices; fresh-mode FOMODs take
   installer defaults unless you pass `--choices-overrides`.
-- `profile` writes `profiles/<name>/modlist.txt`, `plugins.txt`, `loadorder.txt` and a portable
-  `ModOrganizer.ini` into the same `mo2/` folder.
+- `profile` writes `profiles/<name>/modlist.txt`, `plugins.txt`, `loadorder.txt`, the
+  profile-local game INIs (seeded from your `My Games` INIs, with the collection's `INI Tweaks`
+  merged in) and a portable `ModOrganizer.ini` into the same `mo2/` folder.
+- `build` downloads a pinned Mod Organizer 2 release and the Root Builder plugin into that folder
+  and points `ModOrganizer.ini` at your game. After this, `mo2/ModOrganizer.exe` is a working
+  portable instance.
+- `survey` is an optional pre-flight: using Nexus's content previews it reports FOMOD presence and
+  archive layouts for a collection without downloading it (rate-limited, cached, resumable).
 
 ```
 uv run c2wj install work/h2uqa3/68/downloads/inspect.json
-uv run c2wj profile work/h2uqa3/68/mo2/install.json --game-path "D:/Games/Skyrim Special Edition"
+uv run c2wj profile work/h2uqa3/68/mo2/install.json --game-path "E:/Games/Skyrim Special Edition"
+uv run c2wj build work/h2uqa3/68/mo2 --game-path "E:/Games/Skyrim Special Edition"
 ```
+
+Verified so far: the h2uqa3 instance opens in MO2 2.5.2 with all 292 mods valid, all plugins
+present, phase separators, and Root Builder content in place.
 
 Downloading mod files requires Nexus Premium (the API only issues direct links to Premium
 accounts). The manifest itself only needs a logged-in API key.

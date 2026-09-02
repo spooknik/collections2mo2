@@ -1,8 +1,10 @@
-"""Download the Nexus-hosted mods referenced by a collection manifest.
+"""Download the mods referenced by a collection manifest.
 
-Streams each pinned file to `<out>/<file_name>`, verifies its MD5 against the
-manifest, and writes an MO2-compatible `.meta` sidecar next to it plus a
-`downloads.json` summary of the whole run.
+Streams each Nexus-pinned file and each `source.type == "direct"` file to
+`<out>/<file_name>`, verifies its MD5 against the manifest, and writes an
+MO2/Wabbajack-compatible `.meta` sidecar next to it plus a `downloads.json`
+summary of the whole run. Other source types (`browse`, `manual`, `bundle`,
+...) are not downloaded; they are recorded with `status="unsupported"`.
 """
 
 from __future__ import annotations
@@ -17,11 +19,14 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import unquote, urlsplit
+
+import requests
 
 from .manifest import install_mode, load_manifest
-from .nexus import AuthRequired, NexusClient, NexusError
+from .nexus import USER_AGENT, AuthRequired, NexusClient, NexusError
 
 # Nexus domain -> MO2 short game name.
 MO2_GAME_NAMES: dict[str, str] = {
@@ -41,6 +46,8 @@ MO2_GAME_NAMES: dict[str, str] = {
 
 CHUNK_SIZE = 1 << 20  # 1 MiB
 CHECKPOINT_EVERY = 10
+DIRECT_TIMEOUT = 60.0
+DIRECT_MAX_RETRIES = 3  # additional attempts after the first, with 2/4/8s backoff
 
 
 def mo2_game_name(domain: str) -> str:
@@ -56,8 +63,8 @@ def mo2_game_name(domain: str) -> str:
 @dataclass
 class DownloadEntry:
     name: str
-    mod_id: int
-    file_id: int
+    mod_id: int | None
+    file_id: int | None
     tag: str | None
     md5: str | None
     update_policy: str | None
@@ -70,6 +77,8 @@ class DownloadEntry:
     size: int | None = None
     status: str = "error"
     error: str | None = None
+    source_type: str = "nexus"
+    url: str | None = None
 
 
 @dataclass
@@ -106,6 +115,24 @@ class _ThreadClients:
         return client
 
 
+class _ThreadSessions:
+    """One plain `requests.Session` per worker thread, for `direct` (non-Nexus) downloads.
+
+    Deliberately carries no Nexus `apikey` header.
+    """
+
+    def __init__(self):
+        self._local = threading.local()
+
+    def get(self) -> requests.Session:
+        session = getattr(self._local, "session", None)
+        if session is None:
+            session = requests.Session()
+            session.headers["User-Agent"] = USER_AGENT
+            self._local.session = session
+        return session
+
+
 def _md5_of_file(path: Path, chunk: int = CHUNK_SIZE) -> str:
     h = hashlib.md5()
     with open(path, "rb") as fh:
@@ -123,15 +150,23 @@ def _write_meta(
     name: str,
     mod_name: str,
     version: str,
-    file_category: str,
+    file_category: str = "",
+    direct_url: str | None = None,
+    repository: str = "Nexus",
 ) -> None:
+    """Write an MO2-compatible `.meta` sidecar.
+
+    For Nexus mods (the default), `directURL` is omitted and `repository` is "Nexus".
+    For `direct` downloads, pass `direct_url` (also used as Wabbajack's `url`/`directURL`
+    keys) and `repository=""`.
+    """
     cfg = configparser.ConfigParser(interpolation=None)
     cfg.optionxform = str  # preserve case of keys
-    cfg["General"] = {
+    general = {
         "gameName": game_name,
         "modID": str(mod_id),
         "fileID": str(file_id),
-        "url": "",
+        "url": direct_url or "",
         "name": name,
         "description": "",
         "modName": mod_name,
@@ -139,14 +174,57 @@ def _write_meta(
         "newestVersion": "",
         "fileCategory": file_category,
         "category": "",
-        "repository": "Nexus",
+        "repository": repository,
         "installed": "false",
         "uninstalled": "false",
         "paused": "false",
         "removed": "false",
     }
+    if direct_url:
+        # Wabbajack's key for a direct (non-Nexus) download source.
+        general["directURL"] = direct_url
+    cfg["General"] = general
     with open(meta_path, "w", encoding="utf-8") as fh:
         cfg.write(fh, space_around_delimiters=False)
+
+
+def _finalize_download(
+    tmp_dest: Path,
+    dest: Path,
+    file_name: str,
+    out_dir: Path,
+    expected_md5: str | None,
+    actual_md5: str,
+    entry: DownloadEntry,
+) -> None:
+    """Shared by the Nexus and direct download paths: MD5-verify `tmp_dest` and either
+    rename it to `dest` (ok) or to `<file_name>.md5mismatch` (mismatch), updating `entry`.
+    """
+    size = tmp_dest.stat().st_size
+
+    if expected_md5 and actual_md5 != expected_md5:
+        bad_dest = out_dir / f"{file_name}.md5mismatch"
+        try:
+            if bad_dest.exists():
+                bad_dest.unlink()
+            tmp_dest.replace(bad_dest)
+        except OSError as e:
+            entry.error = (
+                f"md5 mismatch (expected {expected_md5}, got {actual_md5}); "
+                f"also failed to rename bad file: {e}"
+            )
+            entry.status = "md5_mismatch"
+            entry.size = size
+            return
+        entry.status = "md5_mismatch"
+        entry.error = f"md5 mismatch: expected {expected_md5}, got {actual_md5}"
+        entry.size = size
+        entry.path = str(bad_dest.resolve())
+        return
+
+    tmp_dest.replace(dest)
+    entry.status = "ok"
+    entry.size = size
 
 
 def _download_one(
@@ -226,32 +304,9 @@ def _download_one(
         return entry
 
     actual_md5 = h.hexdigest()
-    size = tmp_dest.stat().st_size
-
-    if expected_md5 and actual_md5 != expected_md5:
-        bad_dest = out_dir / f"{file_name}.md5mismatch"
-        try:
-            if bad_dest.exists():
-                bad_dest.unlink()
-            tmp_dest.replace(bad_dest)
-        except OSError as e:
-            entry.error = (
-                f"md5 mismatch (expected {expected_md5}, got {actual_md5}); "
-                f"also failed to rename bad file: {e}"
-            )
-            entry.status = "md5_mismatch"
-            entry.size = size
-            return entry
-        entry.status = "md5_mismatch"
-        entry.error = f"md5 mismatch: expected {expected_md5}, got {actual_md5}"
-        entry.size = size
-        entry.path = str(bad_dest.resolve())
-        return entry
-
-    tmp_dest.replace(dest)
-    entry.status = "ok"
-    entry.size = size
-    _write_meta_for(mod, info, dest, game_name, mod_id, file_id)
+    _finalize_download(tmp_dest, dest, file_name, out_dir, expected_md5, actual_md5, entry)
+    if entry.status == "ok":
+        _write_meta_for(mod, info, dest, game_name, mod_id, file_id)
     return entry
 
 
@@ -276,6 +331,173 @@ def _write_meta_for(
         # MO2 stores Nexus's numeric file category (1 main, 2 update, 3 optional, 4 old, 5 misc)
         file_category=str(info.get("category_id") or ""),
     )
+
+
+def _write_meta_for_direct(mod: dict[str, Any], dest: Path, game_name: str, url: str) -> None:
+    meta_path = dest.with_name(dest.name + ".meta")
+    version = mod.get("version") or ""
+    mod_name = mod.get("name") or ""
+    _write_meta(
+        meta_path,
+        game_name=game_name,
+        mod_id=0,
+        file_id=0,
+        name=mod_name,
+        mod_name=mod_name,
+        version=str(version),
+        direct_url=url,
+        repository="",
+    )
+
+
+def _direct_file_name(url: str, src: dict[str, Any], mod: dict[str, Any]) -> str | None:
+    """URL path basename (URL-decoded); fall back to `logicalFilename`, then the mod's
+    `name` if it looks like a file name (has an extension)."""
+    path = urlsplit(url).path
+    base = unquote(PurePosixPath(path).name) if path else ""
+    if base:
+        return base
+    logical = src.get("logicalFilename")
+    if logical:
+        return str(logical)
+    name = mod.get("name") or ""
+    if name and PurePosixPath(name).suffix:
+        return name
+    return None
+
+
+def _download_direct(
+    sessions: _ThreadSessions,
+    mod: dict[str, Any],
+    out_dir: Path,
+    domain: str,
+    game_name: str,
+) -> DownloadEntry:
+    src = mod.get("source") or {}
+    url = src.get("url") or ""
+    expected_md5 = src.get("md5")
+    entry = DownloadEntry(
+        name=mod.get("name") or "",
+        mod_id=None,
+        file_id=None,
+        tag=src.get("tag"),
+        md5=expected_md5,
+        update_policy=src.get("updatePolicy"),
+        install_mode=install_mode(mod),
+        optional=bool(mod.get("optional")),
+        phase=mod.get("phase", 0),
+        mod_type=(mod.get("details") or {}).get("type") or "",
+        source_type="direct",
+        url=url or None,
+    )
+
+    if not url:
+        entry.error = "direct source has no url"
+        return entry
+
+    file_name = _direct_file_name(url, src, mod)
+    if not file_name:
+        entry.error = "could not determine a file name for direct download"
+        return entry
+
+    dest = out_dir / file_name
+    entry.file_name = file_name
+    entry.path = str(dest.resolve())
+
+    # Resumable: if the file's already there and its MD5 matches, skip the download.
+    if dest.exists() and expected_md5:
+        try:
+            existing_md5 = _md5_of_file(dest)
+        except OSError as e:
+            entry.error = f"could not hash existing file: {e}"
+            existing_md5 = None
+        if existing_md5 == expected_md5:
+            entry.status = "skipped"
+            entry.size = dest.stat().st_size
+            _write_meta_for_direct(mod, dest, game_name, url)
+            return entry
+
+    session = sessions.get()
+    tmp_dest = dest.with_suffix(dest.suffix + ".part")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    actual_md5: str | None = None
+    last_exc: Exception | None = None
+    # 1 initial attempt + DIRECT_MAX_RETRIES retries, 2/4/8s backoff between them.
+    for attempt in range(1, DIRECT_MAX_RETRIES + 2):
+        try:
+            h = hashlib.md5()
+            with session.get(
+                url, stream=True, timeout=DIRECT_TIMEOUT, allow_redirects=True
+            ) as resp:
+                resp.raise_for_status()
+                with open(tmp_dest, "wb") as fh:
+                    for part in resp.iter_content(chunk_size=CHUNK_SIZE):
+                        if not part:
+                            continue
+                        fh.write(part)
+                        h.update(part)
+            actual_md5 = h.hexdigest()
+            last_exc = None
+            break
+        except Exception as e:  # noqa: BLE001 - retry, then record and keep going
+            last_exc = e
+            if attempt <= DIRECT_MAX_RETRIES:
+                time.sleep(2**attempt)
+                continue
+            break
+
+    if last_exc is not None or actual_md5 is None:
+        entry.error = f"download failed: {last_exc}"
+        try:
+            if tmp_dest.exists():
+                tmp_dest.unlink()
+        except OSError:
+            pass
+        return entry
+
+    _finalize_download(tmp_dest, dest, file_name, out_dir, expected_md5, actual_md5, entry)
+    if entry.status == "ok":
+        _write_meta_for_direct(mod, dest, game_name, url)
+    return entry
+
+
+def _unsupported_entry(mod: dict[str, Any]) -> DownloadEntry:
+    src = mod.get("source") or {}
+    source_type = src.get("type") or "unknown"
+    instructions = (src.get("instructions") or mod.get("instructions") or "").strip()
+    return DownloadEntry(
+        name=mod.get("name") or "",
+        mod_id=None,
+        file_id=None,
+        tag=src.get("tag"),
+        md5=src.get("md5"),
+        update_policy=src.get("updatePolicy"),
+        install_mode=install_mode(mod),
+        optional=bool(mod.get("optional")),
+        phase=mod.get("phase", 0),
+        mod_type=(mod.get("details") or {}).get("type") or "",
+        source_type=str(source_type),
+        url=src.get("url"),
+        status="unsupported",
+        error=f"source type {source_type!r} not supported (instructions: {instructions or 'none'})",
+    )
+
+
+def _download_mod(
+    clients: _ThreadClients,
+    sessions: _ThreadSessions,
+    mod: dict[str, Any],
+    out_dir: Path,
+    domain: str,
+    game_name: str,
+) -> DownloadEntry:
+    source_type = (mod.get("source") or {}).get("type")
+    if source_type == "nexus":
+        return _download_one(clients, mod, out_dir, domain, game_name)
+    if source_type == "direct":
+        return _download_direct(sessions, mod, out_dir, domain, game_name)
+    return _unsupported_entry(mod)
 
 
 def _fmt_bytes(n: int) -> str:
@@ -312,22 +534,29 @@ def run_download(
 
     game_name = mo2_game_name(domain)
 
-    nexus_mods = [m for m in mods if (m.get("source") or {}).get("type") == "nexus"]
+    selected_mods = list(mods)
     if not include_optional:
-        nexus_mods = [m for m in nexus_mods if not m.get("optional")]
+        selected_mods = [m for m in selected_mods if not m.get("optional")]
     if limit is not None:
-        nexus_mods = nexus_mods[:limit]
+        selected_mods = selected_mods[:limit]
 
-    total = len(nexus_mods)
+    total = len(selected_mods)
     if total == 0:
-        print("no Nexus-sourced mods to download")
+        print("no mods to download")
         return 0
 
     out_dir.mkdir(parents=True, exist_ok=True)
     state = RunState(manifest=str(manifest_path.resolve()), domain=domain, game_name=game_name)
     clients = _ThreadClients(api_key)
+    sessions = _ThreadSessions()
 
-    counts: dict[str, int] = {"ok": 0, "skipped": 0, "md5_mismatch": 0, "error": 0}
+    counts: dict[str, int] = {
+        "ok": 0,
+        "skipped": 0,
+        "md5_mismatch": 0,
+        "error": 0,
+        "unsupported": 0,
+    }
     total_bytes = 0
     start = time.monotonic()
     downloads_json = out_dir / "downloads.json"
@@ -336,8 +565,8 @@ def run_download(
 
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         futures = {
-            pool.submit(_download_one, clients, mod, out_dir, domain, game_name): mod
-            for mod in nexus_mods
+            pool.submit(_download_mod, clients, sessions, mod, out_dir, domain, game_name): mod
+            for mod in selected_mods
         }
         for done, fut in enumerate(as_completed(futures), start=1):
             mod = futures[fut]
@@ -345,10 +574,15 @@ def run_download(
                 entry = fut.result()
             except Exception as e:  # noqa: BLE001 - never let one mod kill the run
                 src = mod.get("source") or {}
+                source_type = src.get("type") or "unknown"
+                mod_id = int(src["modId"]) if source_type == "nexus" and "modId" in src else None
+                file_id = (
+                    int(src["fileId"]) if source_type == "nexus" and "fileId" in src else None
+                )
                 entry = DownloadEntry(
                     name=mod.get("name") or "",
-                    mod_id=int(src.get("modId") or 0),
-                    file_id=int(src.get("fileId") or 0),
+                    mod_id=mod_id,
+                    file_id=file_id,
                     tag=src.get("tag"),
                     md5=src.get("md5"),
                     update_policy=src.get("updatePolicy"),
@@ -356,6 +590,8 @@ def run_download(
                     optional=bool(mod.get("optional")),
                     phase=mod.get("phase", 0),
                     mod_type=(mod.get("details") or {}).get("type") or "",
+                    source_type=str(source_type),
+                    url=src.get("url"),
                     status="error",
                     error=f"unexpected failure: {e}",
                 )
@@ -370,6 +606,7 @@ def run_download(
                 "skipped": "skip",
                 "md5_mismatch": "MISMATCH",
                 "error": "ERROR",
+                "unsupported": "unsupported",
             }.get(entry.status, entry.status)
             line = f"[{done}/{total}] {status_label:8s} {entry.file_name or entry.name}  {size_str}"
             if entry.error and entry.status != "skipped":
@@ -387,7 +624,8 @@ def run_download(
         f"done in {elapsed:.1f}s: ok={counts.get('ok', 0)} "
         f"skipped={counts.get('skipped', 0)} "
         f"md5_mismatch={counts.get('md5_mismatch', 0)} "
-        f"error={counts.get('error', 0)}  total={_fmt_bytes(total_bytes)}"
+        f"error={counts.get('error', 0)} "
+        f"unsupported={counts.get('unsupported', 0)}  total={_fmt_bytes(total_bytes)}"
     )
     print(f"downloads.json: {downloads_json.resolve()}")
 
