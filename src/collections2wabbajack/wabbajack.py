@@ -604,6 +604,10 @@ class ArchiveCheck:
     name: str
     source: str  # "nexus", "direct", "unrecognised", "missing"
     detail: str = ""
+    # The archive's parsed `[General]` .meta block, kept around so tool/companion-mod
+    # tracing can match on `modID`/`fileID`/`gameName`/`modName`/`directURL` without
+    # re-reading every .meta file a second time.
+    meta: dict[str, str] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -618,9 +622,23 @@ class InlineEntry:
 
 
 @dataclass
+class TracedEntry:
+    """A folder the compiler can reproduce from a `downloads/` archive.
+
+    Reported separately from `InlineEntry`: it costs nothing in the `.wabbajack`
+    (the archive is referenced, not stored) so it should neither count towards the
+    inline-size warning nor look like something the user needs to fix.
+    """
+
+    path: str  # relative, backslash form
+    archive: str  # the downloads/ archive name it traced to
+
+
+@dataclass
 class Checklist:
     archives: list[ArchiveCheck] = field(default_factory=list)
     inlined: list[InlineEntry] = field(default_factory=list)
+    traced: list[TracedEntry] = field(default_factory=list)
     game_state: list[InlineEntry] = field(default_factory=list)
     stock_game: Path | None = None
     instance_path_len: int = 0
@@ -678,20 +696,146 @@ def check_downloads(downloads: Path) -> list[ArchiveCheck]:
         if not meta_path.is_file():
             out.append(ArchiveCheck(entry.name, "missing", "no .meta sidecar"))
             continue
-        source, detail = classify_meta(read_meta(meta_path))
-        out.append(ArchiveCheck(entry.name, source, detail))
+        meta = read_meta(meta_path)
+        source, detail = classify_meta(meta)
+        out.append(ArchiveCheck(entry.name, source, detail, meta))
     return out
 
 
-def check_inlined(instance: Path, led: ledger_mod.Ledger) -> list[InlineEntry]:
-    """Folders with no archive behind them, i.e. what ends up inside the `.wabbajack`.
+def _archive_by_name(archives: list[ArchiveCheck]) -> dict[str, ArchiveCheck]:
+    return {a.name.lower(): a for a in archives}
 
-    A `mods/` folder the ledger attributes to a collection layer came out of an archive
-    in `downloads/`, so the compiler can reference it. Anything else -- mods the user
-    installed by hand, tool output, the `Tools/` binaries `c2wj tools` fetched -- has to
-    be stored in the modlist file itself.
+
+def _trace_via_installation_file(
+    mod_dir: Path, by_name: dict[str, ArchiveCheck]
+) -> ArchiveCheck | None:
+    """The archive `<mod_dir>/meta.ini`'s `installationFile=` names, if it resolves.
+
+    `installationFile=` is what MO2 (and Wabbajack, reading the same file) uses to tie
+    a mod folder back to its archive; `installer.py` and `tools.py`'s companion-mod
+    install path both write it, collection-owned or not.
     """
-    out: list[InlineEntry] = []
+    meta_ini = mod_dir / "meta.ini"
+    if not meta_ini.is_file():
+        return None
+    name = (read_meta(meta_ini).get("installationFile") or "").strip()
+    if not name:
+        return None
+    archive = by_name.get(name.lower())
+    return archive if archive and archive.ok else None
+
+
+def _trace_via_companion_record(
+    folder: str, led: ledger_mod.Ledger, by_name: dict[str, ArchiveCheck]
+) -> ArchiveCheck | None:
+    """The archive a tool's `companion_mods` record points at, for `folder`.
+
+    Fallback for a companion mod installed before it had a `meta.ini` (or one that
+    lost it): `tools[id]["companion_mods"]` records the Nexus mod/file id it resolved
+    to at install time, which is matched against every archive's `.meta`.
+    """
+    for owner in led.owners_of(folder):
+        if not owner.startswith("tool:"):
+            continue
+        tool_id = owner.split(":", 1)[1]
+        tool_record = (led.data.get("tools") or {}).get(tool_id) or {}
+        for companion in tool_record.get("companion_mods") or []:
+            if companion.get("folder") != folder:
+                continue
+            mod_id, file_id = companion.get("mod_id"), companion.get("file_id")
+            if not mod_id or not file_id:
+                continue
+            for archive in by_name.values():
+                if not archive.ok:
+                    continue
+                if str(archive.meta.get("modID") or "") == str(mod_id) and str(
+                    archive.meta.get("fileID") or ""
+                ) == str(file_id):
+                    return archive
+    return None
+
+
+def _trace_mod_archive(
+    mod_dir: Path, folder: str, led: ledger_mod.Ledger, by_name: dict[str, ArchiveCheck]
+) -> ArchiveCheck | None:
+    """The `downloads/` archive that reproduces `mods/<folder>`, if any resolves."""
+    return _trace_via_installation_file(mod_dir, by_name) or _trace_via_companion_record(
+        folder, led, by_name
+    )
+
+
+def _trace_tool_archive(
+    tool_id: str, led: ledger_mod.Ledger, archives: list[ArchiveCheck]
+) -> ArchiveCheck | None:
+    """The `downloads/` archive that reproduces `Tools/<tool_id>`, if any resolves.
+
+    `tools[id]` records no filename directly, so this matches the archive the same way
+    `tools.py`'s own `_write_tool_meta` produced it: first by the tool's display name
+    (the `.meta`'s `modName`, which is exactly `tools[id]["name"]`), then by the source
+    `tools.py` recorded (Nexus mod id, direct URL, GitHub release-asset pattern), and
+    finally a loose substring match as a last resort.
+    """
+    record = (led.data.get("tools") or {}).get(tool_id) or {}
+    name = (record.get("name") or "").strip().lower()
+    source = record.get("source") or {}
+    kind = source.get("type")
+    ok_archives = [a for a in archives if a.ok]
+
+    if name:
+        for archive in ok_archives:
+            if (archive.meta.get("modName") or "").strip().lower() == name:
+                return archive
+
+    if kind == "nexus":
+        domain = str(source.get("domain") or "").lower()
+        mod_id = str(source.get("mod_id") or "")
+        if domain and mod_id:
+            for archive in ok_archives:
+                if (archive.meta.get("gameName") or "").lower() == domain and str(
+                    archive.meta.get("modID") or ""
+                ) == mod_id:
+                    return archive
+    elif kind == "direct":
+        url = source.get("url") or ""
+        if url:
+            for archive in ok_archives:
+                if (archive.meta.get("directURL") or "") == url:
+                    return archive
+    elif kind == "github":
+        pattern = None
+        asset_pattern = source.get("asset")
+        if asset_pattern:
+            try:
+                pattern = re.compile(asset_pattern)
+            except re.error:
+                pattern = None
+        if pattern:
+            for archive in ok_archives:
+                if pattern.search(archive.name):
+                    return archive
+
+    if name:
+        for archive in ok_archives:
+            if name in archive.name.lower() or name in (archive.meta.get("directURL") or "").lower():
+                return archive
+    return None
+
+
+def _classify_mod_and_tool_folders(
+    instance: Path, led: ledger_mod.Ledger, archives: list[ArchiveCheck]
+) -> tuple[list[InlineEntry], list[TracedEntry]]:
+    """Split `mods/` and `Tools/` into what a `downloads/` archive can reproduce.
+
+    A `mods/` folder the ledger attributes to a collection layer (recorded `md5`) came
+    out of an archive already; anything else -- a tool binary, a tool's companion mod,
+    a mod the user installed by hand -- is only genuinely inlined once tracing it back
+    to a `downloads/` archive fails too. `Tools/<id>` output folders (`DynDOLOD_Output`,
+    `TexGen_Output`, ...) are not tools themselves and carry no ledger record, so they
+    fall through as ordinary archive-less user mods.
+    """
+    by_name = _archive_by_name(archives)
+    inlined: list[InlineEntry] = []
+    traced: list[TracedEntry] = []
     separators = led.separator_folders()
     mods = instance / "mods"
     if mods.is_dir():
@@ -702,15 +846,45 @@ def check_inlined(instance: Path, led: ledger_mod.Ledger) -> list[InlineEntry]:
             owners = led.owners_of(child.name)
             if record and record.get("md5"):
                 continue
+            archive = _trace_mod_archive(child, child.name, led, by_name)
+            if archive is not None:
+                traced.append(TracedEntry(_rel(child, instance), archive.name))
+                continue
             reason = "user mod" if owners == [ledger_mod.USER_OWNER] else "no archive recorded"
-            out.append(InlineEntry(_rel(child, instance), dir_size(child), reason))
+            inlined.append(InlineEntry(_rel(child, instance), dir_size(child), reason))
     tools = instance / "Tools"
     if tools.is_dir():
         for child in sorted(tools.iterdir()):
-            if child.is_dir():
-                out.append(InlineEntry(_rel(child, instance), dir_size(child), "tool binaries"))
-    out.extend(check_program_files(instance, led))
-    return out
+            if not child.is_dir():
+                continue
+            archive = _trace_tool_archive(child.name, led, archives)
+            if archive is not None:
+                traced.append(TracedEntry(_rel(child, instance), archive.name))
+                continue
+            inlined.append(InlineEntry(_rel(child, instance), dir_size(child), "tool binaries"))
+    return inlined, traced
+
+
+def check_inlined(instance: Path, led: ledger_mod.Ledger) -> list[InlineEntry]:
+    """Folders with no archive behind them, i.e. what ends up inside the `.wabbajack`.
+
+    A `mods/` folder the ledger attributes to a collection layer, a tool binary folder
+    a `downloads/` archive traces to, or a tool's companion mod likewise traced, all
+    came out of an archive the compiler can reference. Anything else -- mods the user
+    installed by hand, tool output, `Tools/` binaries with nothing behind them -- has to
+    be stored in the modlist file itself.
+    """
+    archives = check_downloads(instance / "downloads")
+    inlined, _traced = _classify_mod_and_tool_folders(instance, led, archives)
+    inlined.extend(check_program_files(instance, led))
+    return inlined
+
+
+def check_traced(instance: Path, led: ledger_mod.Ledger) -> list[TracedEntry]:
+    """`mods/`/`Tools/` folders a `downloads/` archive can reproduce -- not inlined."""
+    archives = check_downloads(instance / "downloads")
+    _inlined, traced = _classify_mod_and_tool_folders(instance, led, archives)
+    return traced
 
 
 def _read_build_meta(instance: Path) -> dict[str, Any]:
@@ -830,9 +1004,13 @@ def no_match_include(checklist: Checklist) -> list[str]:
 
 def precompile_checklist(instance: Path, led: ledger_mod.Ledger) -> Checklist:
     instance = Path(instance)
+    archives = check_downloads(instance / "downloads")
+    inlined, traced = _classify_mod_and_tool_folders(instance, led, archives)
+    inlined.extend(check_program_files(instance, led))
     checklist = Checklist(
-        archives=check_downloads(instance / "downloads"),
-        inlined=check_inlined(instance, led),
+        archives=archives,
+        inlined=inlined,
+        traced=traced,
         game_state=check_game_state(instance, led),
         stock_game=_stock_game_dir(instance, led),
         instance_path_len=len(str(instance)),
@@ -894,6 +1072,13 @@ def report_checklist(checklist: Checklist, rep: Reporter) -> None:
         rep.log(f"  ! {bad.name}: {bad.detail}")
     if len(checklist.bad_archives) > 20:
         rep.log(f"  ! ... and {len(checklist.bad_archives) - 20} more")
+
+    if checklist.traced:
+        rep.log(
+            f"traced to a downloads/ archive (not inlined): {len(checklist.traced)} "
+            "folder(s) -- tool binaries and tool-owned companion mods the compiler "
+            "can reference instead of storing"
+        )
 
     rep.log(f"inlined into the modlist: {len(checklist.inlined)} folder(s), {human(checklist.inlined_bytes)}")
     for entry in sorted(checklist.inlined, key=lambda e: -e.size)[:20]:
