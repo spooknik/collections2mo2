@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+.env
+work/
+*.7z
+*.zip
+.ruff_cache/
+tools/
+
+# any .env variant except the committed template
+.env*
+!.env.example
