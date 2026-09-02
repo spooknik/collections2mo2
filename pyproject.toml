@@ -9,10 +9,13 @@ dependencies = [
     "requests>=2.32",
     "python-dotenv>=1.0",
     "py7zr>=0.22",
+    "pyside6>=6.11.2",
+    "keyring>=25.7.0",
 ]
 
 [project.scripts]
 c2wj = "collections2wabbajack.cli:main"
+c2wj-gui = "collections2wabbajack.gui.app:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -32,5 +35,7 @@ markers = [
 
 [dependency-groups]
 dev = [
+    "pyinstaller>=6.22.2",
     "pytest>=9.1.1",
+    "pytest-qt>=4.5.0",
 ]
