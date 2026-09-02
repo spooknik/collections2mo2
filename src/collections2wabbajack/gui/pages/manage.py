@@ -61,12 +61,15 @@ class ManagePage(WizardPage):
         self._action_worker: EngineWorker | None = None
         self._instance: Path | None = None
         self._summary: api.InstanceSummary | None = None
+        self._busy = False
+        self._wabbajack_supported = True
+        self._update_supported = True
 
         layout = QVBoxLayout(self)
 
-        back_btn = QPushButton("<- Back to start")
-        back_btn.clicked.connect(lambda: self.custom_action.emit("reset:home"))
-        layout.addWidget(back_btn)
+        self.back_to_start_btn = QPushButton("<- Back to start")
+        self.back_to_start_btn.clicked.connect(lambda: self.custom_action.emit("reset:home"))
+        layout.addWidget(self.back_to_start_btn)
 
         recent_row = QHBoxLayout()
         recent_row.addWidget(QLabel("Recent:"))
@@ -79,12 +82,12 @@ class ManagePage(WizardPage):
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("path to an existing c2wj instance")
         pick_row.addWidget(self.path_edit)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self._browse)
-        pick_row.addWidget(browse_btn)
-        load_btn = QPushButton("Load")
-        load_btn.clicked.connect(self._load)
-        pick_row.addWidget(load_btn)
+        self.browse_btn = QPushButton("Browse...")
+        self.browse_btn.clicked.connect(self._browse)
+        pick_row.addWidget(self.browse_btn)
+        self.load_btn = QPushButton("Load")
+        self.load_btn.clicked.connect(self._load)
+        pick_row.addWidget(self.load_btn)
         layout.addLayout(pick_row)
 
         self.status_label = QLabel("")
@@ -103,22 +106,29 @@ class ManagePage(WizardPage):
         info_layout.addWidget(self.table)
 
         action_row = QHBoxLayout()
-        add_btn = QPushButton("Add collection...")
-        add_btn.clicked.connect(self._add_layer)
-        action_row.addWidget(add_btn)
-        remove_btn = QPushButton("Remove selected layer")
-        remove_btn.clicked.connect(self._remove_layer)
-        action_row.addWidget(remove_btn)
+        self.add_btn = QPushButton("Add collection...")
+        self.add_btn.clicked.connect(self._add_layer)
+        action_row.addWidget(self.add_btn)
+        self.remove_btn = QPushButton("Remove selected layer")
+        self.remove_btn.clicked.connect(self._remove_layer)
+        action_row.addWidget(self.remove_btn)
         self.update_btn = QPushButton("Update selected layer to latest")
         self.update_btn.clicked.connect(self._update_layer)
         action_row.addWidget(self.update_btn)
-        tools_btn = QPushButton("Install more tools...")
-        tools_btn.clicked.connect(self._install_tools)
-        action_row.addWidget(tools_btn)
+        self.tools_btn = QPushButton("Install more tools...")
+        self.tools_btn.clicked.connect(self._install_tools)
+        action_row.addWidget(self.tools_btn)
         self.wabbajack_btn = QPushButton("Export to Wabbajack")
         self.wabbajack_btn.clicked.connect(self._export_wabbajack)
         action_row.addWidget(self.wabbajack_btn)
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.clicked.connect(self._cancel)
+        action_row.addWidget(self.cancel_btn)
         action_row.addStretch(1)
+        self.busy_label = QLabel("An operation is in progress...")
+        self.busy_label.setVisible(False)
+        action_row.addWidget(self.busy_label)
         info_layout.addLayout(action_row)
 
         # Same widget the Progress page uses for a full `create` run -- every
@@ -134,12 +144,13 @@ class ManagePage(WizardPage):
         self.set_ready(False)
 
     def on_enter(self) -> None:
-        if not api.has_wabbajack_support():
-            self.wabbajack_btn.setEnabled(False)
+        self._wabbajack_supported = api.has_wabbajack_support()
+        if not self._wabbajack_supported:
             self.wabbajack_btn.setToolTip("Coming soon: wabbajack.py has not landed yet.")
-        if not api.has_update_support():
-            self.update_btn.setEnabled(False)
+        self._update_supported = api.has_update_support()
+        if not self._update_supported:
             self.update_btn.setToolTip("Coming soon: update.py has not landed yet.")
+        self._apply_enabled_state()
         self._refresh_recent_combo()
         # First time this page is shown this session and nothing has been picked yet
         # (including by a Home-page recent-instance button, which sets the path field
@@ -148,6 +159,48 @@ class ManagePage(WizardPage):
             recent = recents.most_recent_valid()
             if recent is not None:
                 self.load_path(recent.path)
+
+    # -- busy state: one operation (add/remove/update/tools/export) at a time --------
+
+    def _apply_enabled_state(self) -> None:
+        """(Re)apply enabled/visible state to every gated control from `self._busy`
+        plus each control's own unrelated feature-availability flag."""
+        busy = self._busy
+        self.back_to_start_btn.setEnabled(not busy)
+        self.browse_btn.setEnabled(not busy)
+        self.load_btn.setEnabled(not busy)
+        self.add_btn.setEnabled(not busy)
+        self.remove_btn.setEnabled(not busy)
+        self.update_btn.setEnabled(not busy and self._update_supported)
+        self.tools_btn.setEnabled(not busy)
+        self.wabbajack_btn.setEnabled(not busy and self._wabbajack_supported)
+        self.cancel_btn.setEnabled(busy)
+        self.busy_label.setVisible(busy)
+
+    def _set_busy(self, busy: bool) -> None:
+        if busy == self._busy:
+            return
+        self._busy = busy
+        self._apply_enabled_state()
+        self.busy_changed.emit(busy)
+
+    def _refuse_busy(self) -> None:
+        QMessageBox.warning(
+            self,
+            "Operation in progress",
+            "An operation is already running. Wait for it to finish, or cancel it, first.",
+        )
+
+    def _cancel(self) -> None:
+        if self._action_worker is not None:
+            self._action_worker.reporter.cancel()
+            self.cancel_btn.setEnabled(False)
+            self._append_log("cancelling (stops between stages)...")
+
+    def request_cancel(self) -> None:
+        """Called by the window when the user chooses to quit while an action here is
+        still in progress (see `WizardWindow.closeEvent`)."""
+        self._cancel()
 
     def load_path(self, path: str) -> None:
         """Set the instance path and load it -- used by Home's recent-instance
@@ -176,6 +229,9 @@ class ManagePage(WizardPage):
             self.path_edit.setText(chosen)
 
     def _load(self) -> None:
+        if self._busy:
+            self._refuse_busy()
+            return
         text = self.path_edit.text().strip()
         if not text:
             self.status_label.setText("Choose an instance folder first.")
@@ -223,13 +279,47 @@ class ManagePage(WizardPage):
     def _append_log(self, text: str, level: str = "info") -> None:
         self.action_progress.log_message(text, level=level)
 
-    def _make_reporter(self) -> QtReporter:
+    def _run_action(self, operation_name: str, fn, kwargs: dict, on_success) -> None:
+        """Start one Manage-tab action (add/remove/update/tools/export) as a busy,
+        cancellable, mutually-exclusive operation: refuses if another action is
+        already running, otherwise puts the page in the busy state (see
+        `_set_busy`), wires the worker's `succeeded`/`failed`/`cancelled` signals to
+        always clear it and freeze the progress widget (`ProgressWidget.finish()`),
+        and appends a timestamped separator to the log instead of clearing it."""
+        if self._busy:
+            self._refuse_busy()
+            return
         reporter = QtReporter()
-        self.action_progress.reset()
+        self.action_progress.reset(operation_name)
         self.action_progress.attach(reporter)
-        return reporter
+        worker = EngineWorker(fn, kwargs, reporter=reporter)
+        self._action_worker = worker
+
+        def _succeeded(result: object) -> None:
+            self._set_busy(False)
+            self.action_progress.finish()
+            on_success(result)
+
+        def _failed(message: str) -> None:
+            self._set_busy(False)
+            self.action_progress.finish()
+            self._append_log(message, level="error")
+
+        def _cancelled() -> None:
+            self._set_busy(False)
+            self.action_progress.finish()
+            self._append_log(f"{operation_name}: cancelled by user")
+
+        worker.succeeded.connect(_succeeded)
+        worker.failed.connect(_failed)
+        worker.cancelled.connect(_cancelled)
+        self._set_busy(True)
+        worker.start()
 
     def _add_layer(self) -> None:
+        if self._busy:
+            self._refuse_busy()
+            return
         if self._instance is None:
             self.status_label.setText("Load an instance first.")
             return
@@ -239,17 +329,17 @@ class ManagePage(WizardPage):
         url = dialog.url()
         if not url:
             return
-        reporter = self._make_reporter()
-        self._action_worker = EngineWorker(
+        self._run_action(
+            "Add collection",
             api.add_collection_layer,
             {"instance_dir": self._instance, "url": url},
-            reporter=reporter,
+            lambda rc: self._on_action_done("add", rc),
         )
-        self._action_worker.succeeded.connect(lambda rc: self._on_action_done("add", rc))
-        self._action_worker.failed.connect(lambda m: self._append_log(m, level="error"))
-        self._action_worker.start()
 
     def _remove_layer(self) -> None:
+        if self._busy:
+            self._refuse_busy()
+            return
         if self._instance is None:
             return
         row = self.table.currentRow()
@@ -266,17 +356,17 @@ class ManagePage(WizardPage):
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
-        reporter = self._make_reporter()
-        self._action_worker = EngineWorker(
+        self._run_action(
+            "Remove layer",
             api.remove_collection_layer,
             {"instance_dir": self._instance, "slug": slug, "force": is_base},
-            reporter=reporter,
+            lambda rc: self._on_action_done("remove", rc),
         )
-        self._action_worker.succeeded.connect(lambda rc: self._on_action_done("remove", rc))
-        self._action_worker.failed.connect(lambda m: self._append_log(m, level="error"))
-        self._action_worker.start()
 
     def _update_layer(self) -> None:
+        if self._busy:
+            self._refuse_busy()
+            return
         if self._instance is None:
             self.status_label.setText("Load an instance first.")
             return
@@ -297,15 +387,12 @@ class ManagePage(WizardPage):
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
-        reporter = self._make_reporter()
-        self._action_worker = EngineWorker(
+        self._run_action(
+            "Update layer",
             api.update_collection_layer,
             {"instance_dir": self._instance, "slug": slug, "to": "latest"},
-            reporter=reporter,
+            lambda rc: self._on_action_done("update", rc),
         )
-        self._action_worker.succeeded.connect(lambda rc: self._on_action_done("update", rc))
-        self._action_worker.failed.connect(lambda m: self._append_log(m, level="error"))
-        self._action_worker.start()
 
     def _on_action_done(self, action: str, rc: int) -> None:
         self._append_log(f"{action}: {'ok' if rc == 0 else 'failed, see log above'}")
@@ -313,6 +400,9 @@ class ManagePage(WizardPage):
             self._load()
 
     def _install_tools(self) -> None:
+        if self._busy:
+            self._refuse_busy()
+            return
         if self._instance is None:
             self.status_label.setText("Load an instance first.")
             return
@@ -338,29 +428,28 @@ class ManagePage(WizardPage):
         ids = [tool_id for tool_id, cb in checkboxes.items() if cb.isChecked()]
         if not ids:
             return
-        reporter = self._make_reporter()
-        self._action_worker = EngineWorker(
+        self._run_action(
+            "Install tools",
             api.install_more_tools,
             {"instance_dir": self._instance, "tool_ids": ids},
-            reporter=reporter,
+            lambda ok: self._append_log("tools: done" if ok else "tools: failed"),
         )
-        self._action_worker.succeeded.connect(lambda ok: self._append_log("tools: done" if ok else "tools: failed"))
-        self._action_worker.failed.connect(lambda m: self._append_log(m, level="error"))
-        self._action_worker.start()
 
     def _export_wabbajack(self) -> None:
+        if self._busy:
+            self._refuse_busy()
+            return
         if self._instance is None:
             return
         if not api.has_wabbajack_support():
             QMessageBox.information(self, "Coming soon", "Wabbajack export is not available yet.")
             return
-        reporter = self._make_reporter()
-        self._action_worker = EngineWorker(
-            api.export_to_wabbajack, {"instance_dir": self._instance}, reporter=reporter
+        self._run_action(
+            "Export to Wabbajack",
+            api.export_to_wabbajack,
+            {"instance_dir": self._instance},
+            lambda rc: self._append_log("wabbajack: done" if rc == 0 else "wabbajack: failed"),
         )
-        self._action_worker.succeeded.connect(lambda rc: self._append_log("wabbajack: done" if rc == 0 else "wabbajack: failed"))
-        self._action_worker.failed.connect(lambda m: self._append_log(m, level="error"))
-        self._action_worker.start()
 
     def on_leave(self) -> bool:
         return False

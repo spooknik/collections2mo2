@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -66,6 +67,11 @@ class WizardWindow(QMainWindow):
         self._current = "signin"
         self._checking_signin = False
         self._signin_worker: EngineWorker | None = None
+        # One busy state for the whole window: True while any page's `busy_changed`
+        # says it has a worker in flight (a Manage-tab action, a full pipeline run).
+        # Blocks navigation/second-operation attempts and gates closing -- see
+        # `_set_busy`, `_on_custom_action` and `closeEvent`.
+        self._busy = False
 
         self.stack = QStackedWidget()
 
@@ -137,6 +143,7 @@ class WizardWindow(QMainWindow):
         self.stack.addWidget(page)
         page.ready_changed.connect(self._update_nav)
         page.custom_action.connect(self._on_custom_action)
+        page.busy_changed.connect(self._set_busy)
 
     # -- sign-in: validate a saved key in the background, without blocking Home -----
 
@@ -169,15 +176,23 @@ class WizardWindow(QMainWindow):
         else:
             self.account_label.setText("Not signed in")
         self.account_btn.setText("Change key" if self.state.signin is not None else "Sign in")
+        self.account_btn.setEnabled(not self._busy)
         self.header_bar.setVisible(self._current != "signin")
+
+    def _set_busy(self, busy: bool) -> None:
+        """Wired to every page's `busy_changed` -- one busy state for the whole
+        window, since only one page runs a worker at a time (navigation is blocked
+        while busy, so the user can't be looking at a second page)."""
+        self._busy = busy
+        self._update_nav()
 
     def _update_nav(self, *_args) -> None:
         page = self.pages[self._current]
         is_progress = self._current == "progress"
         self.nav_bar.setVisible(not is_progress)
-        self.back_btn.setEnabled(bool(self._history))
+        self.back_btn.setEnabled(bool(self._history) and not self._busy)
         self.next_btn.setVisible(self._current not in NO_NEXT)
-        self.next_btn.setEnabled(page.is_ready())
+        self.next_btn.setEnabled(page.is_ready() and not self._busy)
         self.setWindowTitle(f"collections2wabbajack -- {page.title}")
         self._update_account_bar()
 
@@ -206,6 +221,18 @@ class WizardWindow(QMainWindow):
         self._update_nav()
 
     def _on_custom_action(self, action: str) -> None:
+        # Every custom_action that changes what's on screen is a navigation move; the
+        # buttons that emit these are already disabled while busy (see
+        # `ManagePage._apply_enabled_state`, and `nav_bar`/`next_btn` above), but this
+        # is the last line of defence against "somehow triggered it anyway" (e.g. a
+        # queued signal that fires just as a worker starts).
+        if self._busy:
+            QMessageBox.warning(
+                self,
+                "Operation in progress",
+                "An operation is already running. Wait for it to finish, or cancel it, first.",
+            )
+            return
         if action.startswith("goto:"):
             self._navigate_to(action.split(":", 1)[1], push_history=True)
         elif action == "start_run":
@@ -233,12 +260,26 @@ class WizardWindow(QMainWindow):
             self.pages[name] = new_page
             new_page.ready_changed.connect(self._update_nav)
             new_page.custom_action.connect(self._on_custom_action)
+            new_page.busy_changed.connect(self._set_busy)
             self.stack.insertWidget(idx, new_page)
         self._history.clear()
         self._current = "home"
         self.stack.setCurrentWidget(self.pages["home"])
         self.pages["home"].on_enter()
         self._update_nav()
+
+    def closeEvent(self, event) -> None:
+        if self._busy:
+            confirm = QMessageBox.question(
+                self,
+                "Operation in progress",
+                "An operation is still running. Cancel it and quit?",
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            self.pages[self._current].request_cancel()
+        event.accept()
 
 
 def main(argv: list[str] | None = None) -> int:

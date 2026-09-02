@@ -480,3 +480,217 @@ def test_manage_page_auto_loads_most_recent_valid_instance(qtbot, monkeypatch, _
     qtbot.waitSignal(page._load_worker.failed, timeout=2000)
     qtbot.wait(50)
     assert loaded_paths == [str(valid_dir)]
+
+
+# -- idle/busy progress state, mutual exclusion, close-while-busy -----------------------
+# (product-owner-reported bugs: the progress widget looked "active" before any operation
+# started and its elapsed timer never stopped; two operations could run concurrently and
+# silently share one log/progress widget; the window could be closed mid-operation.)
+
+
+def test_progress_widget_idle_on_construction(qtbot):
+    """Fresh widget, page just loaded, no operation started yet: determinate 0%, not
+    spinning, and the tick timer is a no-op (no elapsed line)."""
+    widget = ProgressWidget()
+    qtbot.addWidget(widget)
+
+    assert widget.progress_bar.maximum() != 0  # determinate, not indeterminate/animating
+    assert widget.progress_bar.value() == 0
+    assert widget.rate_label.text() == ""
+    assert widget._operation_running is False
+
+    # A tick landing before any operation starts must not conjure up an elapsed line.
+    widget._on_tick()
+    assert widget.rate_label.text() == ""
+
+
+def test_progress_widget_finish_stops_and_freezes_elapsed(qtbot):
+    """`reset()` starts the elapsed tick; `finish()` (operation done/failed/cancelled)
+    must stop it and freeze whatever value was last shown -- not keep counting up."""
+    widget = ProgressWidget()
+    qtbot.addWidget(widget)
+    reporter = QtReporter()
+    widget.attach(reporter)
+
+    widget.reset()
+    reporter.stage("fetch")
+    reporter._flush()
+    assert widget._operation_running is True
+
+    widget._stage_started_at -= 5  # simulate 5s having elapsed, without a real sleep
+    widget._on_tick()
+    running_text = widget.rate_label.text()
+    assert running_text.startswith("Elapsed")
+
+    widget.finish()
+    assert widget._operation_running is False
+    assert widget.progress_bar.maximum() != 0  # no longer left spinning
+
+    # Further ticks (as the real 1s QTimer would still deliver) must not advance it.
+    widget._stage_started_at -= 5
+    widget._on_tick()
+    assert widget.rate_label.text() == running_text
+
+
+def test_progress_widget_reset_with_operation_name_keeps_log(qtbot):
+    """Manage-tab actions reuse one widget across several operations -- the log must
+    grow a timestamped separator, not be wiped, so earlier output stays readable."""
+    widget = ProgressWidget()
+    qtbot.addWidget(widget)
+    widget.log_message("first operation's output")
+
+    widget.reset("Install tools")
+
+    text = widget.log_view.toPlainText()
+    assert "first operation's output" in text  # not cleared
+    assert "Install tools" in text  # separator names the new operation
+
+
+def test_manage_page_busy_state_blocks_buttons_and_second_operation(qtbot, monkeypatch):
+    """Starting one action disables the other action buttons (and Load/Browse/
+    Back-to-start) and shows the busy label; a second attempt while busy is refused
+    rather than started as a concurrent worker; completion re-enables everything."""
+    import threading
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from collections2wabbajack import api
+    from collections2wabbajack.gui.pages.manage import ManagePage
+    from collections2wabbajack.gui.state import WizardState
+
+    release = threading.Event()
+
+    def fake_add(instance_dir, url, reporter=None):
+        release.wait(5)
+        return 0
+
+    monkeypatch.setattr(api, "add_collection_layer", fake_add)
+    warnings: list[str] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append("warned"))
+
+    page = ManagePage(WizardState())
+    qtbot.addWidget(page)
+    page._instance = Path("C:/fake/instance")
+
+    busy_events: list[bool] = []
+    page.busy_changed.connect(busy_events.append)
+
+    page._run_action(
+        "Add collection", api.add_collection_layer, {"instance_dir": page._instance, "url": "x"}, lambda rc: None
+    )
+
+    assert page._busy is True
+    assert page.add_btn.isEnabled() is False
+    assert page.remove_btn.isEnabled() is False
+    assert page.update_btn.isEnabled() is False
+    assert page.tools_btn.isEnabled() is False
+    assert page.wabbajack_btn.isEnabled() is False
+    assert page.load_btn.isEnabled() is False
+    assert page.browse_btn.isEnabled() is False
+    assert page.back_to_start_btn.isEnabled() is False
+    assert page.cancel_btn.isEnabled() is True
+    assert page.busy_label.isHidden() is False  # shown -- isVisible() needs page.show()
+    assert busy_events == [True]
+
+    first_worker = page._action_worker
+    page._add_layer()  # a second attempt while busy: refused, not a second worker
+    assert page._action_worker is first_worker
+    assert warnings == ["warned"]
+
+    release.set()
+    qtbot.waitSignal(first_worker.finished, timeout=2000)
+    qtbot.wait(50)
+
+    assert page._busy is False
+    assert page.add_btn.isEnabled() is True
+    assert page.load_btn.isEnabled() is True
+    assert page.cancel_btn.isEnabled() is False
+    assert page.busy_label.isHidden() is True
+    assert busy_events == [True, False]
+
+
+def test_window_close_while_busy_prompts_and_can_be_declined(qtbot, monkeypatch):
+    """Closing the window while an operation is running must confirm first; declining
+    must leave the window open and the operation running."""
+    import threading
+
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QMessageBox
+
+    from collections2wabbajack import api
+    from collections2wabbajack.gui.app import WizardWindow
+
+    monkeypatch.setattr(api, "get_saved_api_key", lambda: None)
+    window = WizardWindow()
+    qtbot.addWidget(window)
+
+    release = threading.Event()
+
+    def fake_export(instance_dir, reporter=None):
+        release.wait(5)
+        return 0
+
+    monkeypatch.setattr(api, "export_to_wabbajack", fake_export)
+    manage = window.pages["manage"]
+    manage._instance = Path("C:/fake/instance")
+    manage._run_action(
+        "Export to Wabbajack", api.export_to_wabbajack, {"instance_dir": manage._instance}, lambda rc: None
+    )
+    assert window._busy is True
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert event.isAccepted() is False  # declined -- window stays open
+    assert window._busy is True  # operation was left running
+
+    release.set()
+    worker = manage._action_worker
+    qtbot.waitSignal(worker.finished, timeout=2000)
+    qtbot.wait(50)
+    assert window._busy is False
+
+
+def test_window_close_while_busy_confirmed_cancels_and_accepts(qtbot, monkeypatch):
+    """Confirming the close-while-busy prompt cancels the in-flight operation (via
+    `request_cancel`) and lets the window close."""
+    import threading
+
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QMessageBox
+
+    from collections2wabbajack import api
+    from collections2wabbajack.gui.app import WizardWindow
+
+    monkeypatch.setattr(api, "get_saved_api_key", lambda: None)
+    window = WizardWindow()
+    qtbot.addWidget(window)
+
+    def fake_export(instance_dir, reporter=None):
+        from collections2wabbajack.api import OperationCancelled
+
+        while not reporter.is_cancelled():
+            threading.Event().wait(0.05)
+        raise OperationCancelled("cancelled")
+
+    monkeypatch.setattr(api, "export_to_wabbajack", fake_export)
+    manage = window.pages["manage"]
+    manage._instance = Path("C:/fake/instance")
+    # In real use the window can only be busy while Manage (or Progress) is the
+    # current page, since navigation is blocked while busy -- fake that here since
+    # this test drives the worker directly rather than through a button click.
+    window._current = "manage"
+    manage._run_action(
+        "Export to Wabbajack", api.export_to_wabbajack, {"instance_dir": manage._instance}, lambda rc: None
+    )
+    assert window._busy is True
+    worker = manage._action_worker
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert event.isAccepted() is True
+
+    qtbot.waitSignal(worker.finished, timeout=2000)
+    qtbot.wait(50)
+    assert window._busy is False

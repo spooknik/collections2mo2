@@ -14,10 +14,18 @@ class WizardPage(QWidget):
     `ready_changed(bool)` gates the window's Next button. `custom_action(str)` is a
     small event bus for actions that are not "advance to the next page" (starting the
     run, jumping to the Manage screen, ...) -- the window listens for specific strings.
+
+    `busy_changed(bool)` marks this page as running a cancellable background operation
+    (a `create`/`add` pipeline run, a Manage-tab action): the window uses it to
+    maintain one busy state for the whole window (blocking navigation, warning on a
+    second attempt to start something, confirming before closing) -- see
+    `WizardWindow._set_busy`. Only pages that actually launch an `EngineWorker` need
+    to emit it; the default here is simply never emitting it (never busy).
     """
 
     ready_changed = Signal(bool)
     custom_action = Signal(str)
+    busy_changed = Signal(bool)
 
     title = "Page"
 
@@ -40,3 +48,8 @@ class WizardPage(QWidget):
     def on_leave(self) -> bool:
         """Called when Next is pressed; write into `self.state` here. False blocks."""
         return True
+
+    def request_cancel(self) -> None:
+        """Cancel whatever background operation this page owns, if any -- called by
+        the window when the user chooses to quit while busy. Default: no-op, for
+        pages that never go busy."""

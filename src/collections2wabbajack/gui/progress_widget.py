@@ -80,7 +80,8 @@ class ProgressWidget(QWidget):
         layout.addWidget(self.stage_label)
 
         self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(0)
         layout.addWidget(self.progress_bar)
 
         self.counter_label = QLabel("")
@@ -103,10 +104,17 @@ class ProgressWidget(QWidget):
         self._stage_started_at = time.monotonic()
         self._byte_progress_active = False
         self._user_scrolled_up = False
+        # False until `reset()` marks a new operation as started; gates both the
+        # elapsed-time tick (`_on_tick`) and (indirectly, since `_on_stage` only ever
+        # fires while an operation is running) the indeterminate bar -- see the class
+        # docstring in the module header and `reset()`/`finish()` below.
+        self._operation_running = False
         self.log_view.verticalScrollBar().valueChanged.connect(self._on_scroll)
 
         # Ticks the elapsed-time line for stages with no bytes-level progress (fetch,
         # profile, build, ...), which otherwise only ever get a done()/stage() call.
+        # Runs continuously; `_on_tick` itself no-ops while idle or once `finish()`
+        # has been called, so nothing needs to start/stop this timer.
         self._tick_timer = QTimer(self)
         self._tick_timer.setInterval(1000)
         self._tick_timer.timeout.connect(self._on_tick)
@@ -123,8 +131,21 @@ class ProgressWidget(QWidget):
         reporter.warned.connect(lambda m: self.log_message(m, level="warn"))
         reporter.stageDone.connect(self._on_done)
 
-    def reset(self) -> None:
-        self.log_view.clear()
+    def reset(self, operation_name: str | None = None) -> None:
+        """Call right before starting a new operation (a fresh `EngineWorker`/
+        `reporter`). Marks the widget as busy: the bar goes indeterminate ("Starting
+        ...", total not known yet) and the elapsed-time tick resumes. Pair with
+        `finish()` once the operation completes/fails/is cancelled.
+
+        `operation_name`, when given, means "this widget is being reused for another
+        operation on the same page" (Manage-tab actions): instead of clearing the log
+        pane, a timestamped separator line is appended so earlier operations' output
+        stays readable. Omit it (the default) to clear the log outright, as a brand
+        new `create`/`add` pipeline run on the Progress page does."""
+        if operation_name is not None:
+            self.log_message(f"----- {operation_name} - {time.strftime('%H:%M:%S')} -----")
+        else:
+            self.log_view.clear()
         self.stage_label.setText("Starting...")
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setValue(0)
@@ -136,6 +157,19 @@ class ProgressWidget(QWidget):
         self._stage_started_at = time.monotonic()
         self._byte_progress_active = False
         self._user_scrolled_up = False
+        self._operation_running = True
+
+    def finish(self) -> None:
+        """Call once the operation this widget is tracking completes, fails, or is
+        cancelled. Freezes the elapsed-time line at its last value (the tick stops
+        updating it) and, if the bar was left indeterminate (a stage with no known
+        total was still "current" when the operation ended), settles it back to a
+        determinate 0% rather than leaving it spinning forever."""
+        self._operation_running = False
+        self._byte_progress_active = False
+        if self.progress_bar.maximum() == 0:
+            self.progress_bar.setRange(0, 1)
+            self.progress_bar.setValue(0)
 
     # -- log pane: tinted warnings/errors, auto-scroll unless the user scrolled up ----
 
@@ -216,7 +250,7 @@ class ProgressWidget(QWidget):
         self.log_message(f"-- {name}: {summary}" if summary else f"-- {name}")
 
     def _on_tick(self) -> None:
-        if self._current_stage and not self._byte_progress_active:
+        if self._operation_running and self._current_stage and not self._byte_progress_active:
             self._update_elapsed()
 
     def _update_elapsed(self) -> None:

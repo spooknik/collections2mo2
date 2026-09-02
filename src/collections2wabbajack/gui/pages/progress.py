@@ -57,6 +57,7 @@ class ProgressPage(WizardPage):
         self.launch_btn.setVisible(False)
         self.open_folder_btn.setVisible(False)
         self.back_btn.setVisible(False)
+        self.busy_changed.emit(True)
 
         reporter = QtReporter()
         self.panel.attach(reporter)
@@ -86,8 +87,14 @@ class ProgressPage(WizardPage):
             self.cancel_btn.setEnabled(False)
             self.panel.stage_label.setText("Cancelling (stops between stages)...")
 
+    def request_cancel(self) -> None:
+        """Called by the window when the user chooses to quit while this page's run
+        is still in progress (see `WizardWindow.closeEvent`)."""
+        self._cancel()
+
     def _on_finished(self, rc: int) -> None:
         self.cancel_btn.setEnabled(False)
+        self.panel.finish()
         self.panel.progress_bar.setRange(0, 1)
         if rc == 0:
             self.panel.progress_bar.setValue(1)
@@ -101,6 +108,7 @@ class ProgressPage(WizardPage):
             self.panel.stage_label.setText("Did not finish -- see the log above.")
             self.state.run_succeeded = False
         self.back_btn.setVisible(True)
+        self.busy_changed.emit(False)
 
     def _remember_instance(self) -> None:
         if self.state.instance_dir is None:
@@ -110,17 +118,21 @@ class ProgressPage(WizardPage):
 
     def _on_failed(self, message: str) -> None:
         self.cancel_btn.setEnabled(False)
+        self.panel.finish()
         self.panel.stage_label.setText("Failed.")
         self.panel.log_message(f"error: {message}", level="error")
         self.state.run_succeeded = False
         self.back_btn.setVisible(True)
+        self.busy_changed.emit(False)
 
     def _on_cancelled(self) -> None:
         self.cancel_btn.setEnabled(False)
+        self.panel.finish()
         self.panel.stage_label.setText("Cancelled.")
         self.panel.log_message("cancelled by user")
         self.state.run_succeeded = False
         self.back_btn.setVisible(True)
+        self.busy_changed.emit(False)
 
     def _launch(self) -> None:
         if self.state.instance_dir is None:
