@@ -555,7 +555,16 @@ def cmd_install(args: argparse.Namespace, reporter: Reporter | None = None) -> i
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     mods = manifest.get("mods", [])
     by_tag = {(m.get("source") or {}).get("tag"): m for m in mods}
-    folder_names = assign_folder_names(mods)
+    # `taken_folders` / `folder_suffix` are set only by the layering orchestrator
+    # (`create.add_layer`), which calls this with a Namespace of its own rather than
+    # parsed CLI args. They carry the `mods/` folders other collection layers already
+    # own, so that a name clash on a *different* archive gets this layer its own
+    # ` ~<slug>` folder instead of silently reusing (or overwriting) the other one's.
+    folder_names = assign_folder_names(
+        mods,
+        taken=getattr(args, "taken_folders", None),
+        suffix=getattr(args, "folder_suffix", "") or "",
+    )
     order = {(m.get("source") or {}).get("tag"): i for i, m in enumerate(mods)}
 
     overrides: dict[str, Any] = {}

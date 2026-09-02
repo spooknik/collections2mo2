@@ -32,6 +32,36 @@ skips finished stages), copies the game into `Stock Game` so patchers never touc
 install, and records ownership of every mod in `c2wj-instance.json`. `tools` installs optional
 modding tools under `Tools\` and registers them as MO2 executables (`c2wj tools list`).
 
+## Layering collections
+
+An instance can hold several collections. `add` installs an add-on collection (one that
+assumes the base list is already present) on top of an existing instance as a new layer;
+`remove` takes it back off.
+
+```
+uv run c2wj add https://www.nexusmods.com/games/skyrimspecialedition/collections/xk05aw ^
+    --instance "E:\c2wj-test\h2uqa3"
+uv run c2wj remove xk05aw --instance "E:\c2wj-test\h2uqa3"
+```
+
+Every mod a layer installs is owned by `collection:<slug>@<rev>` in `c2wj-instance.json`.
+A mod both collections pin to the *same* file (SKSE, Address Library, ...) keeps one
+folder with two owners and is not reinstalled; one that clashes by name only gets its own
+`<name> ~<slug>` folder. The profile is then rendered from all layers at once: the base
+collection's block with its phase separators, then each add-on behind a
+`<Collection name>_separator`, with `modRules` resolved across the layers so an add-on can
+order itself against a base mod. Mods you installed by hand keep their place in
+`modlist.txt`, and so do MO2's own DLC / Creation Club rows.
+
+If a collection pins a Nexus file its author has since deleted, the download 404s forever;
+`--allow-missing` carries on without those mods and lists them (an md5 mismatch still stops
+the run).
+
+`remove` deletes only the folders that layer alone owns, drops it from the owners of the
+shared ones, reverts exactly the INI keys it set (the ledger records the value each key
+had before it), and re-renders the profile. Archives stay in `downloads/` unless you pass
+`--purge-downloads`. Removing the base layer is refused without `--force`.
+
 ## Stage-by-stage
 
 ```

@@ -9,12 +9,21 @@ those commands default to. The result is a self-contained instance:
     <out>/downloads/                 MO2's download folder *and* our archive store
     <out>/c2wj-instance.json         the ledger: who owns which mod folder
     <out>/c2wj/collections/<slug>/<revision>/archive/collection.json
-    <out>/c2wj/{downloads,inspect,install,survey,profile-report}.json
+    <out>/c2wj/<slug>-<rev>.{downloads,inspect,install,survey}.json
+    <out>/c2wj/profile-report.json   the profile, rendered from *all* layers at once
 
 Every stage is skipped when its output is already there and consistent with the
 stage before it, so an interrupted run resumes and a repeat run is a no-op. The
 skip checks live here rather than in the stages: they compare each stage's JSON
 against the previous stage's, which only the orchestrator can see.
+
+`create` is "initialise an instance, add its first collection layer, build it".
+`c2wj add` (see `layers.py`) runs the same `add_layer` against an instance that
+already exists, which is why the stage JSON is named per layer: a second
+collection must not overwrite the first one's record of what it downloaded and
+installed. Instances written before layering carry plain `downloads.json` /
+`inspect.json` / `install.json`; `migrate_instance` renames those onto the base
+layer's names the first time one of the commands touches such an instance.
 """
 
 from __future__ import annotations
@@ -40,8 +49,13 @@ from .reporter import Reporter, get_reporter
 # files all share Windows' 260-character budget.
 PATH_WARN_LEN = 40
 
-# Files in a reused download store that are ours, not archives.
-_NOT_ARCHIVES = {"downloads.json", "inspect.json", "install.json", "survey.json"}
+# The stage JSON a layer owns, as `LayerPaths attribute -> pre-layering file name`.
+STAGE_FILES = {
+    "downloads_json": "downloads.json",
+    "inspect_json": "inspect.json",
+    "install_json": "install.json",
+    "survey_json": "survey.json",
+}
 
 
 @dataclass
@@ -57,7 +71,7 @@ class StageResult:
 
 @dataclass
 class Run:
-    """Bookkeeping for one `create` invocation."""
+    """Bookkeeping for one `create` / `add` invocation."""
 
     reporter: Reporter
     stages: list[StageResult] = field(default_factory=list)
@@ -81,6 +95,8 @@ class Run:
 
 @dataclass(frozen=True)
 class Paths:
+    """The instance-wide folders. Anything per-collection lives in `LayerPaths`."""
+
     out: Path
 
     @property
@@ -100,28 +116,68 @@ class Paths:
         return self.out / "mods"
 
     @property
-    def downloads_json(self) -> Path:
-        return self.c2wj / "downloads.json"
-
-    @property
-    def inspect_json(self) -> Path:
-        return self.c2wj / "inspect.json"
-
-    @property
-    def install_json(self) -> Path:
-        return self.c2wj / "install.json"
-
-    @property
-    def survey_json(self) -> Path:
-        return self.c2wj / "survey.json"
-
-    @property
     def profile_report(self) -> Path:
         return self.c2wj / "profile-report.json"
 
     @property
     def build_meta(self) -> Path:
         return self.out / "c2wj-build.json"
+
+
+@dataclass(frozen=True)
+class LayerPaths:
+    """One collection layer's stage JSON, namespaced by `<slug>-<revision>`.
+
+    Layers share `mods/` and `downloads/` -- that is the point, one MO2 mods tree and
+    one archive store -- but each keeps its own record of what it downloaded, inspected
+    and installed, so adding a second collection cannot erase the first one's.
+    """
+
+    paths: Paths
+    slug: str
+    revision: int | str
+
+    @property
+    def prefix(self) -> str:
+        return f"{self.slug}-{self.revision}"
+
+    @property
+    def out(self) -> Path:
+        return self.paths.out
+
+    @property
+    def mods(self) -> Path:
+        return self.paths.mods
+
+    @property
+    def downloads(self) -> Path:
+        return self.paths.downloads
+
+    @property
+    def downloads_json(self) -> Path:
+        return self.paths.c2wj / f"{self.prefix}.downloads.json"
+
+    @property
+    def inspect_json(self) -> Path:
+        return self.paths.c2wj / f"{self.prefix}.inspect.json"
+
+    @property
+    def install_json(self) -> Path:
+        return self.paths.c2wj / f"{self.prefix}.install.json"
+
+    @property
+    def survey_json(self) -> Path:
+        return self.paths.c2wj / f"{self.prefix}.survey.json"
+
+    def ledger_files(self) -> dict[str, str]:
+        """The layer's stage JSON as instance-relative paths, for the ledger."""
+        return {
+            key.removesuffix("_json"): getattr(self, key)
+            .resolve()
+            .relative_to(self.paths.out.resolve())
+            .as_posix()
+            for key in STAGE_FILES
+        }
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -141,6 +197,37 @@ def _same_path(a: str | None, b: Path) -> bool:
         return False
 
 
+def migrate_instance(paths: Paths, led: ledger.Ledger, rep: Reporter) -> list[str]:
+    """Move a pre-layering instance's stage JSON onto its base layer's per-layer names.
+
+    Renames `c2wj/downloads.json` to `c2wj/<slug>-<rev>.downloads.json` and friends,
+    repoints `inspect.json`'s reference to the `downloads.json` it came from, and fills
+    in the base layer's `files` record. Returns the renames performed, empty for an
+    instance that is already current.
+    """
+    layers = led.data.get("layers") or []
+    if not layers:
+        return []
+    base = layers[0]
+    lp = LayerPaths(paths, base.get("slug") or "", base.get("revision"))
+    moved: list[str] = []
+    for key, legacy_name in STAGE_FILES.items():
+        legacy = paths.c2wj / legacy_name
+        current = getattr(lp, key)
+        if legacy.exists() and not current.exists():
+            legacy.rename(current)
+            moved.append(f"{legacy_name} -> {current.name}")
+    if moved:
+        data = _read_json(lp.inspect_json)
+        if data and data.get("downloads_json"):
+            data["downloads_json"] = str(lp.downloads_json.resolve())
+            lp.inspect_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        rep.log(f"migrated pre-layering stage files: {', '.join(moved)}")
+    if not base.get("files"):
+        base["files"] = lp.ledger_files()
+    return moved
+
+
 # -- reuse an existing download store -------------------------------------------------
 
 
@@ -155,9 +242,7 @@ def reuse_downloads(src_dir: Path, dest_dir: Path, rep: Reporter) -> tuple[int, 
     candidates = [
         p
         for p in sorted(src_dir.iterdir())
-        if p.is_file()
-        and p.name not in _NOT_ARCHIVES
-        and not p.name.endswith((".part", ".md5mismatch"))
+        if p.is_file() and not p.name.endswith((".json", ".part", ".md5mismatch"))
     ]
     linked = copied = present = 0
     total = len(candidates)
@@ -185,8 +270,8 @@ def reuse_downloads(src_dir: Path, dest_dir: Path, rep: Reporter) -> tuple[int, 
 # -- per-stage consistency checks ------------------------------------------------------
 
 
-def downloads_are_current(paths: Paths, manifest_path: Path, mod_count: int) -> bool:
-    data = _read_json(paths.downloads_json)
+def downloads_are_current(lp: LayerPaths, manifest_path: Path, mod_count: int) -> bool:
+    data = _read_json(lp.downloads_json)
     if not data or not _same_path(data.get("manifest"), manifest_path):
         return False
     entries = data.get("entries") or []
@@ -204,40 +289,40 @@ def downloads_are_current(paths: Paths, manifest_path: Path, mod_count: int) -> 
     return True
 
 
-def inspect_is_current(paths: Paths) -> bool:
-    downloads = _read_json(paths.downloads_json)
-    data = _read_json(paths.inspect_json)
+def inspect_is_current(lp: LayerPaths) -> bool:
+    downloads = _read_json(lp.downloads_json)
+    data = _read_json(lp.inspect_json)
     if not downloads or not data:
         return False
-    if not _same_path(data.get("downloads_json"), paths.downloads_json):
+    if not _same_path(data.get("downloads_json"), lp.downloads_json):
         return False
     expected = sum(1 for e in downloads.get("entries") or [] if e.get("status") in ("ok", "skipped"))
     return len(data.get("entries") or []) == expected and expected > 0
 
 
-def install_is_current(paths: Paths, manifest_path: Path) -> bool:
-    inspected = _read_json(paths.inspect_json)
-    data = _read_json(paths.install_json)
+def install_is_current(lp: LayerPaths, manifest_path: Path) -> bool:
+    inspected = _read_json(lp.inspect_json)
+    data = _read_json(lp.install_json)
     if not inspected or not data:
         return False
     if not _same_path(data.get("manifest"), manifest_path):
         return False
-    if not _same_path(data.get("mods_dir"), paths.mods):
+    if not _same_path(data.get("mods_dir"), lp.mods):
         return False
     entries = data.get("entries") or []
     if len(entries) != len(inspected.get("entries") or []) or not entries:
         return False
-    return all((paths.mods / (e.get("folder") or "")).is_dir() for e in entries)
+    return all((lp.mods / (e.get("folder") or "")).is_dir() for e in entries)
 
 
-def profile_is_current(paths: Paths) -> bool:
-    installed = _read_json(paths.install_json)
+def profile_is_current(paths: Paths, led: ledger.Ledger) -> bool:
+    """True when the rendered profile describes exactly the layers the ledger has now."""
     data = _read_json(paths.profile_report)
-    if not installed or not data:
+    if not data or not _same_path(data.get("mo2_dir"), paths.out):
         return False
-    if not _same_path(data.get("mo2_dir"), paths.out):
-        return False
-    if len(data.get("mod_order") or []) != len(installed.get("entries") or []):
+    rendered = [(r.get("slug"), str(r.get("revision"))) for r in data.get("layers") or []]
+    wanted = [(r.get("slug"), str(r.get("revision"))) for r in led.data.get("layers") or []]
+    if not wanted or rendered != wanted:
         return False
     profile_dir = paths.out / "profiles" / (data.get("profile") or "")
     return (profile_dir / "modlist.txt").exists() and (paths.out / "ModOrganizer.ini").exists()
@@ -261,11 +346,350 @@ def build_is_current(paths: Paths, args: argparse.Namespace) -> bool:
     return stock is None
 
 
-# -- the command ------------------------------------------------------------------------
+def _download_failures(downloads_json: Path) -> tuple[list[tuple[str, str]], list[str]]:
+    """`(unavailable, mismatched)` from a downloads.json: what could not be fetched.
+
+    `unavailable` is `(mod name, error)` for archives Nexus would not serve at all --
+    a pinned file the author has since deleted 404s forever. `mismatched` is archives
+    that downloaded but whose md5 did not match the manifest, which is never something
+    to shrug off: the file is not the one the collection was built against.
+    """
+    data = _read_json(downloads_json) or {}
+    unavailable: list[tuple[str, str]] = []
+    mismatched: list[str] = []
+    for entry in data.get("entries") or []:
+        status = entry.get("status")
+        name = entry.get("name") or entry.get("file_name") or entry.get("tag") or "?"
+        if status == "error":
+            unavailable.append((name, entry.get("error") or "download failed"))
+        elif status == "md5_mismatch":
+            mismatched.append(name)
+    return unavailable, mismatched
+
+
+def _survey_is_current(survey_json: Path, manifest_path: Path) -> bool:
+    data = _read_json(survey_json)
+    if not data:
+        return False
+    return _same_path(data.get("manifest"), manifest_path) and bool(data.get("entries"))
+
+
+# -- one layer ---------------------------------------------------------------------------
 
 
 def _namespace(**kwargs: Any) -> argparse.Namespace:
     return argparse.Namespace(**kwargs)
+
+
+@dataclass
+class LayerContext:
+    """What `add_layer` produced: enough to register the layer and report on it."""
+
+    slug: str
+    revision: int | str
+    owner: str
+    name: str
+    author: str
+    domain: str
+    game_name: str
+    manifest_path: Path
+    layer_paths: LayerPaths
+    installed: int = 0
+    shared: list[str] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)
+    is_base: bool = True
+
+
+def add_layer(
+    paths: Paths,
+    args: argparse.Namespace,
+    *,
+    led: ledger.Ledger,
+    api_key: str,
+    game_path: Path,
+    run: Run,
+    rep: Reporter,
+) -> LayerContext | None:
+    """Fetch, download, inspect and install one collection into an existing instance.
+
+    Shared by `create` (which calls it for the very first collection) and `add`. On
+    return the ledger knows which `mods/` folders the layer owns and which it shares
+    with a layer that was already there; it is not saved yet -- the caller does that
+    once the profile has been rendered. Returns `None` when a stage failed, with the
+    detail in `run`.
+    """
+    is_base = not (led.data.get("layers") or [])
+
+    # -- fetch ---------------------------------------------------------------------
+    rep.stage("fetch")
+    try:
+        ref = CollectionRef.parse(args.url)
+        client = NexusClient(api_key=api_key)
+        info = client.revision_info(ref, args.revision)
+        rev_dir = paths.collections / ref.slug / str(info.revision_number)
+        had_manifest = (
+            any((rev_dir / "archive").rglob("collection.json")) if rev_dir.exists() else False
+        )
+        info, manifest_path = fetch_manifest(
+            client, ref, args.revision, paths.collections, info=info
+        )
+    except (AuthRequired, NexusError, OSError, ValueError) as exc:
+        run.record("fetch", "failed", str(exc))
+        return None
+
+    revision = info.revision_number
+    owner = ledger.collection_owner(ref.slug, revision)
+    lp = LayerPaths(paths, ref.slug, revision)
+    manifest = load_manifest(manifest_path)
+    manifest_info = manifest.get("info") or {}
+    domain = manifest_info.get("domainName") or info.game
+    try:
+        game_name = mo2_game_name(domain)
+    except NexusError as exc:
+        run.record("fetch", "failed", str(exc))
+        return None
+    mod_count = len(manifest.get("mods") or [])
+
+    if had_manifest:
+        run.record("fetch", "skipped", f"{ref.slug} revision {revision} already fetched")
+    else:
+        run.record("fetch", "ok", f"{info.name} revision {revision}, {mod_count} mods")
+        rep.done("fetch", f"{info.name} [{domain}] revision {revision} -> {manifest_path}")
+
+    ctx = LayerContext(
+        slug=ref.slug,
+        revision=revision,
+        owner=owner,
+        name=manifest_info.get("name") or info.name,
+        author=manifest_info.get("author") or "",
+        domain=domain,
+        game_name=game_name,
+        manifest_path=manifest_path,
+        layer_paths=lp,
+        is_base=is_base,
+    )
+
+    # -- reuse an existing archive store -------------------------------------------
+    reuse = getattr(args, "reuse_downloads", None)
+    if reuse:
+        src = Path(reuse).expanduser().resolve()
+        if not src.is_dir():
+            rep.warn(f"--reuse-downloads {src} is not a directory, ignored")
+        elif src == paths.downloads:
+            rep.warn("--reuse-downloads points at the instance's own downloads folder, ignored")
+        else:
+            linked, copied, present = reuse_downloads(src, paths.downloads, rep)
+            run.record("reuse-downloads", "ok", f"{linked} linked, {copied} copied, {present} kept")
+
+    # -- survey (optional pre-flight) ----------------------------------------------
+    if getattr(args, "skip_survey", False):
+        run.record("survey", "skipped", "--skip-survey")
+    elif _survey_is_current(lp.survey_json, manifest_path):
+        run.record("survey", "skipped", str(lp.survey_json))
+    else:
+        try:
+            rc = survey.run_survey(
+                manifest_path=manifest_path,
+                out_path=lp.survey_json,
+                jobs=args.jobs,
+                survey_all=False,
+                min_remaining=100,
+                limit=None,
+                api_key=api_key,
+                reporter=rep,
+            )
+        except Exception as exc:  # noqa: BLE001 - the survey only informs the operator
+            # Nothing downstream reads survey.json, so no failure in here -- a 404 on a
+            # file the curator pinned from an archived mod page, a dropped connection --
+            # is allowed to stop the run.
+            rc, exc_text = 1, f"{type(exc).__name__}: {exc}"
+        else:
+            exc_text = ""
+        if rc == 0:
+            run.record("survey", "ok")
+        elif rc == 3:
+            # Nexus's hourly v1 budget ran out. The survey only informs the operator;
+            # nothing downstream needs it, so carry on.
+            run.record("survey", "warned", "stopped early: Nexus hourly rate limit")
+            rep.warn("survey stopped early (Nexus hourly rate limit); continuing without it")
+        else:
+            run.record("survey", "warned", exc_text or f"exit {rc}")
+            rep.warn(f"survey did not complete ({exc_text or f'exit {rc}'}); continuing without it")
+
+    # -- download -------------------------------------------------------------------
+    missing: list[str] = []
+    if downloads_are_current(lp, manifest_path, mod_count):
+        run.record("download", "skipped", f"{mod_count} archives present in {paths.downloads}")
+    else:
+        try:
+            rc = run_download(
+                manifest_path=manifest_path,
+                out_dir=paths.downloads,
+                jobs=args.jobs,
+                limit=None,
+                include_optional=True,
+                api_key=api_key,
+                json_path=lp.downloads_json,
+                reporter=rep,
+            )
+        except (AuthRequired, NexusError) as exc:
+            run.record("download", "failed", str(exc))
+            return None
+        if rc != 0:
+            unavailable, mismatched = _download_failures(lp.downloads_json)
+            allow = getattr(args, "allow_missing", False)
+            if not allow or mismatched or not unavailable:
+                run.record("download", "failed", "one or more archives failed or mismatched")
+                return None
+            # A file the curator pinned that Nexus no longer serves (the author deleted
+            # or archived it) can never be downloaded, so with --allow-missing the layer
+            # goes in without it rather than the whole instance being unbuildable. The
+            # mods it would have installed are simply absent, and named here.
+            ctx_missing = unavailable
+            rep.warn(
+                f"{len(ctx_missing)} archive(s) are not available from Nexus; continuing "
+                "without them (--allow-missing):"
+            )
+            for name, error in ctx_missing:
+                rep.warn(f"  {name}: {error}")
+            run.record("download", "warned", f"{len(ctx_missing)} archive(s) unavailable")
+            missing = [name for name, _ in ctx_missing]
+        else:
+            run.record("download", "ok")
+
+    # -- inspect --------------------------------------------------------------------
+    if inspect_is_current(lp):
+        run.record("inspect", "skipped", str(lp.inspect_json))
+    else:
+        rc = archive_inspect.cmd_inspect(
+            _namespace(
+                downloads_json=str(lp.downloads_json),
+                out=str(lp.inspect_json),
+                jobs=args.jobs,
+            ),
+            reporter=rep,
+        )
+        if rc != 0:
+            run.record("inspect", "failed", "one or more archives could not be listed")
+            return None
+        run.record("inspect", "ok")
+
+    # -- install --------------------------------------------------------------------
+    # Layer-aware folder naming: a mod whose name is already taken by another layer
+    # keeps that folder when it is byte-for-byte the same archive (the two layers then
+    # share one folder) and gets a ` ~<slug>` folder of its own when it is not.
+    taken = {folder: (rec.get("md5") or "") for folder, rec in led.data["mods"].items()}
+    if install_is_current(lp, manifest_path):
+        run.record("install", "skipped", f"mods/ matches {lp.install_json.name}")
+    else:
+        rc = installer.cmd_install(
+            _namespace(
+                inspect_json=str(lp.inspect_json),
+                manifest=str(manifest_path),
+                mods_dir=str(paths.mods),
+                only=None,
+                game_path=str(game_path),
+                jobs=args.jobs,
+                force=False,
+                choices_overrides=getattr(args, "choices_overrides", None),
+                out=str(lp.install_json),
+                owner=owner,
+                taken_folders=taken,
+                folder_suffix="" if is_base else ref.slug,
+            ),
+            reporter=rep,
+        )
+        if rc != 0:
+            run.record("install", "failed", "one or more mods failed to install")
+            return None
+        run.record("install", "ok")
+
+    # -- ownership -------------------------------------------------------------------
+    ctx.missing = missing
+    install_data = _read_json(lp.install_json) or {}
+    for entry in install_data.get("entries") or []:
+        folder = entry.get("folder")
+        if not folder:
+            continue
+        record = led.data["mods"].get(folder)
+        owners = led.owners_of(folder) if record else []
+        if record and owner in owners and len(owners) > 1:
+            # Already shared with another layer, and this is a re-run: leave the record
+            # (and which layer is primary) exactly as it is.
+            ctx.shared.append(folder)
+            ctx.installed += 1
+            continue
+        if record and owner not in owners:
+            if (record.get("md5") or "") == (entry.get("md5") or ""):
+                # Same archive, same name: one folder, two owners, nothing reinstalled.
+                led.add_mod_owner(folder, owner)
+                ctx.shared.append(folder)
+                ctx.installed += 1
+                continue
+            rep.warn(
+                f"mods/{folder} already belongs to {', '.join(owners)} with a different "
+                f"archive; {owner} is taking it over"
+            )
+        led.set_mod_owner(
+            folder,
+            owner,
+            tag=entry.get("tag") or "",
+            md5=entry.get("md5") or "",
+            install_mode=entry.get("install_mode") or "",
+            strategy=entry.get("strategy") or "",
+            plugins=entry.get("plugins") or [],
+        )
+        ctx.installed += 1
+
+    # A shared folder belongs to every layer that pinned it; say so in MO2's own view.
+    for folder in ctx.shared:
+        installer.stamp_owner(paths.mods / folder, ", ".join(led.owners_of(folder)))
+
+    led.normalise_owner_order()
+    led.register_layer(
+        ref.slug,
+        revision,
+        name=ctx.name,
+        author=ctx.author,
+        separators=(led.layer(ref.slug, revision) or {}).get("separators") or [],
+        manifest=manifest_path.resolve().relative_to(paths.out.resolve()).as_posix(),
+        files=lp.ledger_files(),
+    )
+    return ctx
+
+
+def render_profile(
+    paths: Paths,
+    led: ledger.Ledger,
+    rep: Reporter,
+    *,
+    game_path: str | None = None,
+    mo2_version: str = build.DEFAULT_MO2_VERSION,
+    resolution: str = "keep",
+    vsync: str = "keep",
+    window: str = "keep",
+    disable_optional: bool = False,
+    keep_inis: bool = False,
+    separators: bool = True,
+) -> dict[str, Any]:
+    """Render the instance profile from every layer in `led` (`profile.render_instance`)."""
+    return profile.render_instance(
+        paths.out,
+        led=led,
+        game_path=game_path,
+        mo2_version=mo2_version,
+        separators=separators,
+        disable_optional=disable_optional,
+        resolution=resolution,
+        vsync=vsync,
+        window=window,
+        keep_inis=keep_inis,
+        report_out=paths.profile_report,
+        reporter=rep,
+    )
+
+
+# -- the command ------------------------------------------------------------------------
 
 
 def cmd_create(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
@@ -296,175 +720,52 @@ def cmd_create(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     paths.downloads.mkdir(parents=True, exist_ok=True)
     paths.mods.mkdir(parents=True, exist_ok=True)
 
-    # -- fetch ---------------------------------------------------------------------
-    rep.stage("fetch")
-    try:
-        ref = CollectionRef.parse(args.url)
-        client = NexusClient(api_key=api_key)
-        info = client.revision_info(ref, args.revision)
-        rev_dir = paths.collections / ref.slug / str(info.revision_number)
-        had_manifest = any((rev_dir / "archive").rglob("collection.json")) if rev_dir.exists() else False
-        info, manifest_path = fetch_manifest(client, ref, args.revision, paths.collections, info=info)
-    except (AuthRequired, NexusError, OSError, ValueError) as exc:
-        run.record("fetch", "failed", str(exc))
+    led = ledger.load(paths.out)
+    migrate_instance(paths, led, rep)
+    layers = led.data.get("layers") or []
+    if layers and layers[0].get("slug") != CollectionRef.parse(args.url).slug:
+        rep.warn(
+            f"{paths.out} was created from {layers[0].get('slug')}; `c2wj add` is the command "
+            "for layering another collection on top of it"
+        )
+
+    ctx = add_layer(paths, args, led=led, api_key=api_key, game_path=game_path, run=run, rep=rep)
+    if ctx is None:
         return _finish(run, rep, paths, started)
 
-    revision = info.revision_number
-    owner = ledger.collection_owner(ref.slug, revision)
-    manifest = load_manifest(manifest_path)
-    manifest_info = manifest.get("info") or {}
-    domain = manifest_info.get("domainName") or info.game
-    try:
-        game_name = mo2_game_name(domain)
-    except NexusError as exc:
-        run.record("fetch", "failed", str(exc))
-        return _finish(run, rep, paths, started)
-    mod_count = len(manifest.get("mods") or [])
-
-    if had_manifest:
-        run.record("fetch", "skipped", f"{ref.slug} revision {revision} already fetched")
-    else:
-        run.record("fetch", "ok", f"{info.name} revision {revision}, {mod_count} mods")
-        rep.done("fetch", f"{info.name} [{domain}] revision {revision} -> {manifest_path}")
-
-    # -- reuse an existing archive store -------------------------------------------
-    if args.reuse_downloads:
-        src = Path(args.reuse_downloads).expanduser().resolve()
-        if not src.is_dir():
-            rep.warn(f"--reuse-downloads {src} is not a directory, ignored")
-        elif src == paths.downloads:
-            rep.warn("--reuse-downloads points at the instance's own downloads folder, ignored")
-        else:
-            linked, copied, present = reuse_downloads(src, paths.downloads, rep)
-            run.record("reuse-downloads", "ok", f"{linked} linked, {copied} copied, {present} kept")
-
-    # -- survey (optional pre-flight) ----------------------------------------------
-    if args.skip_survey:
-        run.record("survey", "skipped", "--skip-survey")
-    elif _survey_is_current(paths.survey_json, manifest_path):
-        run.record("survey", "skipped", str(paths.survey_json))
-    else:
-        try:
-            rc = survey.run_survey(
-                manifest_path=manifest_path,
-                out_path=paths.survey_json,
-                jobs=args.jobs,
-                survey_all=False,
-                min_remaining=100,
-                limit=None,
-                api_key=api_key,
-                reporter=rep,
-            )
-        except (AuthRequired, NexusError) as exc:
-            rc, exc_text = 1, str(exc)
-        else:
-            exc_text = ""
-        if rc == 0:
-            run.record("survey", "ok")
-        elif rc == 3:
-            # Nexus's hourly v1 budget ran out. The survey only informs the operator;
-            # nothing downstream needs it, so carry on.
-            run.record("survey", "warned", "stopped early: Nexus hourly rate limit")
-            rep.warn("survey stopped early (Nexus hourly rate limit); continuing without it")
-        else:
-            run.record("survey", "warned", exc_text or f"exit {rc}")
-            rep.warn(f"survey did not complete ({exc_text or f'exit {rc}'}); continuing without it")
-
-    # -- download -------------------------------------------------------------------
-    if downloads_are_current(paths, manifest_path, mod_count):
-        run.record("download", "skipped", f"{mod_count} archives present in {paths.downloads}")
-    else:
-        try:
-            rc = run_download(
-                manifest_path=manifest_path,
-                out_dir=paths.downloads,
-                jobs=args.jobs,
-                limit=None,
-                include_optional=True,
-                api_key=api_key,
-                json_path=paths.downloads_json,
-                reporter=rep,
-            )
-        except (AuthRequired, NexusError) as exc:
-            run.record("download", "failed", str(exc))
-            return _finish(run, rep, paths, started)
-        if rc != 0:
-            run.record("download", "failed", "one or more archives failed or mismatched")
-            return _finish(run, rep, paths, started)
-        run.record("download", "ok")
-
-    # -- inspect --------------------------------------------------------------------
-    if inspect_is_current(paths):
-        run.record("inspect", "skipped", str(paths.inspect_json))
-    else:
-        rc = archive_inspect.cmd_inspect(
-            _namespace(
-                downloads_json=str(paths.downloads_json),
-                out=str(paths.inspect_json),
-                jobs=args.jobs,
-            ),
-            reporter=rep,
-        )
-        if rc != 0:
-            run.record("inspect", "failed", "one or more archives could not be listed")
-            return _finish(run, rep, paths, started)
-        run.record("inspect", "ok")
-
-    # -- install --------------------------------------------------------------------
-    if install_is_current(paths, manifest_path):
-        run.record("install", "skipped", f"mods/ matches {paths.install_json.name}")
-    else:
-        rc = installer.cmd_install(
-            _namespace(
-                inspect_json=str(paths.inspect_json),
-                manifest=str(manifest_path),
-                mods_dir=str(paths.mods),
-                only=None,
-                game_path=str(game_path),
-                jobs=args.jobs,
-                force=False,
-                choices_overrides=args.choices_overrides,
-                out=str(paths.install_json),
-                owner=owner,
-            ),
-            reporter=rep,
-        )
-        if rc != 0:
-            run.record("install", "failed", "one or more mods failed to install")
-            return _finish(run, rep, paths, started)
-        run.record("install", "ok")
+    led.set_game(
+        domain=ctx.domain,
+        mo2_name=ctx.game_name,
+        source_path=str(game_path),
+        stock_game_dir=(_read_json(paths.build_meta) or {}).get("stock_game_dir"),
+    )
+    led.set_mo2(version=args.mo2_version, rootbuilder_version=args.rootbuilder_version)
+    led.save()
 
     # -- profile --------------------------------------------------------------------
-    profile_skipped = profile_is_current(paths)
+    profile_skipped = profile_is_current(paths, led)
     if profile_skipped:
         run.record("profile", "skipped", str(paths.profile_report))
     else:
-        rc = profile.cmd_profile(
-            _namespace(
-                install_json=str(paths.install_json),
-                mo2_dir=str(paths.out),
-                profile_name=None,
+        try:
+            render_profile(
+                paths,
+                led,
+                rep,
                 game_path=str(game_path),
-                separators=True,
                 mo2_version=args.mo2_version,
-                disable_optional=False,
                 resolution=args.resolution,
                 vsync=args.vsync,
                 window=args.window,
-                keep_inis=False,
-                report_out=str(paths.profile_report),
-                owner=owner,
-            ),
-            reporter=rep,
-        )
-        if rc != 0:
-            run.record("profile", "failed", "profile writer returned a non-zero status")
+            )
+        except (OSError, ValueError) as exc:
+            run.record("profile", "failed", str(exc))
             return _finish(run, rep, paths, started)
         run.record("profile", "ok")
 
     # -- build ----------------------------------------------------------------------
-    # `profile` rewrites ModOrganizer.ini's gamePath to the *source* game folder, so
-    # build has to run again to re-point it at the Stock Game copy whenever profile ran.
+    # On a new instance `profile` writes ModOrganizer.ini with the *source* game folder
+    # as gamePath, so build has to run to re-point it at the Stock Game copy.
     if profile_skipped and build_is_current(paths, args):
         run.record("build", "skipped", "MO2, Root Builder and ModOrganizer.ini in place")
     else:
@@ -488,45 +789,12 @@ def cmd_create(args: argparse.Namespace, reporter: Reporter | None = None) -> in
 
     # -- ledger ---------------------------------------------------------------------
     rep.stage("ledger")
-    build_meta = _read_json(paths.build_meta) or {}
-    install_data = _read_json(paths.install_json) or {}
-    report = _read_json(paths.profile_report) or {}
-
-    led = ledger.load(paths.out)
-    led.set_game(
-        domain=domain,
-        mo2_name=game_name,
-        source_path=str(game_path),
-        stock_game_dir=build_meta.get("stock_game_dir"),
-    )
-    led.set_mo2(version=args.mo2_version, rootbuilder_version=args.rootbuilder_version)
-    led.register_layer(
-        ref.slug,
-        revision,
-        name=manifest_info.get("name") or info.name,
-        author=manifest_info.get("author") or "",
-        profile=report.get("profile") or "",
-        separators=report.get("separators") or [],
-        manifest=manifest_path.relative_to(paths.out).as_posix(),
-    )
-    for entry in install_data.get("entries") or []:
-        folder = entry.get("folder")
-        if not folder:
-            continue
-        led.set_mod_owner(
-            folder,
-            owner,
-            tag=entry.get("tag") or "",
-            md5=entry.get("md5") or "",
-            install_mode=entry.get("install_mode") or "",
-            strategy=entry.get("strategy") or "",
-            plugins=entry.get("plugins") or [],
-        )
+    led.set_game(stock_game_dir=(_read_json(paths.build_meta) or {}).get("stock_game_dir"))
     led.save()
 
-    owned = len(led.mods_owned_by(owner))
+    owned = len(led.mods_owned_by(ctx.owner))
     user_mods = [f for f, owners in led.scan_mods_dir(paths.mods).items() if owners == ["user"]]
-    detail = f"{owned} mods owned by {owner}"
+    detail = f"{owned} mods owned by {ctx.owner}"
     if user_mods:
         detail += f", {len(user_mods)} user mod(s)"
     run.record("ledger", "ok", detail)
@@ -541,14 +809,7 @@ def cmd_create(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     return _finish(run, rep, paths, started)
 
 
-def _survey_is_current(survey_json: Path, manifest_path: Path) -> bool:
-    data = _read_json(survey_json)
-    if not data:
-        return False
-    return _same_path(data.get("manifest"), manifest_path) and bool(data.get("entries"))
-
-
-def _finish(run: Run, rep: Reporter, paths: Paths, started: float) -> int:
+def _finish(run: Run, rep: Reporter, paths: Paths, started: float, label: str = "create") -> int:
     elapsed = time.monotonic() - started
     rep.stage("summary")
     for stage in run.stages:
@@ -558,7 +819,7 @@ def _finish(run: Run, rep: Reporter, paths: Paths, started: float) -> int:
         rep.log(line)
     rep.log(f"  elapsed: {elapsed:.1f}s")
     if run.failed:
-        rep.warn("create did not finish: see the failed stage above")
+        rep.warn(f"{label} did not finish: see the failed stage above")
         return 1
     rep.log("")
     rep.log(f"launch MO2:  {paths.out / 'ModOrganizer.exe'}")
@@ -616,6 +877,14 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         default=False,
         help="skip the Nexus content-preview survey (it costs hourly API budget)",
+    )
+    p.add_argument(
+        "--allow-missing",
+        action="store_true",
+        default=False,
+        help="carry on when Nexus no longer serves a file the collection pinned (the "
+        "author deleted it); those mods are left out and listed in the summary. An "
+        "md5 mismatch still stops the run.",
     )
     p.add_argument(
         "--mo2-version",

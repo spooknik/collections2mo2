@@ -10,14 +10,27 @@ ledger next to `ModOrganizer.exe`:
     game        {domain, mo2_name, source_path, stock_game_dir|null}
     mo2         {version, rootbuilder_version}
     layers      one entry per collection revision applied, in application order
-    mods        folder name -> {owner, tag, md5, install_mode, strategy, plugins}
+    mods        folder name -> {owner, owners, tag, md5, install_mode, strategy, plugins}
     tools       tool id -> record (written by the `tools` command)
-    ini_keys    owner -> {ini file -> {section -> [keys this owner set]}}
+    ini_keys    owner -> {ini file -> {section -> {key -> {value, previous}}}}
 
 `owner` is `"collection:<slug>@<rev>"`, `"tool:<id>"` or `"user"`. A folder in
 `mods/` that the ledger has never heard of is a user mod (`owners_of` says so),
 which is what makes it safe to remove a layer later: only folders owned by that
 layer, and by nobody else, can go.
+
+Layering (schema 2) made two of those fields plural:
+
+* `mods[folder]["owners"]` is the full owner list; `owners[0]` is the primary and
+  stays mirrored in `owner` so older readers keep working. Two collections that
+  pin the *same* archive (SKSE, Address Library, ...) share one folder and both
+  appear in `owners`; removing one layer only drops it from the list.
+* `ini_keys[owner][ini][section][key]` records `{"value", "previous"}` -- what the
+  layer set and what was there before it. `remove` restores `previous`, or deletes
+  the key when the layer introduced it.
+
+Each layer also records the stage JSON it produced (`files`), named per layer
+(`c2wj/<slug>-<rev>.install.json` and friends) so layers never clobber each other.
 
 Writes are atomic (temp file in the same directory, then `os.replace`) because
 this file is the only record of the above and the pipeline updates it while a
@@ -33,7 +46,7 @@ from pathlib import Path
 from typing import Any
 
 LEDGER_NAME = "c2wj-instance.json"
-VERSION = 1
+VERSION = 2
 
 USER_OWNER = "user"
 
@@ -63,6 +76,34 @@ def _empty(now: str) -> dict[str, Any]:
         "tools": {},
         "ini_keys": {},
     }
+
+
+def _owner_list(record: dict[str, Any]) -> list[str]:
+    """Owners of a mod record, tolerating the schema-1 `owner` / `also_owned_by` pair."""
+    owners = [o for o in (record.get("owners") or []) if o]
+    if not owners:
+        primary = record.get("owner")
+        owners = [primary] if primary else []
+        owners.extend(o for o in (record.get("also_owned_by") or []) if o and o != primary)
+    seen: set[str] = set()
+    out: list[str] = []
+    for owner in owners:
+        if owner not in seen:
+            seen.add(owner)
+            out.append(owner)
+    return out
+
+
+def _normalise_ini_section(entries: Any) -> dict[str, dict[str, Any]]:
+    """Accept both schema-1 `[key, ...]` and schema-2 `{key: {value, previous}}`."""
+    if isinstance(entries, dict):
+        return {
+            k: (v if isinstance(v, dict) else {"value": v, "previous": None})
+            for k, v in entries.items()
+        }
+    if isinstance(entries, list):
+        return {str(k): {"value": None, "previous": None} for k in entries}
+    return {}
 
 
 class Ledger:
@@ -122,11 +163,14 @@ class Ledger:
         profile: str = "",
         separators: list[str] | None = None,
         manifest: str = "",
+        files: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Add (or refresh) the layer for `slug@revision`; returns the layer record.
 
-        `manifest` should be a path relative to the instance directory so the
-        instance stays movable.
+        Layers keep their list position: the first one is the base collection and the
+        rest are add-ons in the order they were added, which is the order the profile
+        renders them in. `manifest` and `files` should be paths relative to the
+        instance directory so the instance stays movable.
         """
         layer = {
             "slug": slug,
@@ -137,10 +181,13 @@ class Ledger:
             "profile": profile,
             "separators": list(separators or []),
             "manifest": manifest,
+            "files": dict(files or {}),
         }
         for i, existing in enumerate(self.data["layers"]):
             if existing.get("slug") == slug and str(existing.get("revision")) == str(revision):
                 layer["added"] = existing.get("added") or layer["added"]
+                if not layer["files"]:
+                    layer["files"] = dict(existing.get("files") or {})
                 self.data["layers"][i] = layer
                 return layer
         self.data["layers"].append(layer)
@@ -151,6 +198,28 @@ class Ledger:
             if existing.get("slug") == slug and str(existing.get("revision")) == str(revision):
                 return existing
         return None
+
+    def layer_by_slug(self, slug: str) -> dict[str, Any] | None:
+        """The (last-added) layer for `slug`, whatever revision it is pinned to."""
+        for existing in reversed(self.data["layers"]):
+            if existing.get("slug") == slug:
+                return existing
+        return None
+
+    def base_layer(self) -> dict[str, Any] | None:
+        """The first layer applied: the collection the instance was created from."""
+        layers = self.data["layers"]
+        return layers[0] if layers else None
+
+    def drop_layer(self, slug: str, revision: int | str) -> dict[str, Any] | None:
+        """Remove the layer record for `slug@revision` (does not touch `mods`)."""
+        for i, existing in enumerate(self.data["layers"]):
+            if existing.get("slug") == slug and str(existing.get("revision")) == str(revision):
+                return self.data["layers"].pop(i)
+        return None
+
+    def layer_owner(self, layer: dict[str, Any]) -> str:
+        return collection_owner(layer.get("slug") or "", layer.get("revision"))
 
     def set_mod_owner(
         self,
@@ -163,9 +232,16 @@ class Ledger:
         strategy: str = "",
         plugins: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Record that `folder` in `mods/` belongs to `owner`."""
+        """Record that `folder` in `mods/` belongs to `owner` (as its primary owner).
+
+        Any other owners already recorded for the folder are kept: two collection
+        layers can pin the same archive and then share one folder.
+        """
+        previous = self.data["mods"].get(folder) or {}
+        others = [o for o in _owner_list(previous) if o != owner and o != USER_OWNER]
         record = {
             "owner": owner,
+            "owners": [owner, *others],
             "tag": tag,
             "md5": md5,
             "install_mode": install_mode,
@@ -175,36 +251,125 @@ class Ledger:
         self.data["mods"][folder] = record
         return record
 
+    def add_mod_owner(self, folder: str, owner: str) -> list[str]:
+        """Add `owner` as a secondary owner of an existing folder; returns the owners."""
+        record = self.data["mods"].get(folder)
+        if record is None:
+            return self.set_mod_owner(folder, owner)["owners"]
+        owners = _owner_list(record)
+        if owner not in owners:
+            owners.append(owner)
+        record["owners"] = owners
+        record.setdefault("owner", owners[0])
+        record.pop("also_owned_by", None)
+        return owners
+
+    def remove_mod_owner(self, folder: str, owner: str) -> list[str]:
+        """Drop `owner` from a folder's owners; returns the owners that remain.
+
+        An empty result means nobody owns the folder any more and the caller may
+        delete it; the record itself is dropped so the folder does not come back as
+        a phantom entry.
+        """
+        record = self.data["mods"].get(folder)
+        if record is None:
+            return []
+        owners = [o for o in _owner_list(record) if o != owner]
+        if not owners:
+            del self.data["mods"][folder]
+            return []
+        record["owners"] = owners
+        record["owner"] = owners[0]
+        record.pop("also_owned_by", None)
+        return owners
+
     def owners_of(self, folder: str) -> list[str]:
         """Owners of a `mods/` folder; `["user"]` for anything the ledger does not know."""
         record = self.data["mods"].get(folder)
         if not record:
             return [USER_OWNER]
-        owner = record.get("owner") or USER_OWNER
-        extra = [o for o in (record.get("also_owned_by") or []) if o != owner]
-        return [owner, *extra]
+        return _owner_list(record) or [USER_OWNER]
 
-    def record_ini_keys(self, owner: str, keys: dict[str, dict[str, list[str]]]) -> None:
-        """Merge `{ini file: {section: [key, ...]}}` into what `owner` has set."""
-        if not keys:
-            self.data["ini_keys"].setdefault(owner, {})
-            return
+    def record_ini_keys(self, owner: str, keys: dict[str, dict[str, Any]]) -> None:
+        """Merge `{ini file: {section: {key: {value, previous}}}}` into `owner`'s set.
+
+        A key already recorded for this owner keeps the `previous` value from the
+        first time the layer set it: re-rendering the profile re-applies every
+        layer's tweaks, and the value a layer overwrote the *first* time is the one
+        `remove` has to put back.
+        """
         bucket = self.data["ini_keys"].setdefault(owner, {})
-        for ini_name, sections in keys.items():
+        for ini_name, sections in (keys or {}).items():
             ini_bucket = bucket.setdefault(ini_name, {})
-            for section, names in sections.items():
-                merged = list(ini_bucket.get(section) or [])
-                lowered = {n.lower() for n in merged}
-                for name in names:
-                    if name.lower() not in lowered:
-                        merged.append(name)
-                        lowered.add(name.lower())
-                ini_bucket[section] = merged
+            for section, entries in sections.items():
+                sec_bucket = _normalise_ini_section(ini_bucket.get(section))
+                for key, info in _normalise_ini_section(entries).items():
+                    if key in sec_bucket:
+                        sec_bucket[key] = {
+                            "value": info.get("value"),
+                            "previous": sec_bucket[key].get("previous"),
+                        }
+                    else:
+                        sec_bucket[key] = {
+                            "value": info.get("value"),
+                            "previous": info.get("previous"),
+                        }
+                ini_bucket[section] = sec_bucket
+
+    def ini_keys_of(self, owner: str) -> dict[str, dict[str, dict[str, dict[str, Any]]]]:
+        """`owner`'s INI keys, normalised to `{ini: {section: {key: {value, previous}}}}`."""
+        out: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
+        for ini_name, sections in (self.data["ini_keys"].get(owner) or {}).items():
+            out[ini_name] = {s: _normalise_ini_section(e) for s, e in sections.items()}
+        return out
+
+    def drop_ini_keys(self, owner: str) -> None:
+        self.data["ini_keys"].pop(owner, None)
 
     # -- queries -----------------------------------------------------------------
 
-    def mods_owned_by(self, owner: str) -> list[str]:
-        return sorted(f for f, r in self.data["mods"].items() if r.get("owner") == owner)
+    def normalise_owner_order(self) -> None:
+        """Sort every folder's `owners` by the order its layers were applied.
+
+        Which layer is *primary* is only a presentation detail (the `meta.ini` comment,
+        `mods_owned_by(primary_only=True)`), but it should not depend on which layer was
+        re-added last, so the earliest layer that owns a folder always comes first.
+        """
+        rank = {
+            collection_owner(layer.get("slug") or "", layer.get("revision")): i
+            for i, layer in enumerate(self.data["layers"])
+        }
+        for record in self.data["mods"].values():
+            owners = _owner_list(record)
+            if len(owners) < 2:
+                continue
+            owners.sort(key=lambda o: rank.get(o, len(rank)))
+            record["owners"] = owners
+            record["owner"] = owners[0]
+
+    def mods_owned_by(self, owner: str, *, primary_only: bool = False) -> list[str]:
+        """Folders `owner` owns; by default including ones it shares with other layers."""
+        if primary_only:
+            return sorted(f for f, r in self.data["mods"].items() if r.get("owner") == owner)
+        return sorted(f for f, r in self.data["mods"].items() if owner in _owner_list(r))
+
+    def mods_owned_only_by(self, owner: str) -> list[str]:
+        """Folders `owner` is the *sole* owner of: exactly what removing it may delete."""
+        return sorted(f for f, r in self.data["mods"].items() if _owner_list(r) == [owner])
+
+    def upgrade(self) -> None:
+        """Normalise a schema-1 file in place: `owners` lists and `{value, previous}` INI keys."""
+        for record in self.data["mods"].values():
+            owners = _owner_list(record)
+            if owners:
+                record["owners"] = owners
+                record["owner"] = owners[0]
+            record.pop("also_owned_by", None)
+        for sections in self.data["ini_keys"].values():
+            for section_map in sections.values():
+                for section, entries in list(section_map.items()):
+                    section_map[section] = _normalise_ini_section(entries)
+        self.data["version"] = VERSION
 
     def separator_folders(self) -> set[str]:
         """Separator folders any layer created; they are instance furniture, not mods."""
@@ -250,7 +415,12 @@ def load(instance_dir: Path | str) -> Ledger:
         return Ledger(instance_dir)
     if not isinstance(data, dict):
         return Ledger(instance_dir)
-    return Ledger(instance_dir, data)
+    led = Ledger(instance_dir, data)
+    if int(data.get("version") or 1) < VERSION:
+        # Schema 1 -> 2: single `owner` becomes an `owners` list, INI keys grow their
+        # pre-values. Done in memory; it reaches disk on the next save().
+        led.upgrade()
+    return led
 
 
 def save(ledger: Ledger) -> Path:

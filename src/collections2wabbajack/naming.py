@@ -13,6 +13,9 @@ _RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f
 # Some curators use 250+ character names; cap them. 80 leaves ~180 for the rest.
 MAX_FOLDER_NAME = 80
 
+# MO2 recognises a mod folder whose name ends in this as a separator row.
+SEP_SUFFIX = "_separator"
+
 
 def sanitize_folder_name(name: str) -> str:
     """Make a collection mod name safe as an MO2 mod folder name.
@@ -37,23 +40,45 @@ def mod_folder_name(mod: dict) -> str:
     return sanitize_folder_name(mod.get("name") or "")
 
 
-def assign_folder_names(mods: list[dict]) -> dict[str, str]:
+def with_suffix(base: str, suffix: str) -> str:
+    """`base` with ` ~<suffix>` appended, staying within `MAX_FOLDER_NAME`."""
+    tail = f" ~{suffix}"
+    return f"{base[: MAX_FOLDER_NAME - len(tail)].rstrip('. ')}{tail}"
+
+
+def assign_folder_names(
+    mods: list[dict],
+    *,
+    taken: dict[str, str] | None = None,
+    suffix: str = "",
+) -> dict[str, str]:
     """Map every manifest mod's `source.tag` to a unique MO2 folder name.
 
     Curators can list the same mod name twice with different files (GTS does). The
     first occurrence keeps the plain name; later ones get a ` ~<tag>` suffix so they
     do not overwrite each other. Deterministic for a given manifest.
+
+    `taken` makes the assignment *layer-aware*: it maps folder names already present
+    in the instance (from an earlier collection layer) to the md5 of the archive that
+    produced them. A new mod whose name collides with one of those is left on the
+    same folder when the md5 matches -- it is literally the same file, so the two
+    layers share one folder -- and gets a ` ~<suffix>` folder of its own when it does
+    not. `suffix` is normally the new layer's slug.
     """
-    taken: set[str] = set()
+    external = {k.lower(): (v or "") for k, v in (taken or {}).items()}
+    used: set[str] = set()
     result: dict[str, str] = {}
     for mod in mods:
-        tag = (mod.get("source") or {}).get("tag") or mod.get("name") or ""
+        source = mod.get("source") or {}
+        tag = source.get("tag") or mod.get("name") or ""
+        md5 = source.get("md5") or ""
         base = mod_folder_name(mod)
         folder = base
-        if folder.lower() in taken:
-            suffix = f" ~{tag[:6]}"
-            folder = f"{base[: MAX_FOLDER_NAME - len(suffix)].rstrip('. ')}{suffix}"
-        taken.add(folder.lower())
+        if suffix and folder.lower() in external and external[folder.lower()] != md5:
+            folder = with_suffix(base, suffix)
+        if folder.lower() in used:
+            folder = with_suffix(base, tag[:6])
+        used.add(folder.lower())
         result[tag] = folder
     return result
 
@@ -62,3 +87,12 @@ def separator_name(phase: int) -> str:
     """MO2 separator folder name for a collection install phase (phase 666 = optional mods)."""
     label = "Optional" if phase == 666 else f"Phase {phase}"
     return f"{label}_separator"
+
+
+def layer_separator_name(collection_name: str, slug: str = "") -> str:
+    """MO2 separator folder name for a whole add-on collection layer."""
+    label = sanitize_folder_name(collection_name or slug or "Collection")
+    if label.lower().endswith(SEP_SUFFIX):
+        return label
+    return sanitize_folder_name(f"{label}{SEP_SUFFIX}")
+

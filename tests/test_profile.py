@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pytest
@@ -193,7 +194,7 @@ def test_build_plugin_order_manifest_order_with_extras_appended_and_warned():
 def test_build_plugin_order_excludes_base_game_masters():
     manifest = {"plugins": [{"name": "Skyrim.esm", "enabled": True}]}
     entries = [{"folder": "ModA", "plugins": ["Skyrim.esm", "MyMod.esp"]}]
-    ordered, warnings, stats = profile.build_plugin_order(manifest, entries, [0], "SkyrimSE")
+    ordered, _warnings, _stats = profile.build_plugin_order(manifest, entries, [0], "SkyrimSE")
     names = [n for n, _ in ordered]
     assert "Skyrim.esm" not in names
     assert "MyMod.esp" in names
@@ -298,7 +299,7 @@ def test_parse_resolution_arg_validates():
     assert profile._parse_resolution_arg("auto") == "auto"
     assert profile._parse_resolution_arg("keep") == "keep"
     assert profile._parse_resolution_arg("1920x1080") == "1920x1080"
-    with pytest.raises(Exception):
+    with pytest.raises(argparse.ArgumentTypeError):
         profile._parse_resolution_arg("not-a-resolution")
 
 

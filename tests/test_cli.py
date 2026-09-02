@@ -20,11 +20,14 @@ SUBCOMMANDS = [
     "profile",
     "survey",
     "build",
+    "create",
+    "add",
+    "remove",
 ]
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return subprocess.run(  # noqa: PLW1510 - --help always exits 0/2, we assert on it
         [sys.executable, "-m", "collections2wabbajack.cli", *args],
         capture_output=True,
         text=True,
