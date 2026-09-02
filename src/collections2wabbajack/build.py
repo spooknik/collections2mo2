@@ -276,15 +276,32 @@ def _to_forward_slashes(path: str) -> str:
     return path.replace("\\", "/")
 
 
-def _rewrite_ini(ini_path: Path, game_path: str) -> list[str]:
+def _rewrite_ini(ini_path: Path, game_path: str, source_game_path: str | None = None) -> list[str]:
     """Line-based rewrite of gamePath/game_edition and customExecutables paths.
 
-    Everything else in the file is preserved verbatim, line for line.
+    `game_path` is the folder MO2 should manage (the Stock Game copy when one was
+    made). `source_game_path` is the folder the profile was written against (the
+    real install); executable paths under it are re-based onto `game_path`, and
+    working directories that do not exist on this machine (a curator's own Steam
+    path from the manifest) fall back to `game_path`. Everything else in the file
+    is preserved verbatim, line for line.
     """
     changes: list[str] = []
     lines = ini_path.read_text(encoding="utf-8").splitlines()
     game_path_win = _to_windows_bytearray(game_path)
     game_path_fwd = _to_forward_slashes(game_path)
+    source_fwd = _to_forward_slashes(source_game_path).rstrip("/") if source_game_path else ""
+
+    def rebase(value: str) -> str | None:
+        """Absolute path under the source game folder -> same path under game_path."""
+        if not source_fwd:
+            return None
+        v = value.replace("\\", "/")
+        if v.lower() == source_fwd.lower():
+            return game_path_fwd
+        if v.lower().startswith(source_fwd.lower() + "/"):
+            return f"{game_path_fwd}/{v[len(source_fwd) + 1 :]}"
+        return None
 
     out: list[str] = []
     section = ""
@@ -330,8 +347,12 @@ def _rewrite_ini(ini_path: Path, game_path: str) -> list[str]:
             m = re.match(r"^(\d+)\\binary=(.*)$", line)
             if m:
                 idx, value = m.group(1), m.group(2)
+                new_value: str | None = None
                 if value and not _DRIVE_RE.match(value):
                     new_value = f"{game_path_fwd}/{value}"
+                else:
+                    new_value = rebase(value)
+                if new_value and new_value != value:
                     out.append(f"{idx}\\binary={new_value}")
                     changes.append(f"{idx}\\binary: {value!r} -> {new_value!r}")
                     continue
@@ -340,9 +361,12 @@ def _rewrite_ini(ini_path: Path, game_path: str) -> list[str]:
             m = re.match(r"^(\d+)\\workingDirectory=(.*)$", line)
             if m:
                 idx, value = m.group(1), m.group(2)
-                if value == "":
-                    out.append(f"{idx}\\workingDirectory={game_path_fwd}")
-                    changes.append(f"{idx}\\workingDirectory: '' -> {game_path_fwd!r}")
+                new_value = rebase(value) if value else game_path_fwd
+                if new_value is None and value and not Path(value).exists():
+                    new_value = game_path_fwd  # e.g. the curator's own Steam path
+                if new_value and new_value != value:
+                    out.append(f"{idx}\\workingDirectory={new_value}")
+                    changes.append(f"{idx}\\workingDirectory: {value!r} -> {new_value!r}")
                     continue
                 out.append(line)
                 continue
@@ -401,7 +425,7 @@ def cmd_build(args: argparse.Namespace) -> int:
             stock_dir = _ensure_stock_game(args, mo2_dir, ini_path)
             effective_game_path = str(stock_dir.resolve())
 
-        changes = _rewrite_ini(ini_path, effective_game_path)
+        changes = _rewrite_ini(ini_path, effective_game_path, source_game_path=args.game_path)
         print(f"rewrote {ini_path}: {len(changes)} change(s)")
         for c in changes:
             print(f"  - {c}")

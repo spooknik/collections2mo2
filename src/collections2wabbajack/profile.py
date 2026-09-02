@@ -444,10 +444,16 @@ def build_custom_executables(
             }
         )
 
+    seen_binaries = {b["binary"].lower() for b in blocks}
     for tool in tools:
         exe = _fwd(tool.get("exe") or "")
         binary = f"{gp}/{exe}" if gp else exe
-        cwd = _fwd(tool.get("cwd") or "") or gp
+        if binary.lower() in seen_binaries:
+            continue  # the manifest lists SKSE too; keep our single entry
+        seen_binaries.add(binary.lower())
+        # A curator's cwd is their own machine's path; only keep it if it exists here.
+        raw_cwd = tool.get("cwd") or ""
+        cwd = _fwd(raw_cwd) if raw_cwd and Path(raw_cwd).exists() else gp
         args = tool.get("args") or []
         blocks.append(
             {
