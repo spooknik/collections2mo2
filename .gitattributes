@@ -1,0 +1,7 @@
+# Normalise line endings: LF in the repo, native on checkout is unnecessary for this project
+* text=auto eol=lf
+*.png binary
+*.7z binary
+*.zip binary
+*.exe binary
+*.dll binary
