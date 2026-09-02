@@ -76,6 +76,7 @@ __all__ = [
     "has_wabbajack_support",
     "install_more_tools",
     "install_tools",
+    "instance_exists",
     "launch_mod_organizer",
     "list_revisions",
     "list_tool_groups",
@@ -663,6 +664,17 @@ class InstanceSummary:
     mo2_version: str
     layers: list[LayerStatus]
     user_mod_count: int
+
+
+def instance_exists(instance_dir: str | Path) -> bool:
+    """Cheap, offline existence check for the GUI's recent-instances list -- true if
+    `instance_dir` still holds a c2wj ledger. Unlike `load_instance`, this touches
+    neither the network nor every layer's revision, so it is safe to call for every
+    entry on startup (pruning stale recents)."""
+    try:
+        return (Path(instance_dir) / ledger.LEDGER_NAME).is_file()
+    except OSError:
+        return False
 
 
 def load_instance(instance_dir: str | Path) -> InstanceSummary:

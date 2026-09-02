@@ -23,6 +23,7 @@ from PySide6.QtWidgets import QLabel, QProgressBar, QTextEdit, QVBoxLayout, QWid
 
 from .progress_calc import RateEstimator, format_duration, format_rate_line
 from .reporter_bridge import QtReporter
+from .theme import MUTED_STYLE
 
 # The `create`/`add` pipeline's stage order (see `create.py`'s module docstring and
 # `add_layer`). Used only to derive a "Stage N of M" line when the engine call itself
@@ -86,11 +87,11 @@ class ProgressWidget(QWidget):
         layout.addWidget(self.counter_label)
 
         self.current_item_label = QLabel("")
-        self.current_item_label.setStyleSheet("color: palette(mid);")
+        self.current_item_label.setStyleSheet(MUTED_STYLE)
         layout.addWidget(self.current_item_label)
 
         self.rate_label = QLabel("")
-        self.rate_label.setStyleSheet("color: palette(mid);")
+        self.rate_label.setStyleSheet(MUTED_STYLE)
         layout.addWidget(self.rate_label)
 
         self.log_view = QTextEdit()

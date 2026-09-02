@@ -6,6 +6,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout
 
 from ... import api, ledger
+from .. import recents
 from ..progress_widget import ProgressWidget
 from ..reporter_bridge import QtReporter
 from ..worker import EngineWorker
@@ -41,6 +42,10 @@ class ProgressPage(WizardPage):
         self.open_folder_btn.clicked.connect(self._open_folder)
         self.open_folder_btn.setVisible(False)
         btn_row.addWidget(self.open_folder_btn)
+        self.back_btn = QPushButton("Back to start")
+        self.back_btn.clicked.connect(lambda: self.custom_action.emit("reset:home"))
+        self.back_btn.setVisible(False)
+        btn_row.addWidget(self.back_btn)
         btn_row.addStretch(1)
         layout.addLayout(btn_row)
 
@@ -51,6 +56,7 @@ class ProgressPage(WizardPage):
         self.cancel_btn.setEnabled(True)
         self.launch_btn.setVisible(False)
         self.open_folder_btn.setVisible(False)
+        self.back_btn.setVisible(False)
 
         reporter = QtReporter()
         self.panel.attach(reporter)
@@ -89,22 +95,32 @@ class ProgressPage(WizardPage):
             self.state.run_succeeded = True
             self.launch_btn.setVisible(True)
             self.open_folder_btn.setVisible(True)
+            self._remember_instance()
         else:
             self.panel.progress_bar.setValue(0)
             self.panel.stage_label.setText("Did not finish -- see the log above.")
             self.state.run_succeeded = False
+        self.back_btn.setVisible(True)
+
+    def _remember_instance(self) -> None:
+        if self.state.instance_dir is None:
+            return
+        name = self.state.collection_summary.name if self.state.collection_summary else self.state.instance_dir.name
+        recents.remember_instance(self.state.instance_dir, name)
 
     def _on_failed(self, message: str) -> None:
         self.cancel_btn.setEnabled(False)
         self.panel.stage_label.setText("Failed.")
         self.panel.log_message(f"error: {message}", level="error")
         self.state.run_succeeded = False
+        self.back_btn.setVisible(True)
 
     def _on_cancelled(self) -> None:
         self.cancel_btn.setEnabled(False)
         self.panel.stage_label.setText("Cancelled.")
         self.panel.log_message("cancelled by user")
         self.state.run_succeeded = False
+        self.back_btn.setVisible(True)
 
     def _launch(self) -> None:
         if self.state.instance_dir is None:

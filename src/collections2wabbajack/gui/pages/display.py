@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from ... import profile
+from ..theme import MUTED_STYLE
 from .base import WizardPage
 
 
@@ -37,7 +38,7 @@ class DisplayPage(WizardPage):
             "writes a small override mod on top of it, so your choice still applies."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color: palette(mid);")
+        note.setStyleSheet(MUTED_STYLE)
         layout.addWidget(note)
 
         res_box = QGroupBox("Resolution")

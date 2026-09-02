@@ -37,3 +37,20 @@ class WizardState:
 
     # -- run result -------------------------------------------------------------
     run_succeeded: bool | None = None
+
+    def reset_for_new_run(self) -> None:
+        """"Back to start": clear every choice made for a create run (or picked up by
+        Manage), keeping the signed-in account (`api_key` / `signin`) intact."""
+        self.collection_url = ""
+        self.collection_summary = None
+        self.selected_revision = None
+        self.survey_summary = None
+        self.instance_dir = None
+        self.game_path = None
+        self.stock_game = True
+        self.tool_ids = []
+        self.resolution = "keep"
+        self.vsync = "keep"
+        self.window = "keep"
+        self.jobs = 4
+        self.run_succeeded = None

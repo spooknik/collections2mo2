@@ -9,6 +9,7 @@ check, not a rendering check.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -225,3 +226,257 @@ def test_progress_widget_elides_long_current_item(qtbot):
     assert shown.startswith("A")
     assert shown.endswith("B")
     assert "..." in shown or "…" in shown
+
+
+# -- theme: muted text must stay legible on a dark palette --------------------------------
+# (a real bug: `color: palette(mid);` renders close-to-invisible dark-grey-on-dark-grey --
+# see `gui/theme.py`'s docstring for the measured contrast ratios).
+
+
+def _relative_luminance(color) -> float:
+    def chan(v: int) -> float:
+        v = v / 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * chan(color.red()) + 0.7152 * chan(color.green()) + 0.0722 * chan(color.blue())
+
+
+def _dark_palette():
+    from PySide6.QtGui import QColor, QPalette
+
+    pal = QPalette()
+    pal.setColor(QPalette.ColorRole.Window, QColor(45, 45, 45))
+    pal.setColor(QPalette.ColorRole.WindowText, QColor(240, 240, 240))
+    pal.setColor(QPalette.ColorRole.Base, QColor(30, 30, 30))
+    pal.setColor(QPalette.ColorRole.Text, QColor(240, 240, 240))
+    pal.setColor(QPalette.ColorRole.Mid, QColor(88, 88, 88))  # the old, broken choice
+    pal.setColor(QPalette.ColorRole.PlaceholderText, QColor(150, 150, 150))
+    return pal
+
+
+@pytest.mark.parametrize("label_name", ["current_item_label", "rate_label"])
+def test_progress_widget_muted_labels_readable_on_dark_palette(qtbot, label_name):
+    """Renders a ProgressWidget under an explicit dark palette and checks the muted
+    labels' *painted pixels* -- not just the palette role -- are meaningfully lighter
+    than the window background, i.e. actually legible rather than merely "not the
+    exact same colour"."""
+    widget = ProgressWidget()
+    qtbot.addWidget(widget)
+    widget.setPalette(_dark_palette())
+    widget.resize(320, 240)
+
+    label = getattr(widget, label_name)
+    label.setText("Elapsed 0:05 -- some status text")
+    widget.show()
+    qtbot.waitExposed(widget)
+
+    img = label.grab().toImage()
+    bg_luminance = _relative_luminance(widget.palette().color(widget.backgroundRole()))
+    lightest = max(
+        (img.pixelColor(x, y) for y in range(img.height()) for x in range(img.width())),
+        key=_relative_luminance,
+    )
+    text_luminance = _relative_luminance(lightest)
+
+    # `palette(mid)` (#585858) against this Window (#2d2d2d) is a luminance delta of
+    # ~0.02 -- nearly invisible. `palette(placeholder-text)` (#969696) is ~0.19 lighter.
+    assert text_luminance - bg_luminance > 0.08
+
+
+def test_warning_style_picks_a_theme_appropriate_amber(qtbot):
+    from PySide6.QtWidgets import QLabel
+
+    from collections2wabbajack.gui.theme import is_dark_palette, warning_style
+
+    label = QLabel()
+    qtbot.addWidget(label)
+
+    label.setPalette(_dark_palette())
+    assert is_dark_palette(label) is True
+    dark_style = warning_style(label)
+
+    light_pal = _dark_palette()
+    from PySide6.QtGui import QColor, QPalette
+
+    light_pal.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
+    label.setPalette(light_pal)
+    assert is_dark_palette(label) is False
+    light_style = warning_style(label)
+
+    assert dark_style != light_style  # theme-appropriate, not one fixed hex for both
+
+
+# -- launch flow: Home-first when signed in, Sign-in otherwise, Back-to-start ------------
+# -- recents persistence -----------------------------------------------------------------
+
+
+@pytest.fixture
+def _isolated_qsettings(tmp_path):
+    """Point every `QSettings(...)` construction (recents.py's `_settings()` included)
+    at a throwaway INI file under `tmp_path` instead of the real per-user store, so
+    the test suite never touches the machine's actual registry/settings."""
+    from PySide6.QtCore import QSettings
+
+    prev_format = QSettings.defaultFormat()
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+    yield tmp_path
+    QSettings.setDefaultFormat(prev_format)
+
+
+def test_home_shown_first_when_signed_in(qtbot, monkeypatch, _isolated_qsettings):
+    """A saved key must show Home immediately, never blocking on the background
+    validation that follows."""
+    from collections2wabbajack import api
+    from collections2wabbajack.gui.app import WizardWindow
+
+    monkeypatch.setattr(api, "get_saved_api_key", lambda: "fake-key")
+    monkeypatch.setattr(
+        api, "validate_api_key", lambda api_key: api.SignInResult(name="Bob", is_premium=True)
+    )
+
+    window = WizardWindow()
+    qtbot.addWidget(window)
+
+    # Home is current the instant the window is built -- before the worker thread
+    # (started at the end of __init__) has had any chance to report back.
+    assert window._current == "home"
+    assert window._checking_signin is True
+    assert window.account_label.text() == "checking..."
+
+    assert window._signin_worker is not None
+    qtbot.waitSignal(window._signin_worker.finished, timeout=2000)
+    qtbot.wait(50)  # let the queued succeeded/failed signal reach the GUI thread
+
+    assert window._checking_signin is False
+    assert window.state.signin is not None
+    assert window.state.signin.name == "Bob"
+    assert window._current == "home"  # validation succeeding never navigates away
+
+
+def test_signin_shown_when_no_key(qtbot, monkeypatch, _isolated_qsettings):
+    from collections2wabbajack import api
+    from collections2wabbajack.gui.app import WizardWindow
+
+    monkeypatch.setattr(api, "get_saved_api_key", lambda: None)
+
+    window = WizardWindow()
+    qtbot.addWidget(window)
+
+    assert window._current == "signin"
+    assert window._signin_worker is None  # nothing to validate
+
+
+def test_signin_shown_when_saved_key_fails_validation(qtbot, monkeypatch, _isolated_qsettings):
+    from collections2wabbajack import api
+    from collections2wabbajack.gui.app import WizardWindow
+
+    monkeypatch.setattr(api, "get_saved_api_key", lambda: "bad-key")
+
+    def _fail(api_key):
+        raise api.ApiError("Nexus rejected that key.")
+
+    monkeypatch.setattr(api, "validate_api_key", _fail)
+
+    window = WizardWindow()
+    qtbot.addWidget(window)
+    assert window._current == "home"  # still shown immediately
+
+    qtbot.waitSignal(window._signin_worker.failed, timeout=2000)
+    qtbot.wait(50)
+
+    assert window._current == "signin"
+    assert window.state.signin is None
+    assert "rejected" in window.pages["signin"].status_label.text()
+
+
+def test_back_to_start_resets_state_keeps_account(qtbot, monkeypatch, _isolated_qsettings):
+    from collections2wabbajack import api
+    from collections2wabbajack.gui.app import WizardWindow
+
+    monkeypatch.setattr(api, "get_saved_api_key", lambda: None)
+    window = WizardWindow()
+    qtbot.addWidget(window)
+
+    window.state.api_key = "abc123"
+    window.state.signin = api.SignInResult(name="Bob", is_premium=True)
+    window.state.collection_url = "https://www.nexusmods.com/games/skyrimspecialedition/collections/xyz"
+    window.state.instance_dir = Path("C:/somewhere")
+    window.state.game_path = Path("C:/games/skyrim")
+    window.state.tool_ids = ["loot", "nemesis"]
+    window.state.run_succeeded = True
+
+    old_collection_page = window.pages["collection"]
+    window._on_custom_action("reset:home")
+
+    assert window._current == "home"
+    # the account survives...
+    assert window.state.api_key == "abc123"
+    assert window.state.signin is not None
+    assert window.state.signin.name == "Bob"
+    # ...but every choice made for the run is cleared
+    assert window.state.collection_url == ""
+    assert window.state.instance_dir is None
+    assert window.state.game_path is None
+    assert window.state.tool_ids == []
+    assert window.state.run_succeeded is None
+    # and the linear-flow pages were rebuilt, not just left with stale widget state
+    assert window.pages["collection"] is not old_collection_page
+
+
+def test_recents_persist_and_prune_invalid(_isolated_qsettings):
+    from collections2wabbajack.gui import recents
+
+    tmp_path = _isolated_qsettings
+    valid_dir = tmp_path / "instance"
+    valid_dir.mkdir()
+    (valid_dir / "c2wj-instance.json").write_text("{}")
+    missing_dir = tmp_path / "gone"  # never created -- simulates a deleted instance
+
+    recents.save_recents(
+        [
+            recents.RecentInstance(str(valid_dir), "GTS", "2026-01-01T00:00:00+00:00"),
+            recents.RecentInstance(str(missing_dir), "Old", "2025-01-01T00:00:00+00:00"),
+        ]
+    )
+
+    loaded = recents.load_recents()
+    assert [r.path for r in loaded] == [str(valid_dir)]  # the missing one was pruned
+
+    recents.remember_instance(valid_dir, "GTS Renamed")
+    loaded2 = recents.load_recents()
+    assert loaded2[0].path == str(valid_dir)
+    assert loaded2[0].collection_name == "GTS Renamed"
+
+
+def test_manage_page_auto_loads_most_recent_valid_instance(qtbot, monkeypatch, _isolated_qsettings):
+    from collections2wabbajack import api
+    from collections2wabbajack.gui import recents
+    from collections2wabbajack.gui.pages.manage import ManagePage
+    from collections2wabbajack.gui.state import WizardState
+
+    tmp_path = _isolated_qsettings
+    valid_dir = tmp_path / "instance"
+    valid_dir.mkdir()
+    (valid_dir / "c2wj-instance.json").write_text("{}")
+    recents.remember_instance(valid_dir, "GTS")
+
+    loaded_paths = []
+
+    def _fake_load(instance_dir):
+        loaded_paths.append(str(instance_dir))
+        # Auto-load only needs to prove it *tried* to load the right path -- avoid
+        # constructing a full InstanceSummary here by failing the call cleanly.
+        raise api.ApiError("stubbed for this test")
+
+    monkeypatch.setattr(api, "load_instance", _fake_load)
+
+    page = ManagePage(WizardState())
+    qtbot.addWidget(page)
+    page.on_enter()
+
+    assert page.path_edit.text() == str(valid_dir)
+    assert page._load_worker is not None
+    qtbot.waitSignal(page._load_worker.failed, timeout=2000)
+    qtbot.wait(50)
+    assert loaded_paths == [str(valid_dir)]

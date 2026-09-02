@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from ... import api
+from ..theme import warning_style
 from ..worker import EngineWorker
 from .base import WizardPage
 
@@ -42,7 +43,7 @@ class LocationPage(WizardPage):
         inst_layout.addLayout(row)
         self.instance_warning = QLabel("")
         self.instance_warning.setWordWrap(True)
-        self.instance_warning.setStyleSheet("color: #b45309;")
+        self.instance_warning.setStyleSheet(warning_style(self.instance_warning))
         inst_layout.addWidget(self.instance_warning)
         layout.addWidget(inst_box)
 

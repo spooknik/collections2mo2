@@ -76,6 +76,23 @@ class SignInPage(WizardPage):
 
         self.set_ready(False)
 
+    def on_enter(self) -> None:
+        # Reached via the header's "Account"/"Change key" button after an already
+        # -successful sign-in (startup validation, or an earlier visit here): reflect
+        # that instead of showing a blank status until Continue is pressed again.
+        if self.state.signin is not None and self.key_edit.text().strip() == self.state.api_key:
+            premium = "Premium" if self.state.signin.is_premium else "not Premium"
+            self.status_label.setText(f"Signed in as {self.state.signin.name} ({premium}).")
+            self.signout_btn.setVisible(True)
+            self.set_ready(True)
+
+    def show_error(self, message: str) -> None:
+        """Called by the window when a saved key failed background validation at
+        startup, redirecting here."""
+        self.status_label.setText(message)
+        self.signout_btn.setVisible(False)
+        self.set_ready(False)
+
     def _open_key_page(self) -> None:
         QDesktopServices.openUrl(QUrl(api.nexus_api_key_signup_url()))
 

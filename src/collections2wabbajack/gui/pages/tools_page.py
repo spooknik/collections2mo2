@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QCheckBox, QGroupBox, QLabel, QScrollArea, QVBoxLayout, QWidget
 
 from ... import api
+from ..theme import MUTED_STYLE
 from .base import WizardPage
 
 
@@ -43,7 +44,7 @@ class ToolsPage(WizardPage):
                     box_layout.addWidget(cb)
                     note_label = QLabel(f"    {note}")
                     note_label.setWordWrap(True)
-                    note_label.setStyleSheet("color: gray;")
+                    note_label.setStyleSheet(MUTED_STYLE)
                     box_layout.addWidget(note_label)
                 else:
                     cb.setChecked(entry.default)
@@ -51,7 +52,7 @@ class ToolsPage(WizardPage):
                     if entry.requires:
                         req_label = QLabel(f"    requires: {entry.requires}")
                         req_label.setWordWrap(True)
-                        req_label.setStyleSheet("color: gray;")
+                        req_label.setStyleSheet(MUTED_STYLE)
                         box_layout.addWidget(req_label)
                 self._checkboxes[entry.id] = cb
             self._inner_layout.addWidget(box)

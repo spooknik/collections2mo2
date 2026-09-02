@@ -11,6 +11,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from ... import api
+from .. import recents
 from ..progress_widget import ProgressWidget
 from ..reporter_bridge import QtReporter
 from ..worker import EngineWorker
@@ -63,8 +65,15 @@ class ManagePage(WizardPage):
         layout = QVBoxLayout(self)
 
         back_btn = QPushButton("<- Back to start")
-        back_btn.clicked.connect(lambda: self.custom_action.emit("goto:home"))
+        back_btn.clicked.connect(lambda: self.custom_action.emit("reset:home"))
         layout.addWidget(back_btn)
+
+        recent_row = QHBoxLayout()
+        recent_row.addWidget(QLabel("Recent:"))
+        self.recent_combo = QComboBox()
+        self.recent_combo.currentIndexChanged.connect(self._on_recent_selected)
+        recent_row.addWidget(self.recent_combo, 1)
+        layout.addLayout(recent_row)
 
         pick_row = QHBoxLayout()
         self.path_edit = QLineEdit()
@@ -131,6 +140,34 @@ class ManagePage(WizardPage):
         if not api.has_update_support():
             self.update_btn.setEnabled(False)
             self.update_btn.setToolTip("Coming soon: update.py has not landed yet.")
+        self._refresh_recent_combo()
+        # First time this page is shown this session and nothing has been picked yet
+        # (including by a Home-page recent-instance button, which sets the path field
+        # before we get here): auto-load the most recently opened valid instance.
+        if self._instance is None and not self.path_edit.text().strip():
+            recent = recents.most_recent_valid()
+            if recent is not None:
+                self.load_path(recent.path)
+
+    def load_path(self, path: str) -> None:
+        """Set the instance path and load it -- used by Home's recent-instance
+        buttons and by auto-loading the most recent instance on entry."""
+        self.path_edit.setText(path)
+        self._load()
+
+    def _refresh_recent_combo(self) -> None:
+        self.recent_combo.blockSignals(True)
+        self.recent_combo.clear()
+        self.recent_combo.addItem("(choose a recent instance)", "")
+        for r in recents.load_recents():
+            label = f"{r.collection_name or Path(r.path).name} -- {r.path}"
+            self.recent_combo.addItem(label, r.path)
+        self.recent_combo.blockSignals(False)
+
+    def _on_recent_selected(self, index: int) -> None:
+        path = self.recent_combo.itemData(index)
+        if path:
+            self.load_path(path)
 
     def _browse(self) -> None:
         start = self.path_edit.text() or str(Path.home())
@@ -152,6 +189,9 @@ class ManagePage(WizardPage):
     def _on_loaded(self, summary: api.InstanceSummary) -> None:
         self._instance = summary.out
         self._summary = summary
+        base_name = summary.layers[0].name if summary.layers else summary.out.name
+        recents.remember_instance(summary.out, base_name)
+        self._refresh_recent_combo()
         self.status_label.setText("")
         self.info_label.setText(
             f"<b>{summary.out}</b> -- {summary.game_name or summary.game_domain}, "
