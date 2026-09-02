@@ -12,8 +12,11 @@ order is derived from mod order plus the manifest's own `plugins[]` load order.
 from __future__ import annotations
 
 import argparse
+import configparser
 import heapq
 import json
+import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -502,6 +505,108 @@ def _write(path: Path, text: str) -> None:
 # -- Command ----------------------------------------------------------------------
 
 
+# -- Profile-local game INIs -------------------------------------------------------
+
+# MO2 short game name -> (My Games folder, [INI basenames], vanilla default INI in the game dir)
+GAME_INIS: dict[str, tuple[str, list[str], str]] = {
+    "SkyrimSE": ("Skyrim Special Edition", ["Skyrim.ini", "SkyrimPrefs.ini", "SkyrimCustom.ini"], "Skyrim_Default.ini"),
+    "SkyrimVR": ("Skyrim VR", ["Skyrim.ini", "SkyrimPrefs.ini", "SkyrimCustom.ini"], "Skyrim_Default.ini"),
+    "Skyrim": ("Skyrim", ["Skyrim.ini", "SkyrimPrefs.ini"], "Skyrim_default.ini"),
+    "Fallout4": ("Fallout4", ["Fallout4.ini", "Fallout4Prefs.ini", "Fallout4Custom.ini"], "Fallout4_Default.ini"),
+    "FalloutNV": ("FalloutNV", ["Fallout.ini", "FalloutPrefs.ini"], "Fallout_default.ini"),
+    "Fallout3": ("Fallout3", ["Fallout.ini", "FalloutPrefs.ini"], "Fallout_default.ini"),
+    "Oblivion": ("Oblivion", ["Oblivion.ini"], "Oblivion_default.ini"),
+    "Starfield": ("Starfield", ["Starfield.ini", "StarfieldPrefs.ini", "StarfieldCustom.ini"], "Starfield_Default.ini"),
+}
+
+
+def seed_profile_inis(profile_dir: Path, game_name: str, game_path: str) -> list[str]:
+    """Create the profile-local game INIs MO2 expects when LocalSettings=true.
+
+    Prefers the user's current INIs from Documents/My Games (they already match the
+    installed game version), falls back to the game's shipped *_Default.ini for the
+    main INI and empty files for the rest. Existing profile INIs are left alone.
+    """
+    spec = GAME_INIS.get(game_name)
+    if not spec:
+        return []
+    my_games_dir, names, default_ini = spec
+    my_games = Path.home() / "Documents" / "My Games" / my_games_dir
+    written: list[str] = []
+    for i, name in enumerate(names):
+        dest = profile_dir / name
+        if dest.exists():
+            continue
+        src = my_games / name
+        if src.exists():
+            shutil.copy2(src, dest)
+        elif i == 0 and game_path and (Path(game_path) / default_ini).exists():
+            shutil.copy2(Path(game_path) / default_ini, dest)
+        else:
+            dest.write_text("", encoding="utf-8")
+        written.append(str(dest))
+    return written
+
+
+_INI_TWEAK_TARGET = re.compile(r"\[([^\[\]]+)\]\.ini$", re.IGNORECASE)
+
+
+def merge_ini_tweak(target: Path, tweak: Path) -> int:
+    """Apply a Vortex INI tweak file onto a game INI: set/override each key in its section.
+
+    Line-based so comments, ordering and odd lines in the game INI survive. Returns the
+    number of keys applied.
+    """
+    tweak_cp = configparser.RawConfigParser(strict=False, delimiters=("=",), interpolation=None)
+    tweak_cp.optionxform = str  # type: ignore[assignment]
+    tweak_cp.read(tweak, encoding="utf-8-sig")
+
+    lines = target.read_text(encoding="utf-8-sig").splitlines() if target.exists() else []
+    applied = 0
+    for section in tweak_cp.sections():
+        # locate the section's line span
+        start = next((i for i, ln in enumerate(lines) if ln.strip().lower() == f"[{section.lower()}]"), None)
+        if start is None:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append(f"[{section}]")
+            start = len(lines) - 1
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("[")), len(lines))
+        for key, value in tweak_cp.items(section):
+            new_line = f"{key}={value}"
+            hit = next(
+                (i for i in range(start + 1, end) if lines[i].split("=", 1)[0].strip().lower() == key.lower()),
+                None,
+            )
+            if hit is None:
+                lines.insert(end, new_line)
+                end += 1
+            else:
+                lines[hit] = new_line
+            applied += 1
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return applied
+
+
+def apply_collection_ini_tweaks(profile_dir: Path, archive_dir: Path, game_name: str) -> list[str]:
+    """Apply the collection archive's `INI Tweaks/<name> [Skyrim].ini` files to the profile INIs."""
+    tweaks_dir = archive_dir / "INI Tweaks"
+    if not tweaks_dir.is_dir():
+        return []
+    spec = GAME_INIS.get(game_name)
+    known = {n.lower()[:-4]: n for n in (spec[1] if spec else [])}  # "skyrimprefs" -> "SkyrimPrefs.ini"
+    notes: list[str] = []
+    for tweak in sorted(tweaks_dir.glob("*.ini")):
+        m = _INI_TWEAK_TARGET.search(tweak.name)
+        target_name = known.get(m.group(1).lower()) if m else None
+        if not target_name:
+            notes.append(f"INI tweak skipped (cannot tell which INI it targets): {tweak.name}")
+            continue
+        n = merge_ini_tweak(profile_dir / target_name, tweak)
+        notes.append(f"INI tweak applied: {tweak.name} -> {target_name} ({n} keys)")
+    return notes
+
+
 def cmd_profile(args: argparse.Namespace) -> int:
     install_json_path = Path(args.install_json)
     data = json.loads(install_json_path.read_text(encoding="utf-8"))
@@ -559,6 +664,12 @@ def cmd_profile(args: argparse.Namespace) -> int:
     settings_path = profile_dir / "settings.ini"
     _write(settings_path, SETTINGS_INI)
     files_written.append(str(settings_path))
+
+    files_written.extend(seed_profile_inis(profile_dir, game_name, game_path))
+    ini_notes = apply_collection_ini_tweaks(profile_dir, manifest_path.parent, game_name)
+    for note in ini_notes:
+        print(note)
+    warnings.extend(n for n in ini_notes if n.startswith("INI tweak skipped"))
 
     tools = manifest.get("tools") or []
     exe_blocks = build_custom_executables(entries, tools, game_path)
