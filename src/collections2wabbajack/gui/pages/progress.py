@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import (
-    QHBoxLayout,
-    QLabel,
-    QProgressBar,
-    QPushButton,
-    QTextEdit,
-    QVBoxLayout,
-)
+from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout
 
 from ... import api
+from ..progress_widget import ProgressWidget
 from ..reporter_bridge import QtReporter
 from ..worker import EngineWorker
 from .base import WizardPage
@@ -25,14 +19,8 @@ class ProgressPage(WizardPage):
         self._worker: EngineWorker | None = None
 
         layout = QVBoxLayout(self)
-        self.stage_label = QLabel("")
-        layout.addWidget(self.stage_label)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 0)  # indeterminate until a stage reports a total
-        layout.addWidget(self.progress_bar)
-        self.log_view = QTextEdit()
-        self.log_view.setReadOnly(True)
-        layout.addWidget(self.log_view, 1)
+        self.panel = ProgressWidget()
+        layout.addWidget(self.panel, 1)
 
         btn_row = QHBoxLayout()
         self.cancel_btn = QPushButton("Cancel")
@@ -52,19 +40,13 @@ class ProgressPage(WizardPage):
     def start(self) -> None:
         """Called by the window right after switching to this page."""
         s = self.state
-        self.log_view.clear()
-        self.stage_label.setText("Starting...")
-        self.progress_bar.setRange(0, 0)
+        self.panel.reset()
         self.cancel_btn.setEnabled(True)
         self.launch_btn.setVisible(False)
         self.open_folder_btn.setVisible(False)
 
         reporter = QtReporter()
-        reporter.stageStarted.connect(self._on_stage)
-        reporter.progressed.connect(self._on_progress)
-        reporter.logged.connect(self._append)
-        reporter.warned.connect(lambda m: self._append(f"warning: {m}"))
-        reporter.stageDone.connect(self._on_done)
+        self.panel.attach(reporter)
 
         kwargs = {
             "url": s.collection_url,
@@ -89,52 +71,32 @@ class ProgressPage(WizardPage):
         if self._worker is not None:
             self._worker.reporter.cancel()
             self.cancel_btn.setEnabled(False)
-            self.stage_label.setText("Cancelling (stops between stages)...")
-
-    def _append(self, text: str) -> None:
-        self.log_view.append(text)
-
-    def _on_stage(self, name: str, total) -> None:
-        self.stage_label.setText(name)
-        if total:
-            self.progress_bar.setRange(0, total)
-            self.progress_bar.setValue(0)
-        else:
-            self.progress_bar.setRange(0, 0)
-        self._append(f"== {name}")
-
-    def _on_progress(self, done: int, total, label: str) -> None:
-        if total:
-            self.progress_bar.setRange(0, total)
-            self.progress_bar.setValue(done)
-
-    def _on_done(self, name: str, summary: str) -> None:
-        self._append(f"-- {name}: {summary}" if summary else f"-- {name}")
+            self.panel.stage_label.setText("Cancelling (stops between stages)...")
 
     def _on_finished(self, rc: int) -> None:
         self.cancel_btn.setEnabled(False)
-        self.progress_bar.setRange(0, 1)
+        self.panel.progress_bar.setRange(0, 1)
         if rc == 0:
-            self.progress_bar.setValue(1)
-            self.stage_label.setText("Done.")
+            self.panel.progress_bar.setValue(1)
+            self.panel.stage_label.setText("Done.")
             self.state.run_succeeded = True
             self.launch_btn.setVisible(True)
             self.open_folder_btn.setVisible(True)
         else:
-            self.progress_bar.setValue(0)
-            self.stage_label.setText("Did not finish -- see the log above.")
+            self.panel.progress_bar.setValue(0)
+            self.panel.stage_label.setText("Did not finish -- see the log above.")
             self.state.run_succeeded = False
 
     def _on_failed(self, message: str) -> None:
         self.cancel_btn.setEnabled(False)
-        self.stage_label.setText("Failed.")
-        self._append(f"error: {message}")
+        self.panel.stage_label.setText("Failed.")
+        self.panel.log_message(f"error: {message}", level="error")
         self.state.run_succeeded = False
 
     def _on_cancelled(self) -> None:
         self.cancel_btn.setEnabled(False)
-        self.stage_label.setText("Cancelled.")
-        self._append("cancelled by user")
+        self.panel.stage_label.setText("Cancelled.")
+        self.panel.log_message("cancelled by user")
         self.state.run_succeeded = False
 
     def _launch(self) -> None:

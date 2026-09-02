@@ -116,6 +116,58 @@ class _ThreadClients:
         return client
 
 
+class _ByteTracker:
+    """Thread-safe cumulative bytes-downloaded counter shared across download workers.
+
+    `add_bytes` is called from each worker thread's chunk-write loop and reports a
+    throttled `progress()` call about every `REPORT_EVERY` bytes, so a GUI's rate/ETA
+    line moves during a single large download instead of jumping only once per file.
+    `file_done` is called once per completed file from the single-threaded
+    `as_completed` loop in `run_download` and always reports, so the counter and the
+    file-level progress line never drift apart.
+
+    `total_bytes` comes from summing the manifest's `source.fileSize` up front (no
+    extra network calls) -- when that is unavailable or zero, `bytes_total` is
+    reported as `None` rather than a misleading 0.
+    """
+
+    REPORT_EVERY = 2 << 20  # ~2 MiB
+
+    def __init__(self, rep: Reporter, total_files: int, total_bytes: int):
+        self._rep = rep
+        self._lock = threading.Lock()
+        self.total_files = total_files
+        self.total_bytes = total_bytes or None
+        self.done_files = 0
+        self.bytes_done = 0
+        self._last_reported = 0
+
+    def add_bytes(self, n: int, label: str) -> None:
+        report: tuple[int, int] | None = None
+        with self._lock:
+            self.bytes_done += n
+            if self.bytes_done - self._last_reported >= self.REPORT_EVERY:
+                self._last_reported = self.bytes_done
+                report = (self.done_files, self.bytes_done)
+        if report is not None:
+            done_files, bytes_done = report
+            self._rep.progress(
+                done_files, self.total_files, label, bytes_done=bytes_done, bytes_total=self.total_bytes
+            )
+
+    def file_done(self, label: str, extra_bytes: int = 0) -> int:
+        with self._lock:
+            self.done_files += 1
+            if extra_bytes:
+                self.bytes_done += extra_bytes
+            self._last_reported = self.bytes_done
+            done_files, bytes_done = self.done_files, self.bytes_done
+        self._rep.progress(
+            done_files, self.total_files, label, bytes_done=bytes_done, bytes_total=self.total_bytes
+        )
+        return done_files
+
+
 class _ThreadSessions:
     """One plain `requests.Session` per worker thread, for `direct` (non-Nexus) downloads.
 
@@ -234,6 +286,7 @@ def _download_one(
     out_dir: Path,
     domain: str,
     game_name: str,
+    tracker: _ByteTracker | None = None,
 ) -> DownloadEntry:
     src = mod.get("source") or {}
     mod_id = int(src["modId"])
@@ -295,6 +348,8 @@ def _download_one(
                         continue
                     fh.write(part)
                     h.update(part)
+                    if tracker is not None:
+                        tracker.add_bytes(len(part), file_name)
     except Exception as e:  # noqa: BLE001 - record any download failure, keep going
         entry.error = f"download failed: {e}"
         try:
@@ -373,6 +428,7 @@ def _download_direct(
     out_dir: Path,
     domain: str,
     game_name: str,
+    tracker: _ByteTracker | None = None,
 ) -> DownloadEntry:
     src = mod.get("source") or {}
     url = src.get("url") or ""
@@ -438,6 +494,8 @@ def _download_direct(
                             continue
                         fh.write(part)
                         h.update(part)
+                        if tracker is not None:
+                            tracker.add_bytes(len(part), file_name)
             actual_md5 = h.hexdigest()
             last_exc = None
             break
@@ -492,12 +550,13 @@ def _download_mod(
     out_dir: Path,
     domain: str,
     game_name: str,
+    tracker: _ByteTracker | None = None,
 ) -> DownloadEntry:
     source_type = (mod.get("source") or {}).get("type")
     if source_type == "nexus":
-        return _download_one(clients, mod, out_dir, domain, game_name)
+        return _download_one(clients, mod, out_dir, domain, game_name, tracker)
     if source_type == "direct":
-        return _download_direct(sessions, mod, out_dir, domain, game_name)
+        return _download_direct(sessions, mod, out_dir, domain, game_name, tracker)
     return _unsupported_entry(mod)
 
 
@@ -575,12 +634,20 @@ def run_download(
     rep.stage("download", total)
     rep.log(f"downloading {total} mod(s) for {game_name} ({domain}) with {jobs} worker(s)")
 
+    # `fileSize` comes straight from the manifest -- no extra network round trips --
+    # so the rate/ETA line has a real denominator from the first progress() call
+    # rather than only after every file's individual size becomes known.
+    expected_bytes = sum(int((m.get("source") or {}).get("fileSize") or 0) for m in selected_mods)
+    tracker = _ByteTracker(rep, total, expected_bytes)
+
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         futures = {
-            pool.submit(_download_mod, clients, sessions, mod, out_dir, domain, game_name): mod
+            pool.submit(
+                _download_mod, clients, sessions, mod, out_dir, domain, game_name, tracker
+            ): mod
             for mod in selected_mods
         }
-        for done, fut in enumerate(as_completed(futures), start=1):
+        for fut in as_completed(futures):
             mod = futures[fut]
             try:
                 entry = fut.result()
@@ -623,7 +690,10 @@ def run_download(
             line = f"{status_label:8s} {entry.file_name or entry.name}  {size_str}"
             if entry.error and entry.status != "skipped":
                 line += f"  ({entry.error})"
-            rep.progress(done, total, line)
+            # Skipped/resumed files never streamed through `tracker.add_bytes` (no
+            # chunks were read), so their size is folded in here instead.
+            extra_bytes = entry.size if entry.status == "skipped" and entry.size else 0
+            done = tracker.file_done(line, extra_bytes=extra_bytes)
 
             if done % CHECKPOINT_EVERY == 0:
                 state.write(downloads_json)

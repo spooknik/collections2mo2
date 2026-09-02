@@ -23,11 +23,11 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QTextEdit,
     QVBoxLayout,
 )
 
 from ... import api
+from ..progress_widget import ProgressWidget
 from ..reporter_bridge import QtReporter
 from ..worker import EngineWorker
 from .base import WizardPage
@@ -112,14 +112,16 @@ class ManagePage(WizardPage):
         action_row.addStretch(1)
         info_layout.addLayout(action_row)
 
-        self.log_view = QTextEdit()
-        self.log_view.setReadOnly(True)
-        self.log_view.setMaximumHeight(120)
-        info_layout.addWidget(self.log_view)
+        # Same widget the Progress page uses for a full `create` run -- every
+        # Manage-tab action (add/remove/update a layer, install tools, export to
+        # Wabbajack) drives one `QtReporter`, so this gets the same stage line,
+        # counter, current item and rate/elapsed line for free.
+        self.action_progress = ProgressWidget()
+        self.action_progress.setMinimumHeight(180)
+        info_layout.addWidget(self.action_progress, 1)
 
         self.info_box.setVisible(False)
         layout.addWidget(self.info_box, 1)
-        layout.addStretch(1)
         self.set_ready(False)
 
     def on_enter(self) -> None:
@@ -178,17 +180,13 @@ class ManagePage(WizardPage):
         self.status_label.setText(message)
         self.info_box.setVisible(False)
 
-    def _append_log(self, text: str) -> None:
-        self.log_view.append(text)
+    def _append_log(self, text: str, level: str = "info") -> None:
+        self.action_progress.log_message(text, level=level)
 
     def _make_reporter(self) -> QtReporter:
         reporter = QtReporter()
-        reporter.logged.connect(self._append_log)
-        reporter.warned.connect(lambda m: self._append_log(f"warning: {m}"))
-        reporter.stageStarted.connect(lambda name, total: self._append_log(f"== {name}"))
-        reporter.stageDone.connect(
-            lambda name, summary: self._append_log(f"-- {name}: {summary}" if summary else f"-- {name}")
-        )
+        self.action_progress.reset()
+        self.action_progress.attach(reporter)
         return reporter
 
     def _add_layer(self) -> None:
@@ -208,7 +206,7 @@ class ManagePage(WizardPage):
             reporter=reporter,
         )
         self._action_worker.succeeded.connect(lambda rc: self._on_action_done("add", rc))
-        self._action_worker.failed.connect(lambda m: self._append_log(f"error: {m}"))
+        self._action_worker.failed.connect(lambda m: self._append_log(m, level="error"))
         self._action_worker.start()
 
     def _remove_layer(self) -> None:
@@ -235,7 +233,7 @@ class ManagePage(WizardPage):
             reporter=reporter,
         )
         self._action_worker.succeeded.connect(lambda rc: self._on_action_done("remove", rc))
-        self._action_worker.failed.connect(lambda m: self._append_log(f"error: {m}"))
+        self._action_worker.failed.connect(lambda m: self._append_log(m, level="error"))
         self._action_worker.start()
 
     def _update_layer(self) -> None:
@@ -266,7 +264,7 @@ class ManagePage(WizardPage):
             reporter=reporter,
         )
         self._action_worker.succeeded.connect(lambda rc: self._on_action_done("update", rc))
-        self._action_worker.failed.connect(lambda m: self._append_log(f"error: {m}"))
+        self._action_worker.failed.connect(lambda m: self._append_log(m, level="error"))
         self._action_worker.start()
 
     def _on_action_done(self, action: str, rc: int) -> None:
@@ -307,7 +305,7 @@ class ManagePage(WizardPage):
             reporter=reporter,
         )
         self._action_worker.succeeded.connect(lambda ok: self._append_log("tools: done" if ok else "tools: failed"))
-        self._action_worker.failed.connect(lambda m: self._append_log(f"error: {m}"))
+        self._action_worker.failed.connect(lambda m: self._append_log(m, level="error"))
         self._action_worker.start()
 
     def _export_wabbajack(self) -> None:
@@ -321,7 +319,7 @@ class ManagePage(WizardPage):
             api.export_to_wabbajack, {"instance_dir": self._instance}, reporter=reporter
         )
         self._action_worker.succeeded.connect(lambda rc: self._append_log("wabbajack: done" if rc == 0 else "wabbajack: failed"))
-        self._action_worker.failed.connect(lambda m: self._append_log(f"error: {m}"))
+        self._action_worker.failed.connect(lambda m: self._append_log(m, level="error"))
         self._action_worker.start()
 
     def on_leave(self) -> bool:
