@@ -140,14 +140,14 @@ def test_install_tools_maps_arguments_and_redirects_output(monkeypatch, tmp_path
     assert "hello from tools.py" in logged
 
 
-def test_list_tool_groups_has_essential_and_disabled_dyndolod():
+def test_list_tool_groups_has_essential_and_installable_dyndolod():
     groups = dict(api.list_tool_groups())
     assert "essential" in groups
     ids = {e.id for entries in groups.values() for e in entries}
     assert "xedit" in ids
     dyndolod = next(e for entries in groups.values() for e in entries if e.id == "dyndolod")
-    assert dyndolod.disabled is True
-    assert dyndolod.status == "unavailable"
+    assert dyndolod.disabled is False
+    assert dyndolod.status == "not installed"
 
 
 # -- misc GUI-only helpers ---------------------------------------------------------------

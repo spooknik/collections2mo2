@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "tools": [
     {
       "id": "xedit",
@@ -200,18 +200,64 @@
       "name": "DynDOLOD",
       "group": "lod",
       "default": false,
-      "status": "v2",
-      "source": null,
-      "install": {
-        "disabled": true,
-        "note": "Needs the DynDOLOD Resources + DLL NG mods installed first and is only distributed from dyndolod.info (no GitHub/Nexus API download); not yet automated by `tools install`."
+      "source": {
+        "type": "nexus",
+        "domain": "skyrimspecialedition",
+        "mod_id": 68518,
+        "file": "latest-main"
       },
-      "executables": [],
+      "install": {
+        "strip_single_root": true,
+        "note": "Run TexGen (SSE) before DynDOLOD (SSE): TexGen builds the billboard/object LOD atlases that DynDOLOD then needs. Both write generated output (LODGen temp files under the tool folder; the LOD meshes/textures/plugin under the game's Data, or MO2's overwrite/ when run through MO2) that you must review and add as your own mod afterwards -- c2wj does not do this automatically. Install this tool's companion_mods (dyndolod-resources, dyndolod-dll-ng) first."
+      },
+      "executables": [
+        {
+          "title": "TexGen (SSE)",
+          "binary": "TexGenx64.exe",
+          "arguments": "-sse",
+          "workingDirectory": "tool"
+        },
+        {
+          "title": "DynDOLOD (SSE)",
+          "binary": "DynDOLODx64.exe",
+          "arguments": "-sse",
+          "workingDirectory": "tool"
+        }
+      ],
       "requires": [],
-      "license_note": "Freeware; author-distributed only, no redistribution permitted.",
-      "size_hint_mb": null,
+      "companion_mods": ["dyndolod-resources", "dyndolod-dll-ng"],
+      "license_note": "Freeware; author-distributed (Sheson), also mirrored on Nexus; no redistribution permitted.",
+      "size_hint_mb": 36,
       "verified": "2026-09-02",
-      "verified_notes": "Placeholder catalog entry only, per spec. `tools install dyndolod` reports it as not yet installable and does nothing; `tools list` shows it as 'unavailable'."
+      "verified_notes": "GET /v1/games/skyrimspecialedition/mods/68518/files.json -> newest (only) MAIN file_id 798219, 'DynDOLOD 3.00 68518 Alpha-211 2026-08-31T16-23Z Dc5uGkS8r.7z', version Alpha-211, 35595 KB (Alpha builds are the current line, confirming the task brief). content_preview_link 404'd (not generated yet for this upload); downloaded (Premium, ~36 MB) and listed with sevenzip.list_archive: single wrapping folder 'DynDOLOD/' -> strip_single_root; DynDOLODx64.exe and TexGenx64.exe both land at the tool root (verified 32-bit variants do not exist in this build, only x64), 'Edit Scripts/' holds LODGenx64*.exe/Texconvx64.exe and the xEdit .pas scripts DynDOLOD/TexGen actually run under the hood."
+    }
+  ],
+  "companion_mods": [
+    {
+      "id": "dyndolod-resources",
+      "name": "DynDOLOD Resources SE",
+      "source": {
+        "type": "nexus",
+        "domain": "skyrimspecialedition",
+        "mod_id": 52897,
+        "file": "latest-main"
+      },
+      "install": "fomod-defaults",
+      "verified": "2026-09-02",
+      "verified_notes": "GET /v1/games/skyrimspecialedition/mods/52897/files.json -> newest MAIN file_id 747879, 'DynDOLOD Resources SE 3.00-52897-Alpha-59-1777722398.7z', version Alpha-59, 66902 KB. content_preview_link 200'd (survey.py's _fetch_preview): top level is 'FOMod/' + 'Package.txt' + 'Wizard.txt' plus '00 DynDOLOD Core Files - Required/' and several optional packs ('01 Low-Res LOD Textures', '02 Whiterun Exterior Grass', ...) -- a real FOMOD, the opposite of the task brief's 'plain archive' guess -> install: fomod-defaults. No choices override recorded; the installer's FOMOD defaults were used as-is."
+    },
+    {
+      "id": "dyndolod-dll-ng",
+      "name": "DynDOLOD DLL NG and Scripts",
+      "source": {
+        "type": "nexus",
+        "domain": "skyrimspecialedition",
+        "mod_id": 97720,
+        "file": "latest-main"
+      },
+      "install": "plain",
+      "verified": "2026-09-02",
+      "verified_notes": "GET /v1/games/skyrimspecialedition/mods/97720/files.json -> newest (only) MAIN file_id 793857, 'DynDOLOD DLL NG and Scripts 3.00 97720 Alpha-42 2026-08-23T13-05Z uhRBKsxK8.7z', version Alpha-42, 4856 KB -- one MAIN file, nothing to choose between. content_preview_link 404'd; downloaded (Premium) and listed with sevenzip.list_archive: no FOMod/ModuleConfig.xml, just 'Scripts/' + 'SKSE/Plugins/DynDOLOD.DLL' (the 'NG' 1.6.x-compatible DLL) + 'Package.txt' -> install: plain, no choices override needed. The opposite of the task brief's FOMOD guess."
     }
   ]
 }

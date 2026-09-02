@@ -380,6 +380,71 @@ def test_user_mod_plugins_keep_their_state(tmp_path: Path):
     assert ("", "Mine.esp") in rows
 
 
+def test_tool_mod_is_placed_above_the_collection_and_below_user_mods(tmp_path: Path):
+    # What `c2wj tools install dyndolod` produces: a mod folder owned by `tool:<id>`,
+    # not by any layer. It must land in modlist.txt above the collection's top block
+    # (highest layer priority) but below anything the user pinned above everything.
+    inst, led = make_instance(
+        tmp_path,
+        [
+            {
+                "slug": "base",
+                "revision": 1,
+                "name": "Base List",
+                "manifest": {"mods": [_mod("A", "md5a"), _mod("B", "md5b")], "info": {}},
+                "entries": [_entry("A", "md5a"), _entry("B", "md5b")],
+            }
+        ],
+    )
+    (inst / "mods" / "My Test Mod").mkdir()
+    (inst / "mods" / "DynDOLOD Resources SE").mkdir()
+    led.set_mod_owner("DynDOLOD Resources SE", ledger.tool_owner("dyndolod"))
+    led.save()
+
+    report = profile.render_instance(
+        inst, led=led, keep_inis=True, reporter=NullReporter(), profile_name="TestProfile"
+    )
+    rows = [
+        name
+        for _, name in profile.read_marked_lines(inst / "profiles" / "TestProfile" / "modlist.txt")
+        if not name.startswith("DLC: ")
+    ]
+    # Top of file = highest priority: user mod, then the tool mod, then the collection.
+    assert rows == ["My Test Mod", "DynDOLOD Resources SE", "Phase 0_separator", "B", "A"]
+    assert report["tool_mods"] == ["DynDOLOD Resources SE"]
+    assert "DynDOLOD Resources SE" not in report["user_mods"]
+    assert "DynDOLOD Resources SE" not in report["mod_order"]
+
+
+def test_tool_mod_survives_re_render_at_its_managed_position(tmp_path: Path):
+    # Once rendered, the tool mod is a *managed* row (marker driven by the renderer,
+    # not preserved-from-old-file like a user mod) -- re-rendering must not move it.
+    inst, led = make_instance(
+        tmp_path,
+        [
+            {
+                "slug": "base",
+                "revision": 1,
+                "name": "Base List",
+                "manifest": {"mods": [_mod("A", "md5a")], "info": {}},
+                "entries": [_entry("A", "md5a")],
+            }
+        ],
+    )
+    (inst / "mods" / "DynDOLOD Resources SE").mkdir()
+    led.set_mod_owner("DynDOLOD Resources SE", ledger.tool_owner("dyndolod"))
+    led.save()
+
+    profile.render_instance(inst, led=led, keep_inis=True, reporter=NullReporter(), profile_name="TestProfile")
+    profile.render_instance(inst, led=led, keep_inis=True, reporter=NullReporter(), profile_name="TestProfile")
+    rows = [
+        name
+        for _, name in profile.read_marked_lines(inst / "profiles" / "TestProfile" / "modlist.txt")
+        if not name.startswith("DLC: ")
+    ]
+    assert rows == ["DynDOLOD Resources SE", "Phase 0_separator", "A"]
+
+
 def test_splice_preserved_puts_a_run_of_user_mods_back_in_order():
     new = ["A", "B", "C"]
     old = ["A", "U1", "U2", "B", "C"]

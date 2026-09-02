@@ -322,6 +322,75 @@ def _plan_fomod(
 # ------------------------------------------------------------------------ one mod
 
 
+def install_single_mod(
+    *,
+    archive: Path,
+    mods_dir: Path,
+    tmp_root: Path,
+    name: str,
+    folder: str,
+    game_name: str = "",
+    owner: str | None = None,
+    fomod: bool = False,
+    choices: dict[str, Any] | None = None,
+    mod_type: str = "",
+    mod_id: int | None = None,
+    file_id: int | None = None,
+    file_name: str = "",
+    version: str = "",
+    force: bool = False,
+) -> ModResult:
+    """Install one archive as a single mod folder, with no manifest behind it.
+
+    `_install_one` above already handles this: a `mod` dict with no `hashes` and an
+    `entry` with no recorded FOMOD choices already fall through to a fresh install
+    (FOMOD defaults, or `layout.plan_layout` for a plain archive). This is the public
+    entry point for a caller that has an archive and a mod name but no collection
+    manifest to hang them off of -- currently `tools.py`, for a catalogue tool's
+    companion mods (e.g. DynDOLOD's Resources SE / DLL NG mods). It builds the
+    synthetic `entry`/`mod` pair `_install_one` expects and calls it directly, so a
+    companion mod is installed with exactly the same layout/FOMOD-default machinery
+    a collection's own mods go through.
+
+    `choices` is a Vortex-format FOMOD answer set to replay instead of the installer's
+    defaults (the catalogue's `companion_mods[].choices` override); it is only used
+    when `fomod` is true.
+    """
+    # Not `companion:<folder>` -- this becomes a temp *directory name* below (`tmp_root /
+    # (tag or result.folder)`), and ':' is illegal in a Windows path component.
+    tag = f"companion__{folder}"
+    entry: dict[str, Any] = {
+        "tag": tag,
+        "path": str(archive),
+        "mod_id": mod_id,
+        "file_id": file_id,
+        "file_name": file_name,
+        "has_fomod": fomod,
+        "install_mode": "fresh",
+        "mod_type": mod_type,
+    }
+    mod: dict[str, Any] = {
+        "name": name,
+        "phase": 0,
+        "optional": False,
+        "version": version,
+        "instructions": "",
+    }
+    overrides = {tag: choices} if (fomod and choices) else {}
+    return _install_one(
+        entry,
+        mod,
+        mods_dir,
+        tmp_root,
+        game_name,
+        overrides,
+        force,
+        None,
+        folder,
+        owner,
+    )
+
+
 def _install_one(
     entry: dict[str, Any],
     mod: dict[str, Any],

@@ -15,14 +15,28 @@ one wrapping folder, and moves the result to `<mo2-dir>/Tools/<id>/`. It then:
   `gamePath` and the `N\\key=` custom-executable keys), deduping by binary path;
 - copies the downloaded archive into `<mo2-dir>/downloads/` with an MO2/Wabbajack `.meta`
   sidecar (`directURL=` for GitHub/direct sources, `modID=`/`fileID=` for Nexus ones);
-  and
-- records the install in `<mo2-dir>/c2wj-instance.json` under `tools[id]`.
+- installs any of the catalogue entry's `companion_mods` (a tool like DynDOLOD that
+  needs its own mods present, e.g. DynDOLOD Resources SE / DLL NG) into
+  `<mo2-dir>/mods/<Name>/` via `installer.install_single_mod` -- the same archive ->
+  layout/FOMOD-default machinery `c2wj install` uses for a collection's own mods, just
+  without a manifest behind it -- owned by `tool:<id>` in the ledger, and re-renders the
+  profile (`profile.render_instance`) so they show up enabled in `modlist.txt`; and
+- records the install in `<mo2-dir>/c2wj-instance.json` under `tools[id]` (via
+  `ledger.py`, so companion mods land in the same `mods` map a collection's do).
 
-This module is deliberately self-contained (no imports from build.py, cli.py,
-installer.py, profile.py or ledger.py, which are being developed concurrently): it
-re-derives `<repo>/tools/cache/` from its own file location and reimplements the small
-cached-download and single-root-flatten helpers rather than importing build.py's private
-ones. It does read from nexus.py and sevenzip.py, which are stable.
+`c2wj tools remove <id...> --mo2-dir <instance>` is the inverse: deletes `Tools/<id>`,
+drops its `[customExecutables]` entries, removes its companion mods (only the folders it
+solely owns -- shared with nothing else, since a companion mod is not something a
+collection would also pin), drops the ledger records, and re-renders the profile.
+
+Only the tool-archive download/extract/executable-registration path stays deliberately
+self-contained from build.py, cli.py and profile.py (no imports of those, cyclic or
+otherwise): it re-derives `<repo>/tools/cache/` from its own file location and
+reimplements the small cached-download and single-root-flatten helpers rather than
+importing build.py's private ones. `ledger.py`, `installer.py` and `profile.py` are now
+stable, so companion-mod install/remove and the post-install profile re-render use them
+directly (the `profile` import is function-local, matching the one `profile.py` already
+takes back on this module, to keep the import graph acyclic either way round).
 """
 
 from __future__ import annotations
@@ -41,6 +55,9 @@ from typing import Any
 
 import requests
 
+from . import installer as installer_mod
+from . import ledger as ledger_mod
+from .naming import sanitize_folder_name
 from .nexus import USER_AGENT, AuthRequired, NexusClient, NexusError
 from .sevenzip import extract
 
@@ -52,7 +69,7 @@ CATALOG_PATH = Path(__file__).resolve().parent / "tools_catalog.json"
 GITHUB_API = "https://api.github.com"
 _GITHUB_HEADERS = {"Accept": "application/vnd.github+json", "User-Agent": USER_AGENT}
 _CHUNK_SIZE = 1 << 20  # 1 MiB
-LEDGER_NAME = "c2wj-instance.json"
+LEDGER_NAME = ledger_mod.LEDGER_NAME
 
 
 class ToolError(RuntimeError):
@@ -67,39 +84,20 @@ def load_catalog() -> list[dict[str, Any]]:
     return data["tools"]
 
 
+def load_companion_catalog() -> list[dict[str, Any]]:
+    """The top-level `companion_mods` list: mods a catalogue tool needs installed
+    alongside it (e.g. DynDOLOD's Resources SE / DLL NG), addressed by id from a tool
+    entry's own `companion_mods` (a list of ids into this list, not full records)."""
+    data = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    return data.get("companion_mods") or []
+
+
 def _catalog_by_id(catalog: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {e["id"]: e for e in catalog}
 
 
 def _is_disabled(entry: dict[str, Any]) -> bool:
     return bool((entry.get("install") or {}).get("disabled"))
-
-
-# -- Ledger (self-contained: no import of ledger.py, see module docstring) ------------
-
-
-def _load_ledger(mo2_dir: Path) -> dict[str, Any]:
-    path = mo2_dir / LEDGER_NAME
-    if not path.exists():
-        return {"version": 1, "tools": {}}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    data.setdefault("version", 1)
-    data.setdefault("tools", {})
-    return data
-
-
-def _save_ledger(mo2_dir: Path, data: dict[str, Any]) -> Path:
-    path = mo2_dir / LEDGER_NAME
-    mo2_dir.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f".tmp{os.getpid()}")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
-    return path
 
 
 # -- Downloading (self-contained cache, mirrors build.py's _download_cached) ----------
@@ -481,24 +479,40 @@ def _requires_line(entry: dict[str, Any]) -> str:
     return note or ""
 
 
-def _tool_status(entry: dict[str, Any], mo2_dir: Path | None, ledger: dict[str, Any]) -> str:
+def _tool_status(entry: dict[str, Any], mo2_dir: Path | None, ledger_data: dict[str, Any]) -> str:
     if _is_disabled(entry):
         return "unavailable"
     if mo2_dir is None:
         return "not installed"
-    record = (ledger.get("tools") or {}).get(entry["id"])
+    record = (ledger_data.get("tools") or {}).get(entry["id"])
     tool_dir = mo2_dir / "Tools" / entry["id"]
     if record and tool_dir.exists():
         return "installed"
     return "not installed"
 
 
+def _companion_status(
+    companion_id: str, tool_record: dict[str, Any] | None, mo2_dir: Path | None
+) -> str:
+    if mo2_dir is None or tool_record is None:
+        return "not installed"
+    installed = {c.get("id"): c for c in (tool_record.get("companion_mods") or [])}
+    rec = installed.get(companion_id)
+    if rec and (mo2_dir / "mods" / rec.get("folder", "")).is_dir():
+        return "installed"
+    return "not installed"
+
+
 def cmd_tools_list(args: argparse.Namespace) -> int:
     catalog = load_catalog()
+    companion_catalog = load_companion_catalog()
+    companion_by_id = _catalog_by_id(companion_catalog)
     mo2_dir = Path(args.mo2_dir).resolve() if args.mo2_dir else None
-    ledger = _load_ledger(mo2_dir) if mo2_dir else {"tools": {}}
+    led = ledger_mod.load(mo2_dir) if mo2_dir else None
+    ledger_data: dict[str, Any] = led.data if led is not None else {"tools": {}}
 
     rows = []
+    comp_rows: list[tuple[str, str, str, str]] = []
     for entry in catalog:
         size = entry.get("size_hint_mb")
         size_s = f"{size} MB" if size is not None else "-"
@@ -509,10 +523,22 @@ def cmd_tools_list(args: argparse.Namespace) -> int:
                 entry["group"],
                 "yes" if entry.get("default") else "no",
                 size_s,
-                _tool_status(entry, mo2_dir, ledger),
+                _tool_status(entry, mo2_dir, ledger_data),
                 _requires_line(entry),
             )
         )
+        tool_record = (ledger_data.get("tools") or {}).get(entry["id"])
+        for companion_id in entry.get("companion_mods") or []:
+            companion = companion_by_id.get(companion_id)
+            name = companion["name"] if companion else companion_id
+            comp_rows.append(
+                (
+                    entry["id"],
+                    companion_id,
+                    name,
+                    _companion_status(companion_id, tool_record, mo2_dir),
+                )
+            )
 
     headers = ("id", "name", "group", "default", "size", "status", "requires")
     widths = [
@@ -524,6 +550,18 @@ def cmd_tools_list(args: argparse.Namespace) -> int:
     print("  ".join("-" * w for w in widths))
     for row in rows:
         print("  ".join(str(c).ljust(widths[i]) for i, c in enumerate(row)))
+
+    if comp_rows:
+        comp_headers = ("tool", "companion id", "name", "status")
+        comp_widths = [
+            max(len(comp_headers[i]), *(len(r[i]) for r in comp_rows)) for i in range(4)
+        ]
+        print()
+        print("companion mods:")
+        print("  ".join(h.ljust(comp_widths[i]) for i, h in enumerate(comp_headers)))
+        print("  ".join("-" * w for w in comp_widths))
+        for row in comp_rows:
+            print("  ".join(str(c).ljust(comp_widths[i]) for i, c in enumerate(row)))
     return 0
 
 
@@ -538,14 +576,156 @@ def _client() -> NexusClient:
     return NexusClient(api_key=key)
 
 
+def _companion_tag(companion_id: str, version: str) -> str:
+    """`led.data["mods"][folder]["tag"]`, so a re-run can tell whether the same
+    companion mod version is already installed without re-downloading anything."""
+    return f"companion:{companion_id}@{version}"
+
+
+def _install_companion_mods(
+    entry: dict[str, Any],
+    mo2_dir: Path,
+    client: NexusClient,
+    led: ledger_mod.Ledger,
+    force: bool,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Install a tool's `companion_mods` into `<mo2_dir>/mods/`.
+
+    Reuses exactly the archive -> layout/FOMOD-default machinery `c2wj install` uses
+    for a collection's own mods (`installer.install_single_mod`), just without a
+    manifest behind it. Returns `(records, ok)`: `records` is what to store under
+    `led.data["tools"][tool_id]["companion_mods"]` (one dict per companion mod
+    installed or already present), `ok` is False if any companion mod failed.
+    """
+    tool_id = entry["id"]
+    companion_ids = entry.get("companion_mods") or []
+    if not companion_ids:
+        return [], True
+
+    catalog = load_companion_catalog()
+    by_id = _catalog_by_id(catalog)
+    owner = ledger_mod.tool_owner(tool_id)
+    mods_dir = mo2_dir / "mods"
+    mods_dir.mkdir(parents=True, exist_ok=True)
+    downloads_dir = mo2_dir / "downloads"
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    tmp_root = mo2_dir / ".c2wj-tools-tmp"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    game_name = (led.data.get("game") or {}).get("mo2_name") or ""
+
+    records: list[dict[str, Any]] = []
+    ok = True
+    for companion_id in companion_ids:
+        companion = by_id.get(companion_id)
+        if companion is None:
+            print(f"[{tool_id}] warning: unknown companion mod id {companion_id!r}, skipped")
+            ok = False
+            continue
+
+        try:
+            resolved = resolve_source(companion, client)
+        except AuthRequired as e:
+            print(f"[{tool_id}] error resolving companion {companion_id}: {e}", file=sys.stderr)
+            ok = False
+            continue
+        except (NexusError, ToolError, requests.RequestException) as e:
+            print(f"[{tool_id}] error resolving companion {companion_id}: {e}", file=sys.stderr)
+            ok = False
+            continue
+
+        folder = sanitize_folder_name(companion.get("name") or companion_id)
+        tag = _companion_tag(companion_id, resolved.version)
+        dest_root = mods_dir / folder
+        existing = led.data.get("mods", {}).get(folder)
+        if existing and existing.get("tag") == tag and dest_root.is_dir() and not force:
+            print(f"[{tool_id}] companion already installed: {companion['name']} {resolved.version}")
+            led.add_mod_owner(folder, owner)
+            records.append(
+                {
+                    "id": companion_id,
+                    "name": companion.get("name") or companion_id,
+                    "folder": folder,
+                    "version": resolved.version,
+                }
+            )
+            continue
+
+        print(f"[{tool_id}] companion: {companion['name']} {resolved.version}")
+        cache_dest = CACHE_DIR / f"{companion_id}-{resolved.filename}"
+        try:
+            archive = _download_cached(resolved.download_url, cache_dest)
+        except requests.RequestException as e:
+            print(f"[{tool_id}] error downloading companion {companion_id}: {e}", file=sys.stderr)
+            ok = False
+            continue
+
+        result = installer_mod.install_single_mod(
+            archive=archive,
+            mods_dir=mods_dir,
+            tmp_root=tmp_root,
+            name=companion.get("name") or companion_id,
+            folder=folder,
+            game_name=game_name,
+            owner=owner,
+            fomod=companion.get("install") == "fomod-defaults",
+            choices=companion.get("choices"),
+            mod_id=resolved.nexus_mod_id,
+            file_id=resolved.nexus_file_id,
+            file_name=resolved.filename,
+            version=resolved.version,
+            force=force,
+        )
+        if result.failed:
+            detail = result.warnings[-1] if result.warnings else "unknown error"
+            print(f"[{tool_id}] companion {companion['name']} failed: {detail}", file=sys.stderr)
+            ok = False
+            continue
+        for warning in result.warnings:
+            print(f"[{tool_id}] companion {companion['name']}: {warning}")
+
+        led.set_mod_owner(
+            folder,
+            owner,
+            tag=tag,
+            install_mode="fresh",
+            strategy=result.strategy,
+            plugins=result.plugins,
+        )
+
+        dl_dest = downloads_dir / resolved.filename
+        if not dl_dest.exists():
+            shutil.copyfile(archive, dl_dest)
+        _write_tool_meta(dl_dest.with_name(dl_dest.name + ".meta"), entry=companion, resolved=resolved)
+
+        print(f"[{tool_id}] companion installed: {companion['name']} -> {dest_root} ({result.strategy})")
+        records.append(
+            {
+                "id": companion_id,
+                "name": companion.get("name") or companion_id,
+                "folder": folder,
+                "version": resolved.version,
+                "mod_id": resolved.nexus_mod_id,
+                "file_id": resolved.nexus_file_id,
+                "strategy": result.strategy,
+            }
+        )
+
+    shutil.rmtree(tmp_root, ignore_errors=True)
+    return records, ok
+
+
 def _install_one(
     entry: dict[str, Any],
     mo2_dir: Path,
     client: NexusClient,
-    ledger: dict[str, Any],
+    led: ledger_mod.Ledger,
     force: bool,
 ) -> bool:
-    """Install one catalogue entry into `mo2_dir`. Returns True on success (incl. skip)."""
+    """Install one catalogue entry (and its companion mods) into `mo2_dir`.
+
+    Returns True on success (including a plain skip); the ledger (`led`) is updated
+    in place but not saved -- the caller saves once after every id in the run.
+    """
     tool_id = entry["id"]
 
     if _is_disabled(entry):
@@ -567,33 +747,45 @@ def _install_one(
         return False
 
     tool_dir = mo2_dir / "Tools" / tool_id
-    record = (ledger.get("tools") or {}).get(tool_id)
-    if record and record.get("version") == resolved.version and tool_dir.exists() and not force:
+    record = (led.data.get("tools") or {}).get(tool_id)
+    already_current = (
+        record and record.get("version") == resolved.version and tool_dir.exists() and not force
+    )
+    if already_current:
         print(f"[{tool_id}] already installed (version {resolved.version}); skipping")
-        return True
+    else:
+        print(f"[{tool_id}] {entry['name']} {resolved.version}")
+        cache_dest = CACHE_DIR / f"{tool_id}-{resolved.filename}"
+        try:
+            # Nexus mod-file download links returned by mod_file_download_url are
+            # already pre-signed, time-limited CDN URLs -- no apikey header needed.
+            archive = _download_cached(resolved.download_url, cache_dest)
+        except requests.RequestException as e:
+            print(f"[{tool_id}] error downloading: {e}", file=sys.stderr)
+            return False
 
-    print(f"[{tool_id}] {entry['name']} {resolved.version}")
-    cache_dest = CACHE_DIR / f"{tool_id}-{resolved.filename}"
-    try:
-        # Nexus mod-file download links returned by mod_file_download_url are already
-        # pre-signed, time-limited CDN URLs -- no apikey header needed to fetch them.
-        archive = _download_cached(resolved.download_url, cache_dest)
-    except requests.RequestException as e:
-        print(f"[{tool_id}] error downloading: {e}", file=sys.stderr)
-        return False
+        try:
+            _extract_tool(archive, entry, tool_dir)
+        except RuntimeError as e:
+            print(f"[{tool_id}] error extracting: {e}", file=sys.stderr)
+            return False
 
-    try:
-        _extract_tool(archive, entry, tool_dir)
-    except RuntimeError as e:
-        print(f"[{tool_id}] error extracting: {e}", file=sys.stderr)
-        return False
+        missing = []
+        for exe in entry.get("executables") or []:
+            if not (tool_dir / exe["binary"]).exists():
+                missing.append(exe["binary"])
+        if missing:
+            print(f"[{tool_id}] warning: executable(s) not found after install: {missing}")
 
-    missing = []
-    for exe in entry.get("executables") or []:
-        if not (tool_dir / exe["binary"]).exists():
-            missing.append(exe["binary"])
-    if missing:
-        print(f"[{tool_id}] warning: executable(s) not found after install: {missing}")
+        downloads_dir = mo2_dir / "downloads"
+        downloads_dir.mkdir(parents=True, exist_ok=True)
+        dl_dest = downloads_dir / resolved.filename
+        if not dl_dest.exists():
+            shutil.copyfile(archive, dl_dest)
+        meta_path = dl_dest.with_name(dl_dest.name + ".meta")
+        _write_tool_meta(meta_path, entry=entry, resolved=resolved)
+
+        print(f"[{tool_id}] installed -> {tool_dir}")
 
     game_path = read_game_path(mo2_dir / "ModOrganizer.ini")
     blocks = build_executable_blocks(entry, tool_dir, game_path)
@@ -607,26 +799,19 @@ def _install_one(
     elif not ini_path.exists():
         print(f"[{tool_id}] warning: {ini_path} not found; skipped registering executables")
 
-    downloads_dir = mo2_dir / "downloads"
-    downloads_dir.mkdir(parents=True, exist_ok=True)
-    dl_dest = downloads_dir / resolved.filename
-    if not dl_dest.exists():
-        shutil.copyfile(archive, dl_dest)
-    meta_path = dl_dest.with_name(dl_dest.name + ".meta")
-    _write_tool_meta(meta_path, entry=entry, resolved=resolved)
+    companion_records, companions_ok = _install_companion_mods(entry, mo2_dir, client, led, force)
 
-    ledger.setdefault("tools", {})[tool_id] = {
+    led.data.setdefault("tools", {})[tool_id] = {
         "name": entry["name"],
         "version": resolved.version,
         "source": entry.get("source"),
         "dir": str(tool_dir),
         "executables": entry.get("executables") or [],
+        "companion_mods": companion_records,
         "installed": datetime.now(UTC).isoformat(),
     }
-    _save_ledger(mo2_dir, ledger)
 
-    print(f"[{tool_id}] installed -> {tool_dir}")
-    return True
+    return companions_ok
 
 
 def cmd_tools_install(args: argparse.Namespace) -> int:
@@ -654,15 +839,101 @@ def cmd_tools_install(args: argparse.Namespace) -> int:
         return 2
 
     client = _client()
-    ledger = _load_ledger(mo2_dir)
+    led = ledger_mod.load(mo2_dir)
 
     ok = True
+    has_companions = False
     for tool_id in ids:
         entry = by_id[tool_id]
-        if not _install_one(entry, mo2_dir, client, ledger, force=args.force):
+        if entry.get("companion_mods"):
+            has_companions = True
+        if not _install_one(entry, mo2_dir, client, led, force=args.force):
             ok = False
+    led.save()
+
+    if has_companions and led.data.get("layers"):
+        # Companion mods just landed in mods/ with no `items` entry of their own (see
+        # profile.py's render_instance); re-render so they show up enabled in
+        # modlist.txt, above the collection block and below the user's own mods.
+        from . import profile as profile_mod  # local: profile.py imports this module
+
+        try:
+            profile_mod.render_instance(mo2_dir, led=led)
+            print("profile re-rendered so companion mods show up in modlist.txt")
+        except (OSError, ValueError) as e:
+            print(f"warning: profile could not be re-rendered: {e}", file=sys.stderr)
 
     return 0 if ok else 1
+
+
+def cmd_tools_remove(args: argparse.Namespace) -> int:
+    catalog = load_catalog()
+    by_id = _catalog_by_id(catalog)
+    mo2_dir = Path(args.mo2_dir).resolve()
+    if not mo2_dir.exists():
+        print(f"error: {mo2_dir} does not exist", file=sys.stderr)
+        return 1
+
+    ids: list[str] = list(dict.fromkeys(args.ids or []))
+    if not ids:
+        print("error: no tool ids given", file=sys.stderr)
+        return 2
+
+    led = ledger_mod.load(mo2_dir)
+    any_removed = False
+    for tool_id in ids:
+        record = (led.data.get("tools") or {}).get(tool_id)
+        if record is None:
+            print(f"[{tool_id}] not installed, nothing to remove")
+            continue
+
+        tool_dir = mo2_dir / "Tools" / tool_id
+        if tool_dir.is_dir():
+            shutil.rmtree(tool_dir, ignore_errors=True)
+            print(f"[{tool_id}] removed {tool_dir}")
+
+        entry = by_id.get(tool_id) or {"executables": record.get("executables") or []}
+        blocks = build_executable_blocks(entry, mo2_dir / "Tools" / tool_id, "")
+        keys = {(b["binary"].strip().lower(), b["arguments"].strip()) for b in blocks}
+        ini_path = mo2_dir / "ModOrganizer.ini"
+        if keys and ini_path.exists():
+            from . import layers as layers_mod  # local: layers.py does not import tools.py
+
+            removed_titles = layers_mod.drop_executables(ini_path, keys)
+            for title in removed_titles:
+                print(f"[{tool_id}] executable removed from ModOrganizer.ini: {title}")
+
+        owner = ledger_mod.tool_owner(tool_id)
+        for companion in record.get("companion_mods") or []:
+            folder = companion.get("folder")
+            if not folder:
+                continue
+            remaining = led.remove_mod_owner(folder, owner)
+            if remaining:
+                target = mo2_dir / "mods" / folder
+                if target.is_dir():
+                    installer_mod.stamp_owner(target, ", ".join(remaining))
+                print(f"[{tool_id}] companion kept (still owned by {', '.join(remaining)}): {folder}")
+            else:
+                shutil.rmtree(mo2_dir / "mods" / folder, ignore_errors=True)
+                print(f"[{tool_id}] companion removed: {folder}")
+
+        led.data.get("tools", {}).pop(tool_id, None)
+        any_removed = True
+        print(f"[{tool_id}] removed")
+
+    led.save()
+
+    if any_removed and led.data.get("layers"):
+        from . import profile as profile_mod  # local: profile.py imports this module
+
+        try:
+            profile_mod.render_instance(mo2_dir, led=led)
+            print("profile re-rendered")
+        except (OSError, ValueError) as e:
+            print(f"warning: profile could not be re-rendered: {e}", file=sys.stderr)
+
+    return 0
 
 
 # -- CLI wiring -------------------------------------------------------------------------
@@ -696,3 +967,10 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help="reinstall even if the same version is already recorded as installed",
     )
     ip.set_defaults(func=cmd_tools_install)
+
+    rp = tool_sub.add_parser(
+        "remove", help="remove installed modding tools and their companion mods"
+    )
+    rp.add_argument("ids", nargs="+", help="tool ids to remove (see `c2wj tools list`)")
+    rp.add_argument("--mo2-dir", required=True, help="portable MO2 instance directory")
+    rp.set_defaults(func=cmd_tools_remove)

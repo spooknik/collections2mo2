@@ -1,10 +1,23 @@
-"""Tests for build._rewrite_ini(): line-based ModOrganizer.ini rewriting."""
+"""Tests for build._rewrite_ini(): line-based ModOrganizer.ini rewriting, plus keeping
+the MO2/Root Builder release archives in downloads/ so Wabbajack can reference them.
+"""
 
 from __future__ import annotations
 
+import configparser
+import zipfile
 from pathlib import Path
 
-from collections2wabbajack.build import _rewrite_ini
+import pytest
+
+from collections2wabbajack.build import (
+    _archive_top_level_names,
+    _ensure_release_download,
+    _rewrite_ini,
+)
+from collections2wabbajack.sevenzip import TOOLS_DIR
+
+_SEVENZIP_AVAILABLE = (TOOLS_DIR / "7za.exe").exists() and (TOOLS_DIR / "7z.dll").exists()
 
 
 def _base_ini(game_edition: str | None = None) -> str:
@@ -101,3 +114,79 @@ def test_rewrite_ini_is_idempotent_on_second_run(tmp_path: Path):
 
     assert text_after_first == text_after_second
     assert changes_second == []
+
+
+# -- keeping the release archives as real downloads/ ---------------------------------
+
+
+def test_ensure_release_download_copies_archive_and_writes_direct_meta(tmp_path: Path):
+    mo2_dir = tmp_path / "inst"
+    mo2_dir.mkdir()
+    archive = tmp_path / "Mod.Organizer-2.5.2.7z"
+    archive.write_bytes(b"fake mo2 archive")
+
+    dest = _ensure_release_download(
+        mo2_dir,
+        archive,
+        "https://github.com/ModOrganizer2/modorganizer/releases/download/v2.5.2/Mod.Organizer-2.5.2.7z",
+        "Mod Organizer 2",
+        "2.5.2",
+    )
+
+    assert dest == mo2_dir / "downloads" / "Mod.Organizer-2.5.2.7z"
+    assert dest.read_bytes() == b"fake mo2 archive"
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.read(dest.with_name(dest.name + ".meta"), encoding="utf-8")
+    general = cfg["General"]
+    assert general["directURL"] == (
+        "https://github.com/ModOrganizer2/modorganizer/releases/download/v2.5.2/Mod.Organizer-2.5.2.7z"
+    )
+    assert general["modName"] == "Mod Organizer 2"
+    assert general["version"] == "2.5.2"
+    assert general["repository"] == ""
+    assert general["installed"] == "false"
+
+
+def test_ensure_release_download_is_idempotent(tmp_path: Path):
+    mo2_dir = tmp_path / "inst"
+    mo2_dir.mkdir()
+    archive = tmp_path / "rootbuilder.5.1.1.zip"
+    archive.write_bytes(b"v1")
+
+    _ensure_release_download(mo2_dir, archive, "https://example.test/rb.zip", "Root Builder", "5.1.1")
+    dest = mo2_dir / "downloads" / "rootbuilder.5.1.1.zip"
+    # A cache re-download that changed on disk must not silently overwrite what is
+    # already in downloads/ -- same convention as `_download_cached`.
+    archive.write_bytes(b"v2-should-not-be-copied")
+    _ensure_release_download(mo2_dir, archive, "https://example.test/rb.zip", "Root Builder", "5.1.1")
+    assert dest.read_bytes() == b"v1"
+
+
+@pytest.mark.local
+@pytest.mark.skipif(not _SEVENZIP_AVAILABLE, reason="tools/7za.exe not bootstrapped locally")
+def test_archive_top_level_names_no_wrapping_folder(tmp_path: Path):
+    archive = tmp_path / "mo2.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("ModOrganizer.exe", "x")
+        zf.writestr("dlls/usvfs.dll", "x")
+        zf.writestr("plugins/installer_bain.py", "x")
+        zf.writestr("stylesheets/1809 Dark.qss", "x")
+
+    assert _archive_top_level_names(archive) == [
+        "ModOrganizer.exe",
+        "dlls",
+        "plugins",
+        "stylesheets",
+    ]
+
+
+@pytest.mark.local
+@pytest.mark.skipif(not _SEVENZIP_AVAILABLE, reason="tools/7za.exe not bootstrapped locally")
+def test_archive_top_level_names_descends_a_single_wrapping_folder(tmp_path: Path):
+    archive = tmp_path / "rootbuilder.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("rootbuilder/__init__.py", "x")
+        zf.writestr("rootbuilder/base/base.py", "x")
+        zf.writestr("rootbuilder/common/common.py", "x")
+
+    assert _archive_top_level_names(archive) == ["__init__.py", "base", "common"]

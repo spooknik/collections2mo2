@@ -43,11 +43,13 @@ are not guesses):
   the collection modified (`PatchStockGameFiles`). So the copy costs hashing time, not
   distribution size, and the folder may be called anything.
 
-One thing a c2wj instance does differently from a hand-built one: `c2wj build` caches the
-Mod Organizer release archive in the repo's `tools/`, not in the instance's `downloads/`,
-so MO2's own binaries have no archive to be referenced from and are inlined instead
-(~440 MB for 2.5.2). That is correct but wasteful, and the checklist says so; see
-`check_program_files`.
+`c2wj build` also copies the MO2 release archive (and Root Builder's) into the instance's
+`downloads/` with a `.meta`, alongside caching them in the repo's `tools/`, so MO2's own
+program files (`ModOrganizer.exe`, `dlls/`, `plugins/`, ...) have an archive to be
+referenced from and compile as `FromArchive` like any other mod, instead of being
+inlined into the `.wabbajack` (~440 MB for 2.5.2). An instance built before that existed
+has no such archive in `downloads/`, so those files still inline for it; the checklist
+(`check_program_files`) only counts what is genuinely uncovered.
 
 `--dry-run` does all of the above except the compile, and deliberately does not touch the
 ledger: it writes only the settings file and `<instance>/wabbajack/`.
@@ -711,17 +713,57 @@ def check_inlined(instance: Path, led: ledger_mod.Ledger) -> list[InlineEntry]:
     return out
 
 
+def _read_build_meta(instance: Path) -> dict[str, Any]:
+    path = instance / "c2wj-build.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _release_archives_covered(instance: Path, build_meta: dict[str, Any]) -> set[str]:
+    """Top-level instance entries a `downloads/` archive now accounts for.
+
+    `c2wj build` (since the fix below) copies the MO2 release archive into
+    `downloads/` with a `.meta` and records the top-level names it wrote
+    (`ModOrganizer.exe`, `dlls`, `plugins`, ...) as `mo2_top_level` in
+    `c2wj-build.json`. When that archive is genuinely present and its `.meta`
+    resolves, those names will compile as `FromArchive` instead of being inlined, so
+    `check_program_files` should not count them. An instance built before this existed
+    (no `c2wj-build.json`, or one with no `mo2_top_level`) has no such archive and
+    falls back to the old behaviour: everything not otherwise accounted for is inlined.
+    """
+    version = build_meta.get("mo2_version")
+    top_level = build_meta.get("mo2_top_level") or []
+    if not version or not top_level:
+        return set()
+    archive_name = f"Mod.Organizer-{version}.7z"
+    archive_path = instance / "downloads" / archive_name
+    meta_path = archive_path.with_name(archive_path.name + ".meta")
+    if not archive_path.is_file() or not meta_path.is_file():
+        return set()
+    source, _ = classify_meta(read_meta(meta_path))
+    if source not in ("nexus", "direct"):
+        return set()
+    return {name.lower() for name in top_level}
+
+
 def check_program_files(instance: Path, led: ledger_mod.Ledger) -> list[InlineEntry]:
-    """MO2's own program files, which no archive in `downloads/` can produce.
+    """MO2's own program files that no archive in `downloads/` can produce.
 
     A hand-built Wabbajack modlist keeps the Mod Organizer release archive in `downloads/`
     with a `.meta`, so the compiler emits `ModOrganizer.exe`, `dlls\\`, `plugins\\` and the
     rest as `FromArchive` directives (verified by reading the `modlist` manifest out of a
-    real `.wabbajack`). `c2wj build` instead caches that archive in the repo's `tools/`,
-    so here the same files have nothing to match against and must be inlined -- which is
-    correct but costs a few hundred megabytes, hence the hint in the checklist.
+    real `.wabbajack`). `c2wj build` now does the same (see `_ensure_release_download` in
+    build.py) and records which top-level names came from that archive, so those are no
+    longer counted here; only files with genuinely nothing behind them -- and instances
+    built before this existed -- are inlined.
     """
     stock = _stock_game_dir(instance, led)
+    covered = _release_archives_covered(instance, _read_build_meta(instance))
     skip = {name.lower() for name in DEFAULT_IGNORE}
     skip.update({"mods", "downloads", "profiles", "tools", "webcache", "saves", "__temp__"})
     if stock is not None:
@@ -730,6 +772,8 @@ def check_program_files(instance: Path, led: ledger_mod.Ledger) -> list[InlineEn
     for child in sorted(instance.iterdir()):
         # The settings file names itself, and top-level logs are already in `Ignore`.
         if child.name.lower() in skip or child.name.endswith((SETTINGS_SUFFIX, ".log")):
+            continue
+        if child.name.lower() in covered:
             continue
         size = dir_size(child) if child.is_dir() else child.stat().st_size
         out.append(InlineEntry(_rel(child, instance), size, "MO2 program file"))
@@ -807,13 +851,24 @@ def precompile_checklist(instance: Path, led: ledger_mod.Ledger) -> Checklist:
         )
     program = sum(e.size for e in checklist.inlined if e.reason == "MO2 program file")
     if program:
-        checklist.warnings.append(
-            f"{human(program)} of Mod Organizer's own program files will be inlined: "
-            "`c2wj build` caches the MO2 release archive in the repo's tools/ instead of "
-            "the instance's downloads/, so the compiler has nothing to match them against. "
-            "Putting Mod.Organizer-<version>.7z and a .meta in downloads/ would make them "
-            "referenced downloads instead"
-        )
+        if _release_archives_covered(instance, _read_build_meta(instance)):
+            # The MO2 release archive is in downloads/ and covers ModOrganizer.exe,
+            # dlls/, plugins/ etc. already; what is left is instance-specific state
+            # (ModOrganizer.ini, the ledger, portable.txt, ...) that could never come
+            # from an upstream archive.
+            checklist.warnings.append(
+                f"{human(program)} of instance-specific top-level files (ModOrganizer.ini, "
+                "the c2wj ledger, portable.txt, ...) will be inlined -- there is no archive "
+                "these could come from, which is expected and usually small"
+            )
+        else:
+            checklist.warnings.append(
+                f"{human(program)} of Mod Organizer's own program files will be inlined: no "
+                "Mod.Organizer-<version>.7z (with a resolving .meta) was found in downloads/, "
+                "so the compiler has nothing to match them against. This instance was likely "
+                "built before `c2wj build` started copying that archive into downloads/ for "
+                "this reason; re-run `c2wj build` to add it"
+            )
     if checklist.stock_game is None:
         checklist.warnings.append(
             "no Stock Game folder: the compile will reference the user's own game install "

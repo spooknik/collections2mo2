@@ -220,6 +220,58 @@ def test_inlined_folders_are_the_ones_with_no_archive(
     assert not any(p.endswith(".compiler_settings") for p in inlined)
 
 
+def test_mo2_program_files_are_not_inlined_when_the_release_archive_is_in_downloads(
+    instance: Path, led: ledger_mod.Ledger
+) -> None:
+    # `c2wj build` (since the Wabbajack inlining fix) copies Mod.Organizer-<ver>.7z into
+    # downloads/ with a .meta and records the top-level names it wrote into
+    # c2wj-build.json. Once that archive is genuinely present, ModOrganizer.exe and
+    # dlls/ compile as FromArchive instead of being inlined.
+    (instance / "c2wj-build.json").write_text(
+        json.dumps({"mo2_version": "2.5.2", "mo2_top_level": ["ModOrganizer.exe", "dlls"]}),
+        encoding="utf-8",
+    )
+    (instance / "downloads" / "Mod.Organizer-2.5.2.7z").write_bytes(b"x" * 10)
+    (instance / "downloads" / "Mod.Organizer-2.5.2.7z.meta").write_text(
+        _meta(directURL="https://github.com/ModOrganizer2/modorganizer/releases/download/v2.5.2/x.7z"),
+        encoding="utf-8",
+    )
+
+    inlined = {e.path: e for e in wabbajack.check_inlined(instance, led)}
+    assert "ModOrganizer.exe" not in inlined
+    assert "dlls" not in inlined
+    # Still-uncovered folders (mods the user or a tool installed) are unaffected.
+    assert "mods\\My Test Mod" in inlined
+    assert "Tools\\xedit" in inlined
+
+
+def test_mo2_program_files_still_inline_for_instances_built_before_the_fix(
+    instance: Path, led: ledger_mod.Ledger
+) -> None:
+    # No c2wj-build.json (or one without mo2_top_level) at all: old behaviour holds.
+    inlined = {e.path: e for e in wabbajack.check_inlined(instance, led)}
+    assert inlined["ModOrganizer.exe"].reason == "MO2 program file"
+    assert inlined["dlls"].reason == "MO2 program file"
+
+
+def test_mo2_program_files_still_inline_when_the_archive_meta_does_not_resolve(
+    instance: Path, led: ledger_mod.Ledger
+) -> None:
+    # The archive is recorded and even present in downloads/, but its .meta is
+    # unusable (no directURL/Nexus ids) -- the compiler could not match it either,
+    # so the checklist must not claim these files are covered.
+    (instance / "c2wj-build.json").write_text(
+        json.dumps({"mo2_version": "2.5.2", "mo2_top_level": ["ModOrganizer.exe", "dlls"]}),
+        encoding="utf-8",
+    )
+    (instance / "downloads" / "Mod.Organizer-2.5.2.7z").write_bytes(b"x" * 10)
+    (instance / "downloads" / "Mod.Organizer-2.5.2.7z.meta").write_text(_meta(url=""), encoding="utf-8")
+
+    inlined = {e.path: e for e in wabbajack.check_inlined(instance, led)}
+    assert "ModOrganizer.exe" in inlined
+    assert "dlls" in inlined
+
+
 def test_no_match_include_folds_tool_folders_under_the_tools_prefix(
     instance: Path, led: ledger_mod.Ledger
 ) -> None:

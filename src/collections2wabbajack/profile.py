@@ -973,6 +973,9 @@ def apply_display_settings(
 #                 modRules are resolved across the union of every layer's mods, so an
 #                 add-on's rule can order itself against a base mod; blocks stay
 #                 contiguous unless such a rule forces otherwise (we warn when it does).
+#   tool mods     folders `c2wj tools install` put in mods/ for a catalogue tool's
+#                 companion mods (owner `tool:<id>`) go right after every layer's
+#                 block, above the collection but below the user's own mods.
 #   user mods     folders in mods/ the ledger does not own keep the position they have
 #                 in the existing modlist.txt, relative to their surviving neighbours.
 #   plugins       base manifest order, then each add-on's plugins that are not already
@@ -1404,8 +1407,25 @@ def render_instance(
 
     managed_names = [name for _, name in managed_rows]
     managed_set = set(managed_names)
-    known_separators = led.separator_folders() | set(separators_created)
+
+    # -- tool-installed companion mods: after every layer's block, before the user's
+    #    own mods. `c2wj tools install` records these in the ledger under `tool:<id>`
+    #    (`ledger.tool_owner`); unlike a layer's mods they have no entry in `items`
+    #    (they belong to no collection), and unlike a user's mods they *are* known to
+    #    the ledger, so without this they would fall into neither list and vanish
+    #    from modlist.txt entirely.
     on_disk = {p.name for p in mods_dir.iterdir() if p.is_dir()}
+    tool_folders = sorted(
+        name
+        for name in on_disk
+        if name not in managed_set
+        and any(o.startswith("tool:") for o in led.owners_of(name))
+    )
+    managed_rows.extend(("+", name) for name in tool_folders)
+    managed_names = [name for _, name in managed_rows]
+    managed_set = set(managed_names)
+
+    known_separators = led.separator_folders() | set(separators_created)
     user_folders = sorted(
         name
         for name in on_disk
@@ -1528,6 +1548,7 @@ def render_instance(
         "mod_order": order.folders,
         "separators": separators_created,
         "shared_folders": {f: sorted(set(v)) for f, v in order.shared.items()},
+        "tool_mods": tool_folders,
         "user_mods": user_folders,
         "rules": {
             "total": order.rules.total,
@@ -1554,7 +1575,8 @@ def render_instance(
 
     rep.log(
         f"profile {profile_name!r}: {len(layers)} layer(s), {len(order.entries)} collection "
-        f"mod(s), {len(user_folders)} user mod(s), {len(separators_created)} separator(s)"
+        f"mod(s), {len(tool_folders)} tool mod(s), {len(user_folders)} user mod(s), "
+        f"{len(separators_created)} separator(s)"
     )
     rep.log(
         f"modRules: {order.rules.total} total, {order.rules.applied} applied, "

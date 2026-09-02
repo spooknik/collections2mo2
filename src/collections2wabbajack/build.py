@@ -7,7 +7,10 @@ as a portable instance.
 
 Downloads (the MO2 release 7z and the Root Builder zip) are cached in
 `<repo>/tools/cache/` -- see sevenzip.py for why `tools/` (gitignored) is where this
-project stages third-party binaries instead of installing them system-wide.
+project stages third-party binaries instead of installing them system-wide. Each is
+also copied into `<mo2_dir>/downloads/` with a `directURL` `.meta` sidecar (see
+`_ensure_release_download`), so a later `c2wj wabbajack` compile can reference MO2's own
+program files as `FromArchive` instead of inlining them into the `.wabbajack`.
 
 Archive layouts, verified by hand against MO2 2.5.2 / Root Builder 5.1.1 before writing
 the extraction logic below:
@@ -42,8 +45,9 @@ from pathlib import Path
 
 import requests
 
+from . import downloader as downloader_mod
 from .reporter import Reporter, get_reporter
-from .sevenzip import extract
+from .sevenzip import extract, list_archive
 
 # Repo root is two levels above this file: src/collections2wabbajack/build.py
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -182,6 +186,65 @@ def _extract_rootbuilder(archive: Path, mo2_dir: Path) -> list[str]:
             shutil.rmtree(dest)
         shutil.move(str(src), str(dest))
         return sorted(p.name for p in dest.iterdir())
+
+
+# -- Keeping the release archives as real downloads/ --------------------------------
+#
+# `c2wj wabbajack` needs an archive + `.meta` in `downloads/` for every file it wants to
+# reference instead of inlining (see wabbajack.py's `check_program_files`). Historically
+# the MO2 and Root Builder archives lived only in the repo's `tools/cache/`, so the
+# compiler had nothing to match `ModOrganizer.exe`, `dlls/`, `plugins/` etc. against and
+# stored ~440 MB of them straight inside the `.wabbajack`. Copying the same cached
+# archives into the instance's `downloads/` (with a `directURL` `.meta`, same shape as
+# `downloader._write_meta`) fixes that for free -- the compiler already hashes archives
+# in `downloads/` looking for a match.
+
+
+def _archive_top_level_names(archive: Path) -> list[str]:
+    """The top-level names an archive would `_merge_into` a fresh `mo2_dir`.
+
+    Mirrors `_flatten_single_root`: if the archive wraps everything in one folder, the
+    names one level inside that folder are what actually lands at the instance root.
+    Recorded once at build time into `c2wj-build.json` (`mo2_top_level`) so a later,
+    separate `c2wj wabbajack` run can tell which top-level instance entries the MO2
+    archive accounts for without needing the cache (or network) again.
+    """
+    entries = list_archive(archive)
+    top = sorted({e.path.split("/", 1)[0] for e in entries if e.path})
+    if len(top) == 1:
+        prefix = top[0] + "/"
+        inner = sorted(
+            {
+                e.path[len(prefix) :].split("/", 1)[0]
+                for e in entries
+                if e.path.startswith(prefix) and e.path != top[0]
+            }
+        )
+        if inner:
+            return inner
+    return top
+
+
+def _ensure_release_download(mo2_dir: Path, archive: Path, url: str, mod_name: str, version: str) -> Path:
+    """Copy `archive` into `<mo2_dir>/downloads/` with a `directURL` `.meta`, if not there yet."""
+    downloads_dir = mo2_dir / "downloads"
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    dest = downloads_dir / archive.name
+    if not dest.exists():
+        shutil.copyfile(archive, dest)
+    meta_path = dest.with_name(dest.name + ".meta")
+    downloader_mod._write_meta(
+        meta_path,
+        game_name="",
+        mod_id=0,
+        file_id=0,
+        name=archive.name,
+        mod_name=mod_name,
+        version=version,
+        direct_url=url,
+        repository="",
+    )
+    return dest
 
 
 # -- Stock game copy -------------------------------------------------------------------
@@ -421,6 +484,21 @@ def cmd_build(args: argparse.Namespace, reporter: Reporter | None = None) -> int
     else:
         rep.log(f"Root Builder already present at {rb_dir} (use --force to re-extract)")
 
+    # Keep the release archives as real downloads/, so `c2wj wabbajack` can reference
+    # MO2's own binaries by hash instead of inlining them (see the note above
+    # `_ensure_release_download`).
+    mo2_top_level = _archive_top_level_names(mo2_archive)
+    _ensure_release_download(
+        mo2_dir, mo2_archive, mo2_url, "Mod Organizer 2", args.mo2_version
+    )
+    _ensure_release_download(
+        mo2_dir, rb_archive, rb_url, "Root Builder", args.rootbuilder_version
+    )
+    rep.log(
+        f"downloads/: cached {mo2_archive.name} and {rb_archive.name} (with .meta) so "
+        "Wabbajack can reference MO2's own program files instead of inlining them"
+    )
+
     stock_dir: Path | None = None
     effective_game_path = args.game_path
     if args.game_path or args.stock_game:
@@ -471,6 +549,8 @@ def cmd_build(args: argparse.Namespace, reporter: Reporter | None = None) -> int
         {
             "mo2_version": args.mo2_version,
             "rootbuilder_version": args.rootbuilder_version,
+            "mo2_top_level": mo2_top_level,
+            "rootbuilder_dir": "plugins/rootbuilder",
             "game_path_source": str(Path(args.game_path).resolve()) if args.game_path else None,
             "stock_game_dir": str(stock_dir.resolve()) if stock_dir is not None else None,
             "built_at": datetime.now(UTC).isoformat(),
