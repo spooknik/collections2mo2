@@ -8,7 +8,6 @@ import json
 
 from collections2wabbajack import layout
 
-
 # 1. root Data -----------------------------------------------------------------
 
 

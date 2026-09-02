@@ -8,7 +8,6 @@ import pytest
 
 from collections2wabbajack import profile
 
-
 # --------------------------------------------------------- _compute_order / order_mods
 
 
