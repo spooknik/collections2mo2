@@ -31,10 +31,14 @@ which configparser mangles.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import requests
@@ -53,6 +57,20 @@ ROOTBUILDER_URL_TEMPLATE = (
     "https://github.com/Kezyma/ModOrganizer-Plugins/releases/download/"
     "rootbuilder/rootbuilder.{ver}.zip"
 )
+
+# ModOrganizer.ini gameName= (the game plugin's display name, as written by
+# profile.py's MO2_GAME_DISPLAY_NAMES) -> the game's main executable. Used to detect
+# an already-completed stock game copy so `build --stock-game` can skip re-copying.
+# Games not listed here just skip that presence check (the copy always runs, but
+# robocopy itself is a fast no-op when nothing changed).
+GAME_MAIN_EXE: dict[str, str] = {
+    "Skyrim Special Edition": "SkyrimSE.exe",
+    "Skyrim": "TESV.exe",
+    "Skyrim VR": "SkyrimVR.exe",
+    "Fallout 4": "Fallout4.exe",
+    "New Vegas": "FalloutNV.exe",
+    "Starfield": "Starfield.exe",
+}
 
 # Instance-owned top-level paths that must survive an MO2 extraction into an
 # already-populated mo2_dir. The MO2 release archive does not currently contain any
@@ -163,6 +181,86 @@ def _extract_rootbuilder(archive: Path, mo2_dir: Path) -> list[str]:
         return sorted(p.name for p in dest.iterdir())
 
 
+# -- Stock game copy -------------------------------------------------------------------
+
+
+def _read_ini_game_name(ini_path: Path) -> str | None:
+    """Read `gameName=` from the `[General]` section of ModOrganizer.ini, if present."""
+    section = ""
+    for line in ini_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1]
+            continue
+        if section == "General" and stripped.startswith("gameName="):
+            return stripped[len("gameName=") :]
+    return None
+
+
+def _run_robocopy(src: Path, dst: Path) -> list[str]:
+    """Copy `src` into `dst` with robocopy; returns its `Files :` / `Bytes :` summary rows.
+
+    robocopy's own exit-code convention: 0-7 are success (some combination of files
+    copied/skipped/mismatched/extra), >=8 means a real failure.
+    """
+    dst.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "robocopy",
+        str(src),
+        str(dst),
+        "/E",
+        "/COPY:DAT",
+        "/DCOPY:T",
+        "/MT:8",
+        "/R:2",
+        "/W:2",
+        "/NFL",
+        "/NDL",
+        "/NJH",
+        "/NP",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode >= 8:
+        raise RuntimeError(
+            f"robocopy failed (exit code {result.returncode}) copying {src} -> {dst}:\n"
+            f"{result.stdout}\n{result.stderr}"
+        )
+    return [
+        line.strip()
+        for line in result.stdout.splitlines()
+        if line.strip().startswith(("Files :", "Bytes :"))
+    ]
+
+
+def _ensure_stock_game(args: argparse.Namespace, mo2_dir: Path, ini_path: Path) -> Path:
+    """Copy `--game-path` into the stock game dir (unless already done) and return it."""
+    stock_dir = Path(args.stock_game_dir) if args.stock_game_dir else mo2_dir / "Stock Game"
+    game_name = _read_ini_game_name(ini_path)
+    main_exe = GAME_MAIN_EXE.get(game_name) if game_name else None
+
+    if not args.force_stock and stock_dir.exists() and main_exe and (stock_dir / main_exe).exists():
+        print(
+            f"stock game copy already present at {stock_dir} ({main_exe} found); "
+            "skipping copy (use --force-stock to re-copy)"
+        )
+        return stock_dir
+
+    print(f"copying game files: {args.game_path} -> {stock_dir} (robocopy) ...")
+    start = time.perf_counter()
+    summary = _run_robocopy(Path(args.game_path), stock_dir)
+    elapsed = time.perf_counter() - start
+    for line in summary:
+        print(f"  {line}")
+    print(f"stock game copy finished in {elapsed:.1f}s")
+
+    print(
+        "note: Steam must be running to launch the game; mods and patchers (e.g. a "
+        f"collection's Runtime Swapper) will modify the copy at {stock_dir}, not your "
+        "Steam install."
+    )
+    return stock_dir
+
+
 # -- ModOrganizer.ini rewrite ---------------------------------------------------------
 
 
@@ -261,6 +359,10 @@ def _rewrite_ini(ini_path: Path, game_path: str) -> list[str]:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
+    if args.stock_game and not args.game_path:
+        print("error: --stock-game requires --game-path", file=sys.stderr)
+        return 1
+
     mo2_dir = Path(args.mo2_dir)
     mo2_dir.mkdir(parents=True, exist_ok=True)
 
@@ -287,12 +389,19 @@ def cmd_build(args: argparse.Namespace) -> int:
     else:
         print(f"Root Builder already present at {rb_dir} (use --force to re-extract)")
 
-    if args.game_path:
+    stock_dir: Path | None = None
+    effective_game_path = args.game_path
+    if args.game_path or args.stock_game:
         ini_path = mo2_dir / "ModOrganizer.ini"
         if not ini_path.exists():
             print(f"error: {ini_path} not found; run `c2wj profile` first", file=sys.stderr)
             return 1
-        changes = _rewrite_ini(ini_path, args.game_path)
+
+        if args.stock_game:
+            stock_dir = _ensure_stock_game(args, mo2_dir, ini_path)
+            effective_game_path = str(stock_dir)
+
+        changes = _rewrite_ini(ini_path, effective_game_path)
         print(f"rewrote {ini_path}: {len(changes)} change(s)")
         for c in changes:
             print(f"  - {c}")
@@ -310,6 +419,33 @@ def cmd_build(args: argparse.Namespace) -> int:
             "Windows limits full paths to 260 characters and mod files nest deeply; "
             "prefer a short location such as D:\\GTS for real installs."
         )
+    if stock_dir is not None:
+        resolved_stock = str(stock_dir.resolve())
+        if len(resolved_stock) > 60:
+            print(
+                f"warning: stock game path is {len(resolved_stock)} characters long "
+                f"({resolved_stock}). Game files nest deeply; prefer a short instance "
+                "location such as D:\\GTS for real installs."
+            )
+
+    build_meta_path = mo2_dir / "c2wj-build.json"
+    meta: dict = {}
+    if build_meta_path.exists():
+        try:
+            meta = json.loads(build_meta_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            meta = {}
+    meta.update(
+        {
+            "mo2_version": args.mo2_version,
+            "rootbuilder_version": args.rootbuilder_version,
+            "game_path_source": str(Path(args.game_path).resolve()) if args.game_path else None,
+            "stock_game_dir": str(stock_dir.resolve()) if stock_dir is not None else None,
+            "built_at": datetime.now(UTC).isoformat(),
+        }
+    )
+    build_meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    print(f"wrote {build_meta_path}")
 
     launch = mo2_dir / "ModOrganizer.exe"
     print(f"\nDone. Launch with:\n  {launch}")
@@ -343,5 +479,26 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         default=False,
         help="re-extract MO2/Root Builder even if already present",
+    )
+    p.add_argument(
+        "--stock-game",
+        action="store_true",
+        default=False,
+        help=(
+            "copy --game-path into the instance (Wabbajack's 'Stock Game' convention) and "
+            "point MO2 at the copy, so collections that patch game files in place (e.g. a "
+            "Runtime Swapper) never touch the real Steam install; requires --game-path"
+        ),
+    )
+    p.add_argument(
+        "--stock-game-dir",
+        default=None,
+        help="where to copy the game to (default: <mo2_dir>/Stock Game)",
+    )
+    p.add_argument(
+        "--force-stock",
+        action="store_true",
+        default=False,
+        help="re-copy the stock game even if the destination already looks populated",
     )
     p.set_defaults(func=cmd_build)

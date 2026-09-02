@@ -526,19 +526,24 @@ GAME_INIS: dict[str, tuple[str, list[str], str]] = {
 }
 
 
-def seed_profile_inis(profile_dir: Path, game_name: str, game_path: str) -> list[str]:
+def seed_profile_inis(profile_dir: Path, game_name: str, game_path: str) -> tuple[list[str], list[str]]:
     """Create the profile-local game INIs MO2 expects when LocalSettings=true.
 
     Prefers the user's current INIs from Documents/My Games (they already match the
     installed game version), falls back to the game's shipped *_Default.ini for the
     main INI and empty files for the rest. Existing profile INIs are left alone.
+
+    Returns `(files_written, notes)`; `notes` is a single-element list summarising where the
+    written INIs came from (My Games path / *_Default.ini / empty), so users can tell why a
+    profile INI has (or lacks) particular values.
     """
     spec = GAME_INIS.get(game_name)
     if not spec:
-        return []
+        return [], []
     my_games_dir, names, default_ini = spec
     my_games = Path.home() / "Documents" / "My Games" / my_games_dir
     written: list[str] = []
+    sources: list[str] = []
     for i, name in enumerate(names):
         dest = profile_dir / name
         if dest.exists():
@@ -546,51 +551,72 @@ def seed_profile_inis(profile_dir: Path, game_name: str, game_path: str) -> list
         src = my_games / name
         if src.exists():
             shutil.copy2(src, dest)
+            source = f"My Games ({my_games})"
         elif i == 0 and game_path and (Path(game_path) / default_ini).exists():
             shutil.copy2(Path(game_path) / default_ini, dest)
+            source = f"game default ({Path(game_path) / default_ini})"
         else:
             dest.write_text("", encoding="utf-8")
+            source = "empty (no source found)"
         written.append(str(dest))
-    return written
+        if source not in sources:
+            sources.append(source)
+
+    if not written:
+        notes = ["seed INIs: none written (profile INIs already existed)"]
+    else:
+        notes = [f"seed INIs from: {'; '.join(sources)}"]
+    return written, notes
 
 
 _INI_TWEAK_TARGET = re.compile(r"\[([^\[\]]+)\]\.ini$", re.IGNORECASE)
 
 
+def merge_ini_values(target: Path, section: str, values: dict[str, str]) -> int:
+    """Set/override `values` (key -> value) within `section` of a game INI, line-based.
+
+    Comments, ordering and odd lines elsewhere in the file survive; the section is created
+    at the end of the file if missing, and unknown keys are appended within it. Returns the
+    number of keys applied.
+    """
+    lines = target.read_text(encoding="utf-8-sig").splitlines() if target.exists() else []
+    start = next((i for i, ln in enumerate(lines) if ln.strip().lower() == f"[{section.lower()}]"), None)
+    if start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(f"[{section}]")
+        start = len(lines) - 1
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("[")), len(lines))
+    applied = 0
+    for key, value in values.items():
+        new_line = f"{key}={value}"
+        hit = next(
+            (i for i in range(start + 1, end) if lines[i].split("=", 1)[0].strip().lower() == key.lower()),
+            None,
+        )
+        if hit is None:
+            lines.insert(end, new_line)
+            end += 1
+        else:
+            lines[hit] = new_line
+        applied += 1
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return applied
+
+
 def merge_ini_tweak(target: Path, tweak: Path) -> int:
     """Apply a Vortex INI tweak file onto a game INI: set/override each key in its section.
 
-    Line-based so comments, ordering and odd lines in the game INI survive. Returns the
-    number of keys applied.
+    Line-based (via `merge_ini_values`) so comments, ordering and odd lines in the game INI
+    survive. Returns the number of keys applied.
     """
     tweak_cp = configparser.RawConfigParser(strict=False, delimiters=("=",), interpolation=None)
     tweak_cp.optionxform = str  # type: ignore[assignment]
     tweak_cp.read(tweak, encoding="utf-8-sig")
 
-    lines = target.read_text(encoding="utf-8-sig").splitlines() if target.exists() else []
     applied = 0
     for section in tweak_cp.sections():
-        # locate the section's line span
-        start = next((i for i, ln in enumerate(lines) if ln.strip().lower() == f"[{section.lower()}]"), None)
-        if start is None:
-            if lines and lines[-1].strip():
-                lines.append("")
-            lines.append(f"[{section}]")
-            start = len(lines) - 1
-        end = next((i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("[")), len(lines))
-        for key, value in tweak_cp.items(section):
-            new_line = f"{key}={value}"
-            hit = next(
-                (i for i in range(start + 1, end) if lines[i].split("=", 1)[0].strip().lower() == key.lower()),
-                None,
-            )
-            if hit is None:
-                lines.insert(end, new_line)
-                end += 1
-            else:
-                lines[hit] = new_line
-            applied += 1
-    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        applied += merge_ini_values(target, section, dict(tweak_cp.items(section)))
     return applied
 
 
@@ -611,6 +637,124 @@ def apply_collection_ini_tweaks(profile_dir: Path, archive_dir: Path, game_name:
         n = merge_ini_tweak(profile_dir / target_name, tweak)
         notes.append(f"INI tweak applied: {tweak.name} -> {target_name} ({n} keys)")
     return notes
+
+
+def _prefs_ini_name(game_name: str) -> str | None:
+    """The `*Prefs.ini` (display settings) file for a game, per `GAME_INIS`."""
+    spec = GAME_INIS.get(game_name)
+    if not spec:
+        return None
+    names = spec[1]
+    if not names:
+        return None
+    return next((n for n in names if "prefs" in n.lower()), names[0])
+
+
+def _detect_resolution() -> tuple[int, int] | None:
+    """Detect the primary monitor's current resolution on Windows via ctypes.
+
+    Returns `None` (caller falls back to `keep`) on non-Windows platforms or if the Win32
+    calls fail for any reason.
+    """
+    import sys
+
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        user32.SetProcessDPIAware()
+        width = user32.GetSystemMetrics(0)
+        height = user32.GetSystemMetrics(1)
+    except Exception:  # noqa: BLE001 - detection is best-effort, fall back to keep
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+_RESOLUTION_RE = re.compile(r"^(\d+)x(\d+)$", re.IGNORECASE)
+
+
+def _parse_resolution_arg(value: str) -> str:
+    """argparse `type=` for --resolution: 'auto', 'keep', or WxH, validated at parse time."""
+    if value in ("auto", "keep") or _RESOLUTION_RE.match(value):
+        return value
+    raise argparse.ArgumentTypeError(f"must be 'auto', 'keep', or WxH e.g. 3440x1440 (got {value!r})")
+
+
+def apply_display_settings(
+    profile_dir: Path,
+    game_name: str,
+    resolution: str,
+    vsync: str,
+    window: str,
+) -> list[str]:
+    """Apply --resolution/--vsync/--window overrides to the profile's `*Prefs.ini` [Display].
+
+    `resolution` is `auto` (detect the primary monitor via Windows APIs, falling back to
+    `keep` if that's not possible), `keep`, or an explicit `WxH` string. `vsync` is
+    `on`/`off`/`keep`; `window` is `fullscreen`/`borderless`/`windowed`/`keep`. Applied after
+    the collection's own INI Tweaks, so these settings win. Returns a single-element list with
+    a human-readable summary line (empty list if the game has no known Prefs INI).
+    """
+    target_name = _prefs_ini_name(game_name)
+    if not target_name:
+        return []
+    target = profile_dir / target_name
+
+    values: dict[str, str] = {}
+
+    if resolution == "keep":
+        res_label = "kept"
+    elif resolution == "auto":
+        detected = _detect_resolution()
+        if detected:
+            w, h = detected
+            values["iSize W"] = str(w)
+            values["iSize H"] = str(h)
+            res_label = f"{w}x{h}"
+        else:
+            res_label = "kept (auto-detect unavailable)"
+    else:
+        m = _RESOLUTION_RE.match(resolution)
+        if not m:
+            raise ValueError(f"--resolution must be 'auto', 'keep', or WxH (got {resolution!r})")
+        w, h = int(m.group(1)), int(m.group(2))
+        values["iSize W"] = str(w)
+        values["iSize H"] = str(h)
+        res_label = f"{w}x{h}"
+
+    if vsync == "on":
+        values["iVSyncPresentInterval"] = "1"
+        vsync_label = "on"
+    elif vsync == "off":
+        values["iVSyncPresentInterval"] = "0"
+        vsync_label = "off"
+    else:
+        vsync_label = "kept"
+
+    # Skyrim SE's launcher writes borderless as bFull Screen=1 + bBorderless=1.
+    if window == "fullscreen":
+        values["bFull Screen"] = "1"
+        values["bBorderless"] = "0"
+        window_label = "fullscreen"
+    elif window == "borderless":
+        values["bFull Screen"] = "1"
+        values["bBorderless"] = "1"
+        window_label = "borderless"
+    elif window == "windowed":
+        values["bFull Screen"] = "0"
+        values["bBorderless"] = "0"
+        window_label = "windowed"
+    else:
+        window_label = "kept"
+
+    if values:
+        merge_ini_values(target, "Display", values)
+
+    return [f"display: {res_label}, vsync {vsync_label}, window {window_label} ({target_name})"]
 
 
 def cmd_profile(args: argparse.Namespace) -> int:
@@ -671,11 +815,24 @@ def cmd_profile(args: argparse.Namespace) -> int:
     _write(settings_path, SETTINGS_INI)
     files_written.append(str(settings_path))
 
-    files_written.extend(seed_profile_inis(profile_dir, game_name, game_path))
-    ini_notes = apply_collection_ini_tweaks(profile_dir, manifest_path.parent, game_name)
-    for note in ini_notes:
-        print(note)
-    warnings.extend(n for n in ini_notes if n.startswith("INI tweak skipped"))
+    if args.keep_inis:
+        print("keep-inis: profile INIs left untouched (skipping seeding, tweaks, display settings)")
+    else:
+        seeded_files, seed_notes = seed_profile_inis(profile_dir, game_name, game_path)
+        files_written.extend(seeded_files)
+        for note in seed_notes:
+            print(note)
+
+        ini_notes = apply_collection_ini_tweaks(profile_dir, manifest_path.parent, game_name)
+        for note in ini_notes:
+            print(note)
+        warnings.extend(n for n in ini_notes if n.startswith("INI tweak skipped"))
+
+        display_notes = apply_display_settings(
+            profile_dir, game_name, args.resolution, args.vsync, args.window
+        )
+        for note in display_notes:
+            print(note)
 
     tools = manifest.get("tools") or []
     exe_blocks = build_custom_executables(entries, tools, game_path)
@@ -775,5 +932,33 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         default=False,
         help="write optional mods as disabled in modlist.txt (default: enabled)",
+    )
+    p.add_argument(
+        "--resolution",
+        type=_parse_resolution_arg,
+        default="auto",
+        help="profile display resolution: 'auto' (detect the primary monitor on Windows), "
+        "'keep' (leave existing INI values), or WxH e.g. 3440x1440 (default: auto)",
+    )
+    p.add_argument(
+        "--vsync",
+        choices=["on", "off", "keep"],
+        default="keep",
+        help="profile display vsync (iVSyncPresentInterval): on, off, or keep (default: keep)",
+    )
+    p.add_argument(
+        "--window",
+        choices=["fullscreen", "borderless", "windowed", "keep"],
+        default="keep",
+        help="profile window mode (bFull Screen/bBorderless): fullscreen, borderless, "
+        "windowed, or keep (default: keep)",
+    )
+    p.add_argument(
+        "--keep-inis",
+        dest="keep_inis",
+        action="store_true",
+        default=False,
+        help="do not touch existing profile INIs at all: skip seeding, collection INI "
+        "tweaks, and display settings (for hand-edited INIs)",
     )
     p.set_defaults(func=cmd_profile)
