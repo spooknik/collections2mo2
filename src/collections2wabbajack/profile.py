@@ -942,7 +942,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--resolution",
         type=_parse_resolution_arg,
-        default="auto",
+        default="keep",
         help="profile display resolution: 'auto' (detect the primary monitor on Windows), "
         "'keep' (leave existing INI values), or WxH e.g. 3440x1440 (default: auto)",
     )
