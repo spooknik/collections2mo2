@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        shell: bash
+        run: uv sync --frozen
+
+      - name: Lint (ruff check)
+        shell: bash
+        run: uvx ruff check src tests
+
+      - name: Lint (ruff format --check)
+        shell: bash
+        run: uvx ruff format --check src tests
+
+      - name: Test
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run pytest -q -m "not local"
+
+      - name: Secrets sweep
+        shell: bash
+        run: uv run python scripts/check_secrets.py --all-tracked
+
+      - name: Build wheel and sdist
+        shell: bash
+        run: uv build
+
+      - name: Build GUI executable
+        shell: bash
+        run: uv run pyinstaller packaging/c2mo2-gui.spec
+
+      - name: Zip GUI build
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $zipName = "c2mo2-gui-$tag-windows-x64.zip"
+          Compress-Archive -Path "dist/c2mo2-gui" -DestinationPath $zipName
+          echo "ZIP_PATH=$zipName" >> $env:GITHUB_ENV
+
+      - name: Determine prerelease flag
+        id: prerelease
+        shell: bash
+        run: |
+          tag="${{ github.ref_name }}"
+          if [[ "$tag" == *-* ]]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ steps.prerelease.outputs.value }}
+          generate_release_notes: true
+          files: |
+            ${{ env.ZIP_PATH }}
+            dist/*.whl
+            dist/*.tar.gz

@@ -165,7 +165,8 @@ Full answers in [`docs/faq.md`](docs/faq.md). Short version:
 ## Licence
 
 [GPL-3.0-or-later](LICENSE). Not affiliated with Nexus Mods, Mod Organizer 2,
-Wabbajack, or any collection curator.
+Wabbajack, or any collection curator. Third-party software this project bundles or
+downloads at run time is listed in [`NOTICES.md`](NOTICES.md).
 
 ## Credits
 
@@ -182,3 +183,5 @@ Wabbajack, or any collection curator.
 
 For development docs (architecture, tests, linting, the `work/` layout), see
 [`docs/development.md`](docs/development.md) and [`docs/architecture.md`](docs/architecture.md).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to get set up and submit a change, and
+[`CHANGELOG.md`](CHANGELOG.md) for what's new in each release.

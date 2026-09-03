@@ -11,6 +11,8 @@ import sys
 
 import pytest
 
+import collections2mo2
+
 SUBCOMMANDS = [
     "fetch",
     "report",
@@ -53,3 +55,9 @@ def test_subcommand_help_exits_zero(subcommand: str):
 def test_cli_no_args_fails_with_usage_error():
     result = _run([])
     assert result.returncode != 0
+
+
+def test_cli_version_exits_zero():
+    result = _run(["--version"])
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"c2mo2 {collections2mo2.__version__}"

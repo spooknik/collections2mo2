@@ -120,7 +120,7 @@ def test_rewrite_ini_is_idempotent_on_second_run(tmp_path: Path):
 
 # The escaped form of a logical `-D:"C:\OldGame\Data"` argument, exactly as MO2/Qt
 # writes it to disk (verified against a working Wabbajack Stock Game instance,
-# E:\Games\Lorerim\ModOrganizer.ini: backslashes doubled, quotes escaped with `\`).
+# D:\Lorerim\ModOrganizer.ini: backslashes doubled, quotes escaped with `\`).
 _XEDIT_ARGS_INI = '-D:\\"C:\\\\OldGame\\\\Data\\" -sse'
 
 

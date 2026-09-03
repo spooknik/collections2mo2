@@ -31,7 +31,7 @@
       "license_note": "Freeware (custom license), source included; accept the risk/backup warning on first launch.",
       "size_hint_mb": 31,
       "verified": "2026-09-02",
-      "verified_notes": "GitHub releases/latest -> tag xedit-4.1.5f, single asset xEdit.4.1.5f.7z (31.3 MB). Listed with sevenzip.list_archive: no wrapping folder; the generic TES-family binary is xTESEdit64.exe (32-bit xTESEdit.exe also present). Confirmed via xeInit.pas (dev-4.1.6 branch) that '-sse' selects SSE mode and 'quickautoclean'/'qac' triggers QuickAutoClean, so 'xEdit64.exe' from the task brief does not exist in 4.1.x builds -- xTESEdit64.exe is correct. '-D:\"{game_data}\"' (expanded to the instance's ModOrganizer.ini gamePath + \\Data, e.g. the Stock Game copy) was added 2026-09-02 to fix xEdit reading the real Steam install's vanilla Data folder via the registry instead of MO2's VFS-managed one -- confirmed against E:\\Games\\Lorerim\\ModOrganizer.ini (a working Wabbajack Stock Game build), which registers xEdit as '-D:\\\"E:\\\\Games\\\\Lorerim\\\\Stock Game\\\\Data\\\"' plus its own extra flags."
+      "verified_notes": "GitHub releases/latest -> tag xedit-4.1.5f, single asset xEdit.4.1.5f.7z (31.3 MB). Listed with sevenzip.list_archive: no wrapping folder; the generic TES-family binary is xTESEdit64.exe (32-bit xTESEdit.exe also present). Confirmed via xeInit.pas (dev-4.1.6 branch) that '-sse' selects SSE mode and 'quickautoclean'/'qac' triggers QuickAutoClean, so 'xEdit64.exe' (an earlier guess) does not exist in 4.1.x builds -- xTESEdit64.exe is correct. '-D:\"{game_data}\"' (expanded to the instance's ModOrganizer.ini gamePath + \\Data, e.g. the Stock Game copy) was added 2026-09-02 to fix xEdit reading the real Steam install's vanilla Data folder via the registry instead of MO2's VFS-managed one -- confirmed against a working Wabbajack Stock Game build's ModOrganizer.ini, which registers xEdit as '-D:\\\"<gamePath>\\\\Stock Game\\\\Data\\\"' plus its own extra flags."
     },
     {
       "id": "bethini-pie",
@@ -197,7 +197,7 @@
       "license_note": "Freeware; source available (Monitor221hz/Pandora-Behaviour-Engine-Plus).",
       "size_hint_mb": 54,
       "verified": "2026-09-02",
-      "verified_notes": "The repo in the task brief, Monitor144hz/Pandora-Behaviour-Engine-Plus, now 301-redirects (GitHub API 'Moved Permanently') to Monitor221hz/Pandora-Behaviour-Engine-Plus (repository id 652829080) -- the owner account was renamed; the catalog entry uses the live owner. releases/latest -> tag v4.4.0-beta (prerelease:false), assets include a self-contained zip plus win-x64_net/win-x86_net/win-arm64_net framework-dependent builds; asset regex picks win-x64_net (53.5 MB, needs the .NET Desktop Runtime installed). Listed with sevenzip.list_archive: no wrapping folder, 'Pandora Behaviour Engine+.exe' at root alongside Nemesis_Engine/ and Pandora_Engine/."
+      "verified_notes": "The repo in the earlier notes, Monitor144hz/Pandora-Behaviour-Engine-Plus, now 301-redirects (GitHub API 'Moved Permanently') to Monitor221hz/Pandora-Behaviour-Engine-Plus (repository id 652829080) -- the owner account was renamed; the catalog entry uses the live owner. releases/latest -> tag v4.4.0-beta (prerelease:false), assets include a self-contained zip plus win-x64_net/win-x86_net/win-arm64_net framework-dependent builds; asset regex picks win-x64_net (53.5 MB, needs the .NET Desktop Runtime installed). Listed with sevenzip.list_archive: no wrapping folder, 'Pandora Behaviour Engine+.exe' at root alongside Nemesis_Engine/ and Pandora_Engine/."
     },
     {
       "id": "dyndolod",
@@ -236,7 +236,7 @@
       "license_note": "Freeware; author-distributed (Sheson), also mirrored on Nexus; no redistribution permitted.",
       "size_hint_mb": 36,
       "verified": "2026-09-02",
-      "verified_notes": "GET /v1/games/skyrimspecialedition/mods/68518/files.json -> newest (only) MAIN file_id 798219, 'DynDOLOD 3.00 68518 Alpha-211 2026-08-31T16-23Z Dc5uGkS8r.7z', version Alpha-211, 35595 KB (Alpha builds are the current line, confirming the task brief). content_preview_link 404'd (not generated yet for this upload); downloaded (Premium, ~36 MB) and listed with sevenzip.list_archive: single wrapping folder 'DynDOLOD/' -> strip_single_root; DynDOLODx64.exe and TexGenx64.exe both land at the tool root (verified 32-bit variants do not exist in this build, only x64), 'Edit Scripts/' holds LODGenx64*.exe/Texconvx64.exe and the xEdit .pas scripts DynDOLOD/TexGen actually run under the hood. '-D:\"{game_data}\"' was added 2026-09-02 for the same reason as xEdit's (both are xEdit-family, same registry-vs-VFS Data-folder bug) -- confirmed against E:\\Games\\Lorerim\\ModOrganizer.ini, which registers both TexGen and DynDOLOD as '-D:\\\"E:\\\\Games\\\\Lorerim\\\\Stock Game\\\\Data\\\" -sse'."
+      "verified_notes": "GET /v1/games/skyrimspecialedition/mods/68518/files.json -> newest (only) MAIN file_id 798219, 'DynDOLOD 3.00 68518 Alpha-211 2026-08-31T16-23Z Dc5uGkS8r.7z', version Alpha-211, 35595 KB (Alpha builds are the current line, confirming the earlier assumption). content_preview_link 404'd (not generated yet for this upload); downloaded (Premium, ~36 MB) and listed with sevenzip.list_archive: single wrapping folder 'DynDOLOD/' -> strip_single_root; DynDOLODx64.exe and TexGenx64.exe both land at the tool root (verified 32-bit variants do not exist in this build, only x64), 'Edit Scripts/' holds LODGenx64*.exe/Texconvx64.exe and the xEdit .pas scripts DynDOLOD/TexGen actually run under the hood. '-D:\"{game_data}\"' was added 2026-09-02 for the same reason as xEdit's (both are xEdit-family, same registry-vs-VFS Data-folder bug) -- confirmed against a working Wabbajack Stock Game build's ModOrganizer.ini, which registers both TexGen and DynDOLOD as '-D:\\\"<gamePath>\\\\Stock Game\\\\Data\\\" -sse'."
     }
   ],
   "companion_mods": [
@@ -251,7 +251,7 @@
       },
       "install": "fomod-defaults",
       "verified": "2026-09-02",
-      "verified_notes": "GET /v1/games/skyrimspecialedition/mods/52897/files.json -> newest MAIN file_id 747879, 'DynDOLOD Resources SE 3.00-52897-Alpha-59-1777722398.7z', version Alpha-59, 66902 KB. content_preview_link 200'd (survey.py's _fetch_preview): top level is 'FOMod/' + 'Package.txt' + 'Wizard.txt' plus '00 DynDOLOD Core Files - Required/' and several optional packs ('01 Low-Res LOD Textures', '02 Whiterun Exterior Grass', ...) -- a real FOMOD, the opposite of the task brief's 'plain archive' guess -> install: fomod-defaults. No choices override recorded; the installer's FOMOD defaults were used as-is."
+      "verified_notes": "GET /v1/games/skyrimspecialedition/mods/52897/files.json -> newest MAIN file_id 747879, 'DynDOLOD Resources SE 3.00-52897-Alpha-59-1777722398.7z', version Alpha-59, 66902 KB. content_preview_link 200'd (survey.py's _fetch_preview): top level is 'FOMod/' + 'Package.txt' + 'Wizard.txt' plus '00 DynDOLOD Core Files - Required/' and several optional packs ('01 Low-Res LOD Textures', '02 Whiterun Exterior Grass', ...) -- a real FOMOD, the opposite of the earlier 'plain archive' guess -> install: fomod-defaults. No choices override recorded; the installer's FOMOD defaults were used as-is."
     },
     {
       "id": "dyndolod-dll-ng",
@@ -264,7 +264,7 @@
       },
       "install": "plain",
       "verified": "2026-09-02",
-      "verified_notes": "GET /v1/games/skyrimspecialedition/mods/97720/files.json -> newest (only) MAIN file_id 793857, 'DynDOLOD DLL NG and Scripts 3.00 97720 Alpha-42 2026-08-23T13-05Z uhRBKsxK8.7z', version Alpha-42, 4856 KB -- one MAIN file, nothing to choose between. content_preview_link 404'd; downloaded (Premium) and listed with sevenzip.list_archive: no FOMod/ModuleConfig.xml, just 'Scripts/' + 'SKSE/Plugins/DynDOLOD.DLL' (the 'NG' 1.6.x-compatible DLL) + 'Package.txt' -> install: plain, no choices override needed. The opposite of the task brief's FOMOD guess."
+      "verified_notes": "GET /v1/games/skyrimspecialedition/mods/97720/files.json -> newest (only) MAIN file_id 793857, 'DynDOLOD DLL NG and Scripts 3.00 97720 Alpha-42 2026-08-23T13-05Z uhRBKsxK8.7z', version Alpha-42, 4856 KB -- one MAIN file, nothing to choose between. content_preview_link 404'd; downloaded (Premium) and listed with sevenzip.list_archive: no FOMod/ModuleConfig.xml, just 'Scripts/' + 'SKSE/Plugins/DynDOLOD.DLL' (the 'NG' 1.6.x-compatible DLL) + 'Package.txt' -> install: plain, no choices override needed. The opposite of the earlier notes's FOMOD guess."
     }
   ]
 }

@@ -76,15 +76,15 @@ def test_xedit_and_dyndolod_executables_carry_the_data_path_switch():
 
 
 def test_expand_arg_template_matches_a_verified_wabbajack_stock_game_instance():
-    # Byte-for-byte against E:\Games\Lorerim\ModOrganizer.ini (a working Wabbajack
-    # Stock Game build): `12\arguments=-D:\"E:\\Games\\Lorerim\\Stock Game\\Data\" -sse`
+    # Byte-for-byte against D:\Lorerim\ModOrganizer.ini (a working Wabbajack
+    # Stock Game build): `12\arguments=-D:\"D:\\Lorerim\\Stock Game\\Data\" -sse`
     # for TexGen -- MO2/Qt doubles every backslash then escapes every quote.
     expanded = tools._expand_arg_template(
         '-D:"{game_data}" -sse',
-        game_path="E:/Games/Lorerim/Stock Game",
-        tool_dir_fwd="E:/Games/Lorerim/Tools/dyndolod",
+        game_path="D:/Lorerim/Stock Game",
+        tool_dir_fwd="D:/Lorerim/Tools/dyndolod",
     )
-    assert expanded == '-D:\\"E:\\\\Games\\\\Lorerim\\\\Stock Game\\\\Data\\" -sse'
+    assert expanded == '-D:\\"D:\\\\Lorerim\\\\Stock Game\\\\Data\\" -sse'
 
 
 def test_expand_arg_template_empty_game_path_yields_empty_game_data():

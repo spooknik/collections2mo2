@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        shell: bash
+        run: uv sync --frozen
+
+      - name: Lint (ruff check)
+        shell: bash
+        run: uvx ruff check src tests
+
+      - name: Lint (ruff format --check)
+        shell: bash
+        run: uvx ruff format --check src tests
+
+      - name: Test
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run pytest -q -m "not local"
+
+      - name: Secrets sweep
+        shell: bash
+        run: uv run python scripts/check_secrets.py --all-tracked

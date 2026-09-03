@@ -31,6 +31,18 @@ installs at a shared cache). The old `C2WJ_DATA_DIR` name (from this project's p
 `collections2wabbajack` name) is still honoured as a fallback if `C2MO2_DATA_DIR` isn't
 set.
 
+## Releases
+
+Pushing a tag matching `v*` (e.g. `v0.1.0`) triggers `.github/workflows/release.yml`, which
+runs the test suite, builds the wheel and sdist with `uv build`, builds this PyInstaller
+package, zips `dist/c2mo2-gui/` as `c2mo2-gui-<tag>-windows-x64.zip`, and publishes a GitHub
+release with the zip, wheel and sdist attached. A tag containing a hyphen (e.g.
+`v0.1.0-rc1`) is published as a prerelease.
+
+The `.exe` in that zip is unsigned; Windows SmartScreen will warn on first launch ("Windows
+protected your PC"). Click "More info" -> "Run anyway" to proceed -- there is no code-signing
+certificate for this project.
+
 ## Build status (last verified: 2026-09-02)
 
 Built cleanly: `dist\c2mo2-gui\c2mo2-gui.exe` plus `dist\c2mo2-gui\_internal\` (includes

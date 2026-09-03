@@ -10,9 +10,11 @@ from typing import Any
 
 import requests
 
+from . import __version__
+
 API_BASE = "https://api.nexusmods.com"
 GRAPHQL_URL = f"{API_BASE}/v2/graphql"
-USER_AGENT = "collections2mo2/0.0.1 (+https://github.com/spooknik/collections2mo2)"
+USER_AGENT = f"collections2mo2/{__version__} (+https://github.com/spooknik/collections2mo2)"
 
 COLLECTION_URL_RE = re.compile(
     r"^https?://(?:www\.)?nexusmods\.com/games/(?P<game>[a-z0-9_-]+)/collections/(?P<slug>[a-z0-9]+)",

@@ -11,6 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from . import (
+    __version__,
     archive_inspect,
     build,
     create,
@@ -109,6 +110,11 @@ def main(argv: list[str] | None = None) -> int:
     _tolerant_output()
     p = argparse.ArgumentParser(
         prog="c2mo2", description="Nexus Mods collections -> Mod Organizer 2 instances"
+    )
+    p.add_argument(
+        "--version",
+        action="version",
+        version=f"c2mo2 {__version__}",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 

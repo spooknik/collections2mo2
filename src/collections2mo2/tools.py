@@ -285,8 +285,8 @@ def _qt_escape(value: str) -> str:
     """MO2 stores a `customExecutables` `arguments` value the way Qt's IniFormat writer
     escapes any string: every backslash doubled, then every quote escaped with a
     backslash. Verified against a working Wabbajack Stock Game instance (Lorerim): the
-    logical argument `-D:"E:\\Games\\Lorerim\\Stock Game\\Data"` is stored on disk as
-    `-D:\\"E:\\\\Games\\\\Lorerim\\\\Stock Game\\\\Data\\"` (mirrored by
+    logical argument `-D:"D:\\Lorerim\\Stock Game\\Data"` is stored on disk as
+    `-D:\\"D:\\\\Lorerim\\\\Stock Game\\\\Data\\"` (mirrored by
     `build._qt_escape` -- kept local here too, see the module docstring on why tools.py
     stays self-contained from build.py)."""
     return value.replace("\\", "\\\\").replace('"', '\\"')
