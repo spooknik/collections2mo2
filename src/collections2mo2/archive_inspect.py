@@ -236,7 +236,7 @@ def cmd_inspect(args: argparse.Namespace, reporter: Reporter | None = None) -> i
                 continue
             results.append({**base, **inspection})
 
-    results.sort(key=lambda e: (e.get("name") or ""))
+    results.sort(key=lambda e: e.get("name") or "")
 
     out_path = Path(args.out) if args.out else downloads_json.parent / "inspect.json"
     out_path.write_text(

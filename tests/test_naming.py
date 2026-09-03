@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 
-from collections2wabbajack import naming
+from collections2mo2 import naming
 
 
 def test_sanitize_strips_illegal_characters():

@@ -1,4 +1,4 @@
-"""Tests for collection layering: `c2wj add` / `c2wj remove` and layered profiles.
+"""Tests for collection layering: `c2mo2 add` / `c2mo2 remove` and layered profiles.
 
 Everything here works on a synthetic instance built by `make_instance` -- a ledger,
 per-layer `install.json`, manifests and empty `mods/` folders -- so no network, no
@@ -13,8 +13,8 @@ import argparse
 import json
 from pathlib import Path
 
-from collections2wabbajack import create, layers, ledger, naming, profile
-from collections2wabbajack.reporter import NullReporter
+from collections2mo2 import create, layers, ledger, naming, profile
+from collections2mo2.reporter import NullReporter
 
 # --------------------------------------------------------------------- fixtures
 
@@ -41,18 +41,18 @@ def make_instance(tmp_path: Path, specs: list[dict]) -> tuple[Path, ledger.Ledge
     """Build an instance whose ledger has one layer per spec, with mods/ folders on disk."""
     inst = tmp_path / "inst"
     (inst / "mods").mkdir(parents=True, exist_ok=True)
-    (inst / "c2wj").mkdir(parents=True, exist_ok=True)
+    (inst / "c2mo2").mkdir(parents=True, exist_ok=True)
     led = ledger.Ledger(inst)
     led.set_game(domain="skyrimspecialedition", mo2_name="SkyrimSE", source_path=str(tmp_path))
     led.set_mo2(version="2.5.2")
     for spec in specs:
         slug, rev = spec["slug"], spec["revision"]
-        rel_manifest = f"c2wj/collections/{slug}/{rev}/archive/collection.json"
+        rel_manifest = f"c2mo2/collections/{slug}/{rev}/archive/collection.json"
         manifest_path = inst / rel_manifest
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(json.dumps(spec["manifest"]), encoding="utf-8")
 
-        rel_install = f"c2wj/{slug}-{rev}.install.json"
+        rel_install = f"c2mo2/{slug}-{rev}.install.json"
         (inst / rel_install).write_text(
             json.dumps(
                 {
@@ -70,7 +70,7 @@ def make_instance(tmp_path: Path, specs: list[dict]) -> tuple[Path, ledger.Ledge
             name=spec.get("name") or slug,
             profile=specs[0].get("profile") or "TestProfile",
             manifest=rel_manifest,
-            files={"install": rel_install, "downloads": f"c2wj/{slug}-{rev}.downloads.json"},
+            files={"install": rel_install, "downloads": f"c2mo2/{slug}-{rev}.downloads.json"},
         )
         owner = ledger.collection_owner(slug, rev)
         for entry in spec["entries"]:
@@ -381,7 +381,7 @@ def test_user_mod_plugins_keep_their_state(tmp_path: Path):
 
 
 def test_tool_mod_is_placed_above_the_collection_and_below_user_mods(tmp_path: Path):
-    # What `c2wj tools install dyndolod` produces: a mod folder owned by `tool:<id>`,
+    # What `c2mo2 tools install dyndolod` produces: a mod folder owned by `tool:<id>`,
     # not by any layer. It must land in modlist.txt above the collection's top block
     # (highest layer priority) but below anything the user pinned above everything.
     inst, led = make_instance(
@@ -1042,7 +1042,7 @@ def test_remove_addon_deletes_only_its_own_folders(tmp_path: Path):
     assert "Add On_separator" not in modlist
     assert "+X" not in modlist
     assert "+My Test Mod" in modlist
-    assert not (inst / "c2wj" / "addon-2.install.json").exists()
+    assert not (inst / "c2mo2" / "addon-2.install.json").exists()
 
 
 def test_add_then_remove_round_trips_the_profile(tmp_path: Path):
@@ -1105,29 +1105,29 @@ def test_layer_paths_are_namespaced_per_collection(tmp_path: Path):
     lp = create.LayerPaths(paths, "xk05aw", 7)
     assert lp.install_json.name == "xk05aw-7.install.json"
     assert lp.downloads_json.name == "xk05aw-7.downloads.json"
-    assert lp.ledger_files()["install"] == "c2wj/xk05aw-7.install.json"
+    assert lp.ledger_files()["install"] == "c2mo2/xk05aw-7.install.json"
 
 
 def test_migrate_instance_renames_pre_layering_stage_files(tmp_path: Path):
     inst = tmp_path / "inst"
-    (inst / "c2wj").mkdir(parents=True)
+    (inst / "c2mo2").mkdir(parents=True)
     paths = create.Paths(inst)
-    (inst / "c2wj" / "downloads.json").write_text('{"entries": []}', encoding="utf-8")
-    (inst / "c2wj" / "inspect.json").write_text(
-        json.dumps({"downloads_json": str(inst / "c2wj" / "downloads.json"), "entries": []}),
+    (inst / "c2mo2" / "downloads.json").write_text('{"entries": []}', encoding="utf-8")
+    (inst / "c2mo2" / "inspect.json").write_text(
+        json.dumps({"downloads_json": str(inst / "c2mo2" / "downloads.json"), "entries": []}),
         encoding="utf-8",
     )
-    (inst / "c2wj" / "install.json").write_text('{"entries": []}', encoding="utf-8")
+    (inst / "c2mo2" / "install.json").write_text('{"entries": []}', encoding="utf-8")
     led = ledger.Ledger(inst)
     led.register_layer("h2uqa3", 68, name="Base")
 
     moved = create.migrate_instance(paths, led, NullReporter())
     assert len(moved) == 3
-    assert (inst / "c2wj" / "h2uqa3-68.install.json").exists()
-    assert not (inst / "c2wj" / "install.json").exists()
-    inspected = json.loads((inst / "c2wj" / "h2uqa3-68.inspect.json").read_text(encoding="utf-8"))
+    assert (inst / "c2mo2" / "h2uqa3-68.install.json").exists()
+    assert not (inst / "c2mo2" / "install.json").exists()
+    inspected = json.loads((inst / "c2mo2" / "h2uqa3-68.inspect.json").read_text(encoding="utf-8"))
     assert inspected["downloads_json"].endswith("h2uqa3-68.downloads.json")
-    assert led.data["layers"][0]["files"]["install"] == "c2wj/h2uqa3-68.install.json"
+    assert led.data["layers"][0]["files"]["install"] == "c2mo2/h2uqa3-68.install.json"
 
 
 def test_ledger_upgrade_from_schema_1(tmp_path: Path):
@@ -1149,3 +1149,154 @@ def test_ledger_upgrade_from_schema_1(tmp_path: Path):
     assert led.data["mods"]["A"]["owners"] == ["collection:base@1"]
     keys = led.ini_keys_of("collection:base@1")
     assert keys["Skyrim.ini"]["[Display]"]["iSize W"] == {"value": None, "previous": None}
+
+
+# --------------------------------------------- pre-rename instances (`c2wj` -> `c2mo2`)
+
+
+def _legacy_instance(tmp_path: Path) -> Path:
+    """An instance as the pre-rename build left it: `c2wj`-named everywhere."""
+    inst = tmp_path / "inst"
+    (inst / "c2wj").mkdir(parents=True)
+    (inst / "c2wj" / "base-1.install.json").write_text('{"entries": []}', encoding="utf-8")
+    (inst / "c2wj-build.json").write_text('{"mo2_top_level": ["ModOrganizer.exe"]}', "utf-8")
+
+    override = inst / "mods" / profile.LEGACY_DISPLAY_OVERRIDE_MOD_NAME
+    (override / "SKSE" / "Plugins").mkdir(parents=True)
+    (override / "meta.ini").write_text(
+        "[General]\ncomments=owner: user\nnotes=Generated by c2wj (c2wj-display) to keep\n",
+        encoding="utf-8",
+    )
+    (override / "SKSE" / "Plugins" / "SSEDisplayTweaks.ini").write_text(
+        "[Render]\nFullscreen=false\n", encoding="utf-8"
+    )
+
+    (inst / "profiles" / "Default").mkdir(parents=True)
+    (inst / "profiles" / "Default" / "modlist.txt").write_text(
+        f"# This file was automatically generated by Mod Organizer.\n"
+        f"+{profile.LEGACY_DISPLAY_OVERRIDE_MOD_NAME}\n"
+        f"-Disabled Mod\n"
+        f"+A\n",
+        encoding="utf-8",
+    )
+
+    (inst / ledger.LEGACY_LEDGER_NAME).write_text(
+        json.dumps(
+            {
+                "version": ledger.VERSION,
+                "layers": [{"slug": "base", "revision": 1}],
+                "mods": {
+                    "A": {"owner": "collection:base@1", "owners": ["collection:base@1"]},
+                    profile.LEGACY_DISPLAY_OVERRIDE_MOD_NAME: {
+                        "owner": ledger.USER_OWNER,
+                        "owners": [ledger.USER_OWNER],
+                        "generated_by": profile.LEGACY_DISPLAY_OVERRIDE_MARKER,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return inst
+
+
+def test_migrate_legacy_instance_renames_everything(tmp_path: Path):
+    inst = _legacy_instance(tmp_path)
+    renamed = create.migrate_legacy_instance(create.Paths(inst), NullReporter())
+
+    assert (inst / ledger.LEDGER_NAME).is_file()
+    assert not (inst / ledger.LEGACY_LEDGER_NAME).exists()
+    assert (inst / "c2mo2" / "base-1.install.json").is_file()
+    assert not (inst / "c2wj").exists()
+    assert (inst / "c2mo2-build.json").is_file()
+    assert not (inst / "c2wj-build.json").exists()
+
+    new_mod = inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME
+    assert (new_mod / "SKSE" / "Plugins" / "SSEDisplayTweaks.ini").is_file()
+    assert not (inst / "mods" / profile.LEGACY_DISPLAY_OVERRIDE_MOD_NAME).exists()
+    meta = (new_mod / "meta.ini").read_text(encoding="utf-8")
+    assert "Generated by c2mo2 (c2mo2-display)" in meta
+    assert "c2wj" not in meta
+
+    led = ledger.load(inst)
+    record = led.data["mods"][profile.DISPLAY_OVERRIDE_MOD_NAME]
+    assert record["generated_by"] == profile.DISPLAY_OVERRIDE_MARKER
+    assert profile.LEGACY_DISPLAY_OVERRIDE_MOD_NAME not in led.data["mods"]
+    # rekeyed in place: the override keeps its position after "A"
+    assert list(led.data["mods"]) == ["A", profile.DISPLAY_OVERRIDE_MOD_NAME]
+
+    rows = (inst / "profiles" / "Default" / "modlist.txt").read_text(encoding="utf-8").splitlines()
+    assert rows[1] == f"+{profile.DISPLAY_OVERRIDE_MOD_NAME}"
+    assert rows[2] == "-Disabled Mod"
+    assert len(renamed) == 4
+
+
+def test_migrate_legacy_instance_is_idempotent_and_leaves_current_files_alone(tmp_path: Path):
+    inst = _legacy_instance(tmp_path)
+    paths = create.Paths(inst)
+    create.migrate_legacy_instance(paths, NullReporter())
+    assert create.migrate_legacy_instance(paths, NullReporter()) == []
+
+    # A fresh instance has nothing to migrate either.
+    fresh = tmp_path / "fresh"
+    (fresh / "c2mo2").mkdir(parents=True)
+    assert create.migrate_legacy_instance(create.Paths(fresh), NullReporter()) == []
+
+
+def test_migrate_legacy_instance_keeps_a_repurposed_display_mod(tmp_path: Path):
+    """A folder of the legacy name the ledger no longer marks as ours is left alone."""
+    inst = _legacy_instance(tmp_path)
+    data = json.loads((inst / ledger.LEGACY_LEDGER_NAME).read_text(encoding="utf-8"))
+    del data["mods"][profile.LEGACY_DISPLAY_OVERRIDE_MOD_NAME]["generated_by"]
+    (inst / ledger.LEGACY_LEDGER_NAME).write_text(json.dumps(data), encoding="utf-8")
+
+    create.migrate_legacy_instance(create.Paths(inst), NullReporter())
+
+    assert (inst / ledger.LEDGER_NAME).is_file()  # the rest still migrates
+    assert (inst / "mods" / profile.LEGACY_DISPLAY_OVERRIDE_MOD_NAME).is_dir()
+    assert not (inst / "mods" / profile.DISPLAY_OVERRIDE_MOD_NAME).exists()
+
+
+def test_ledger_load_falls_back_to_the_legacy_file_name(tmp_path: Path):
+    inst = tmp_path / "inst"
+    inst.mkdir()
+    (inst / ledger.LEGACY_LEDGER_NAME).write_text(
+        json.dumps(
+            {
+                "version": ledger.VERSION,
+                "layers": [{"slug": "base", "revision": 3}],
+                "mods": {"A": {"owner": "collection:base@3", "owners": ["collection:base@3"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    led = ledger.load(inst)
+    assert led.data["layers"][0]["revision"] == 3
+    assert led.owners_of("A") == ["collection:base@3"]
+    # Writes always go to the current name.
+    assert led.path.name == ledger.LEDGER_NAME
+
+
+def test_ledger_load_prefers_the_current_file_name(tmp_path: Path):
+    inst = tmp_path / "inst"
+    inst.mkdir()
+    (inst / ledger.LEGACY_LEDGER_NAME).write_text(
+        json.dumps({"version": ledger.VERSION, "layers": [{"slug": "old", "revision": 1}]}),
+        encoding="utf-8",
+    )
+    (inst / ledger.LEDGER_NAME).write_text(
+        json.dumps({"version": ledger.VERSION, "layers": [{"slug": "new", "revision": 2}]}),
+        encoding="utf-8",
+    )
+    assert ledger.load(inst).data["layers"][0]["slug"] == "new"
+
+
+def test_display_override_is_recognised_under_its_legacy_name(tmp_path: Path):
+    inst = _legacy_instance(tmp_path)
+    led = ledger.load(inst)
+    assert profile._active_override_name(inst / "mods", led) == (
+        profile.LEGACY_DISPLAY_OVERRIDE_MOD_NAME
+    )
+    create.migrate_legacy_instance(create.Paths(inst), NullReporter())
+    led = ledger.load(inst)
+    assert profile._active_override_name(inst / "mods", led) == profile.DISPLAY_OVERRIDE_MOD_NAME

@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from collections2wabbajack import ledger as ledger_mod
-from collections2wabbajack import wabbajack
+from collections2mo2 import ledger as ledger_mod
+from collections2mo2 import wabbajack
 
 
 def _meta(**general: str) -> str:
@@ -24,7 +24,7 @@ def _meta(**general: str) -> str:
 @pytest.fixture
 def instance(tmp_path: Path) -> Path:
     root = tmp_path / "inst"
-    for sub in ("downloads", "mods", "profiles", "Tools", "c2wj", "overwrite", "Stock Game"):
+    for sub in ("downloads", "mods", "profiles", "Tools", "c2mo2", "overwrite", "Stock Game"):
         (root / sub).mkdir(parents=True)
     (root / "Stock Game" / "SkyrimSE.exe").write_bytes(b"x" * 16)
     # What the collection's Runtime Swapper leaves behind in the game folder.
@@ -104,7 +104,7 @@ def test_settings_defaults_come_from_the_ledger(instance: Path, led: ledger_mod.
     url = "https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3"
     assert s["ModListWebsite"] == url
     assert s["ModListReadme"] == url
-    assert "collections2wabbajack" in s["ModListDescription"]
+    assert "collections2mo2" in s["ModListDescription"]
     assert s["Source"] == str(instance).replace("/", "\\")
     assert s["Downloads"] == str(instance / "downloads").replace("/", "\\")
     assert s["OutputFile"].endswith("\\wabbajack\\SKSE and Behaviours Essentials.wabbajack")
@@ -127,7 +127,7 @@ def test_settings_ignore_covers_our_bookkeeping_and_expands_logs(
     instance: Path, led: ledger_mod.Ledger
 ) -> None:
     s = wabbajack.build_settings(instance, led)
-    assert "c2wj" in s["Ignore"]
+    assert "c2mo2" in s["Ignore"]
     assert "overwrite" in s["Ignore"]
     # Our own output folder lives inside the compile source; if it were not ignored the
     # compiler would try to resolve compile.log and the previous .wabbajack.
@@ -220,7 +220,7 @@ def test_inlined_folders_are_the_ones_with_no_archive(
     # MO2's binaries are inlined too, but the instance's own data folders are not.
     assert inlined["ModOrganizer.exe"].reason == "MO2 program file"
     assert inlined["dlls"].size == 600
-    for skipped in ("mods", "downloads", "profiles", "Tools", "overwrite", "c2wj", "Stock Game"):
+    for skipped in ("mods", "downloads", "profiles", "Tools", "overwrite", "c2mo2", "Stock Game"):
         assert skipped not in inlined
     # The settings file is written into the source root; it must not list itself.
     assert not any(p.endswith(".compiler_settings") for p in inlined)
@@ -248,7 +248,7 @@ def test_tool_output_folder_is_inlined(instance: Path, led: ledger_mod.Ledger) -
 
 
 def test_tool_with_archive_is_traced_not_inlined(instance: Path, led: ledger_mod.Ledger) -> None:
-    # `c2wj tools` writes the archive's .meta with `modName` set to the catalogue
+    # `c2mo2 tools` writes the archive's .meta with `modName` set to the catalogue
     # entry's name, which is exactly what `tools[id]["name"]` holds -- that alone is
     # enough to trace `Tools/<id>` back to its archive even though the ledger records
     # no filename directly.
@@ -396,11 +396,11 @@ def test_tool_owned_companion_mod_traced_via_companion_record_without_meta_ini(
 def test_mo2_program_files_are_not_inlined_when_the_release_archive_is_in_downloads(
     instance: Path, led: ledger_mod.Ledger
 ) -> None:
-    # `c2wj build` (since the Wabbajack inlining fix) copies Mod.Organizer-<ver>.7z into
+    # `c2mo2 build` (since the Wabbajack inlining fix) copies Mod.Organizer-<ver>.7z into
     # downloads/ with a .meta and records the top-level names it wrote into
-    # c2wj-build.json. Once that archive is genuinely present, ModOrganizer.exe and
+    # c2mo2-build.json. Once that archive is genuinely present, ModOrganizer.exe and
     # dlls/ compile as FromArchive instead of being inlined.
-    (instance / "c2wj-build.json").write_text(
+    (instance / "c2mo2-build.json").write_text(
         json.dumps({"mo2_version": "2.5.2", "mo2_top_level": ["ModOrganizer.exe", "dlls"]}),
         encoding="utf-8",
     )
@@ -423,7 +423,7 @@ def test_mo2_program_files_are_not_inlined_when_the_release_archive_is_in_downlo
 def test_mo2_program_files_still_inline_for_instances_built_before_the_fix(
     instance: Path, led: ledger_mod.Ledger
 ) -> None:
-    # No c2wj-build.json (or one without mo2_top_level) at all: old behaviour holds.
+    # No c2mo2-build.json (or one without mo2_top_level) at all: old behaviour holds.
     inlined = {e.path: e for e in wabbajack.check_inlined(instance, led)}
     assert inlined["ModOrganizer.exe"].reason == "MO2 program file"
     assert inlined["dlls"].reason == "MO2 program file"
@@ -435,7 +435,7 @@ def test_mo2_program_files_still_inline_when_the_archive_meta_does_not_resolve(
     # The archive is recorded and even present in downloads/, but its .meta is
     # unusable (no directURL/Nexus ids) -- the compiler could not match it either,
     # so the checklist must not claim these files are covered.
-    (instance / "c2wj-build.json").write_text(
+    (instance / "c2mo2-build.json").write_text(
         json.dumps({"mo2_version": "2.5.2", "mo2_top_level": ["ModOrganizer.exe", "dlls"]}),
         encoding="utf-8",
     )

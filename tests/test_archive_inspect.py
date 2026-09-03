@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from collections2wabbajack import archive_inspect
-from collections2wabbajack.sevenzip import TOOLS_DIR
+from collections2mo2 import archive_inspect
+from collections2mo2.sevenzip import TOOLS_DIR
 
 _SEVENZIP_AVAILABLE = (TOOLS_DIR / "7za.exe").exists() and (TOOLS_DIR / "7z.dll").exists()
 

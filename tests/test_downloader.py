@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from collections2wabbajack import downloader
-from collections2wabbajack.nexus import NexusError
+from collections2mo2 import downloader
+from collections2mo2.nexus import NexusError
 
 
 def _read_meta(path: Path) -> configparser.ConfigParser:

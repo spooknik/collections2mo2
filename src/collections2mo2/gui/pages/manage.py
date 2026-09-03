@@ -82,7 +82,7 @@ class ManagePage(WizardPage):
 
         pick_row = QHBoxLayout()
         self.path_edit = QLineEdit()
-        self.path_edit.setPlaceholderText("path to an existing c2wj instance")
+        self.path_edit.setPlaceholderText("path to an existing c2mo2 instance")
         pick_row.addWidget(self.path_edit)
         self.browse_btn = QPushButton("Browse...")
         self.browse_btn.clicked.connect(self._browse)

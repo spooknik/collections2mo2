@@ -17,19 +17,19 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from collections2wabbajack.api import OperationCancelled
-from collections2wabbajack.gui.pages.collection import CollectionPage
-from collections2wabbajack.gui.pages.display import DisplayPage
-from collections2wabbajack.gui.pages.home import HomePage
-from collections2wabbajack.gui.pages.location import LocationPage
-from collections2wabbajack.gui.pages.manage import ManagePage
-from collections2wabbajack.gui.pages.progress import ProgressPage
-from collections2wabbajack.gui.pages.review import ReviewPage
-from collections2wabbajack.gui.pages.signin import SignInPage
-from collections2wabbajack.gui.pages.tools_page import ToolsPage
-from collections2wabbajack.gui.progress_widget import ProgressWidget
-from collections2wabbajack.gui.reporter_bridge import QtReporter
-from collections2wabbajack.gui.state import WizardState
+from collections2mo2.api import OperationCancelled
+from collections2mo2.gui.pages.collection import CollectionPage
+from collections2mo2.gui.pages.display import DisplayPage
+from collections2mo2.gui.pages.home import HomePage
+from collections2mo2.gui.pages.location import LocationPage
+from collections2mo2.gui.pages.manage import ManagePage
+from collections2mo2.gui.pages.progress import ProgressPage
+from collections2mo2.gui.pages.review import ReviewPage
+from collections2mo2.gui.pages.signin import SignInPage
+from collections2mo2.gui.pages.tools_page import ToolsPage
+from collections2mo2.gui.progress_widget import ProgressWidget
+from collections2mo2.gui.reporter_bridge import QtReporter
+from collections2mo2.gui.state import WizardState
 
 PAGE_CLASSES = [
     SignInPage,
@@ -48,7 +48,7 @@ PAGE_CLASSES = [
 def _clean_keyring(monkeypatch):
     # SignInPage.__init__ reads the real OS keyring to prefill the key field; stub it
     # out so the test suite never touches the machine's actual credential store.
-    from collections2wabbajack import api
+    from collections2mo2 import api
 
     monkeypatch.setattr(api, "get_saved_api_key", lambda: None)
 
@@ -65,7 +65,7 @@ def test_page_constructs(qtbot, page_cls):
 
 
 def test_wizard_window_constructs(qtbot):
-    from collections2wabbajack.gui.app import WizardWindow
+    from collections2mo2.gui.app import WizardWindow
 
     window = WizardWindow()
     qtbot.addWidget(window)
@@ -286,7 +286,7 @@ def test_progress_widget_muted_labels_readable_on_dark_palette(qtbot, label_name
 def test_warning_style_picks_a_theme_appropriate_amber(qtbot):
     from PySide6.QtWidgets import QLabel
 
-    from collections2wabbajack.gui.theme import is_dark_palette, warning_style
+    from collections2mo2.gui.theme import is_dark_palette, warning_style
 
     label = QLabel()
     qtbot.addWidget(label)
@@ -327,8 +327,8 @@ def _isolated_qsettings(tmp_path):
 def test_home_shown_first_when_signed_in(qtbot, monkeypatch, _isolated_qsettings):
     """A saved key must show Home immediately, never blocking on the background
     validation that follows."""
-    from collections2wabbajack import api
-    from collections2wabbajack.gui.app import WizardWindow
+    from collections2mo2 import api
+    from collections2mo2.gui.app import WizardWindow
 
     monkeypatch.setattr(api, "get_saved_api_key", lambda: "fake-key")
     monkeypatch.setattr(
@@ -355,8 +355,8 @@ def test_home_shown_first_when_signed_in(qtbot, monkeypatch, _isolated_qsettings
 
 
 def test_signin_shown_when_no_key(qtbot, monkeypatch, _isolated_qsettings):
-    from collections2wabbajack import api
-    from collections2wabbajack.gui.app import WizardWindow
+    from collections2mo2 import api
+    from collections2mo2.gui.app import WizardWindow
 
     monkeypatch.setattr(api, "get_saved_api_key", lambda: None)
 
@@ -368,8 +368,8 @@ def test_signin_shown_when_no_key(qtbot, monkeypatch, _isolated_qsettings):
 
 
 def test_signin_shown_when_saved_key_fails_validation(qtbot, monkeypatch, _isolated_qsettings):
-    from collections2wabbajack import api
-    from collections2wabbajack.gui.app import WizardWindow
+    from collections2mo2 import api
+    from collections2mo2.gui.app import WizardWindow
 
     monkeypatch.setattr(api, "get_saved_api_key", lambda: "bad-key")
 
@@ -391,8 +391,8 @@ def test_signin_shown_when_saved_key_fails_validation(qtbot, monkeypatch, _isola
 
 
 def test_back_to_start_resets_state_keeps_account(qtbot, monkeypatch, _isolated_qsettings):
-    from collections2wabbajack import api
-    from collections2wabbajack.gui.app import WizardWindow
+    from collections2mo2 import api
+    from collections2mo2.gui.app import WizardWindow
 
     monkeypatch.setattr(api, "get_saved_api_key", lambda: None)
     window = WizardWindow()
@@ -427,12 +427,12 @@ def test_back_to_start_resets_state_keeps_account(qtbot, monkeypatch, _isolated_
 
 
 def test_recents_persist_and_prune_invalid(_isolated_qsettings):
-    from collections2wabbajack.gui import recents
+    from collections2mo2.gui import recents
 
     tmp_path = _isolated_qsettings
     valid_dir = tmp_path / "instance"
     valid_dir.mkdir()
-    (valid_dir / "c2wj-instance.json").write_text("{}")
+    (valid_dir / "c2mo2-instance.json").write_text("{}")
     missing_dir = tmp_path / "gone"  # never created -- simulates a deleted instance
 
     recents.save_recents(
@@ -452,15 +452,15 @@ def test_recents_persist_and_prune_invalid(_isolated_qsettings):
 
 
 def test_manage_page_auto_loads_most_recent_valid_instance(qtbot, monkeypatch, _isolated_qsettings):
-    from collections2wabbajack import api
-    from collections2wabbajack.gui import recents
-    from collections2wabbajack.gui.pages.manage import ManagePage
-    from collections2wabbajack.gui.state import WizardState
+    from collections2mo2 import api
+    from collections2mo2.gui import recents
+    from collections2mo2.gui.pages.manage import ManagePage
+    from collections2mo2.gui.state import WizardState
 
     tmp_path = _isolated_qsettings
     valid_dir = tmp_path / "instance"
     valid_dir.mkdir()
-    (valid_dir / "c2wj-instance.json").write_text("{}")
+    (valid_dir / "c2mo2-instance.json").write_text("{}")
     recents.remember_instance(valid_dir, "GTS")
 
     loaded_paths = []
@@ -556,9 +556,9 @@ def test_manage_page_busy_state_blocks_buttons_and_second_operation(qtbot, monke
 
     from PySide6.QtWidgets import QMessageBox
 
-    from collections2wabbajack import api
-    from collections2wabbajack.gui.pages.manage import ManagePage
-    from collections2wabbajack.gui.state import WizardState
+    from collections2mo2 import api
+    from collections2mo2.gui.pages.manage import ManagePage
+    from collections2mo2.gui.state import WizardState
 
     release = threading.Event()
 
@@ -622,8 +622,8 @@ def test_window_close_while_busy_prompts_and_can_be_declined(qtbot, monkeypatch)
     from PySide6.QtGui import QCloseEvent
     from PySide6.QtWidgets import QMessageBox
 
-    from collections2wabbajack import api
-    from collections2wabbajack.gui.app import WizardWindow
+    from collections2mo2 import api
+    from collections2mo2.gui.app import WizardWindow
 
     monkeypatch.setattr(api, "get_saved_api_key", lambda: None)
     window = WizardWindow()
@@ -667,15 +667,15 @@ def test_window_close_while_busy_confirmed_cancels_and_accepts(qtbot, monkeypatc
     from PySide6.QtGui import QCloseEvent
     from PySide6.QtWidgets import QMessageBox
 
-    from collections2wabbajack import api
-    from collections2wabbajack.gui.app import WizardWindow
+    from collections2mo2 import api
+    from collections2mo2.gui.app import WizardWindow
 
     monkeypatch.setattr(api, "get_saved_api_key", lambda: None)
     window = WizardWindow()
     qtbot.addWidget(window)
 
     def fake_export(instance_dir, reporter=None):
-        from collections2wabbajack.api import OperationCancelled
+        from collections2mo2.api import OperationCancelled
 
         while not reporter.is_cancelled():
             threading.Event().wait(0.05)
@@ -705,3 +705,56 @@ def test_window_close_while_busy_confirmed_cancels_and_accepts(qtbot, monkeypatc
     qtbot.waitSignal(worker.finished, timeout=2000)
     qtbot.wait(50)
     assert window._busy is False
+
+
+def test_recents_migrate_once_from_the_pre_rename_settings(_isolated_qsettings):
+    """Recents written by the old `collections2wabbajack` / `c2wj-gui` build are copied
+    into the current organisation/app the first time the new one is read empty."""
+    from collections2mo2.gui import recents
+
+    tmp_path = _isolated_qsettings
+    valid_dir = tmp_path / "instance"
+    valid_dir.mkdir()
+    (valid_dir / "c2mo2-instance.json").write_text("{}")
+
+    legacy = recents._settings(recents.LEGACY_ORGANIZATION, recents.LEGACY_APPLICATION)
+    legacy.beginWriteArray("recent_instances")
+    legacy.setArrayIndex(0)
+    legacy.setValue("path", str(valid_dir))
+    legacy.setValue("collection_name", "GTS")
+    legacy.setValue("last_opened", "2026-01-01T00:00:00+00:00")
+    legacy.endArray()
+    legacy.sync()
+
+    loaded = recents.load_recents()
+    assert [(r.path, r.collection_name) for r in loaded] == [(str(valid_dir), "GTS")]
+    # Copied, not moved: the entry now lives under the current name too.
+    assert [r.path for r in recents._read_array(recents._settings())] == [str(valid_dir)]
+
+
+def test_recents_do_not_migrate_over_existing_entries(_isolated_qsettings):
+    from collections2mo2.gui import recents
+
+    tmp_path = _isolated_qsettings
+    current_dir = tmp_path / "current"
+    current_dir.mkdir()
+    (current_dir / "c2mo2-instance.json").write_text("{}")
+    legacy_dir = tmp_path / "legacy"
+    legacy_dir.mkdir()
+    (legacy_dir / "c2mo2-instance.json").write_text("{}")
+
+    recents.save_recents(
+        [recents.RecentInstance(str(current_dir), "Current", "2026-01-01T00:00:00+00:00")]
+    )
+
+    legacy = recents._settings(recents.LEGACY_ORGANIZATION, recents.LEGACY_APPLICATION)
+    legacy.beginWriteArray("recent_instances")
+    legacy.setArrayIndex(0)
+    legacy.setValue("path", str(legacy_dir))
+    legacy.setValue("collection_name", "Old")
+    legacy.setValue("last_opened", "2025-01-01T00:00:00+00:00")
+    legacy.endArray()
+    legacy.sync()
+
+    # The current store already has an entry, so the legacy one is never merged in.
+    assert [r.path for r in recents.load_recents()] == [str(current_dir)]

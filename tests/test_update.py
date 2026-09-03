@@ -1,4 +1,4 @@
-"""Tests for `c2wj update`: the manifest delta, user-mod detection, the ledger bump.
+"""Tests for `c2mo2 update`: the manifest delta, user-mod detection, the ledger bump.
 
 All synthetic: two hand-built manifests and a `mods/` folder or two, so nothing here
 touches the network, an archive or an MO2 instance. The end-to-end behaviour of the
@@ -11,7 +11,7 @@ import os
 import time
 from pathlib import Path
 
-from collections2wabbajack import ledger, update
+from collections2mo2 import ledger, update
 
 
 def _mod(
@@ -225,7 +225,7 @@ def test_missing_files_are_not_a_reason_to_keep_a_folder(tmp_path: Path):
 
 def test_update_layer_revision_keeps_position_and_records_the_previous_revision(tmp_path: Path):
     led = ledger.Ledger(tmp_path / "inst")
-    led.register_layer("base", 66, name="Base", profile="TestProfile", manifest="c2wj/a.json")
+    led.register_layer("base", 66, name="Base", profile="TestProfile", manifest="c2mo2/a.json")
     led.register_layer("addon", 3, name="Add On")
     led.data["layers"][0]["separators"] = ["Phase 0_separator"]
 
@@ -234,8 +234,8 @@ def test_update_layer_revision_keeps_position_and_records_the_previous_revision(
         66,
         68,
         name="Base",
-        manifest="c2wj/collections/base/68/archive/collection.json",
-        files={"install": "c2wj/base-68.install.json"},
+        manifest="c2mo2/collections/base/68/archive/collection.json",
+        files={"install": "c2mo2/base-68.install.json"},
     )
     assert layer is not None
     assert [entry["slug"] for entry in led.data["layers"]] == ["base", "addon"]

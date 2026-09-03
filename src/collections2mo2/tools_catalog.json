@@ -212,7 +212,7 @@
       },
       "install": {
         "strip_single_root": true,
-        "note": "Run TexGen (SSE) before DynDOLOD (SSE): TexGen builds the billboard/object LOD atlases that DynDOLOD then needs. Both write generated output (LODGen temp files under the tool folder; the LOD meshes/textures/plugin under the game's Data, or MO2's overwrite/ when run through MO2) that you must review and add as your own mod afterwards -- c2wj does not do this automatically. Install this tool's companion_mods (dyndolod-resources, dyndolod-dll-ng) first."
+        "note": "Run TexGen (SSE) before DynDOLOD (SSE): TexGen builds the billboard/object LOD atlases that DynDOLOD then needs. Both write generated output (LODGen temp files under the tool folder; the LOD meshes/textures/plugin under the game's Data, or MO2's overwrite/ when run through MO2) that you must review and add as your own mod afterwards -- c2mo2 does not do this automatically. Install this tool's companion_mods (dyndolod-resources, dyndolod-dll-ng) first."
       },
       "executables": [
         {

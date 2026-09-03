@@ -1,7 +1,7 @@
 [project]
-name = "collections2wabbajack"
+name = "collections2mo2"
 version = "0.0.1"
-description = "Convert Nexus Mods collections into Mod Organizer 2 instances and Wabbajack modlists"
+description = "Convert Nexus Mods collections into Mod Organizer 2 instances, with Wabbajack export"
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.12"
@@ -14,15 +14,15 @@ dependencies = [
 ]
 
 [project.scripts]
-c2wj = "collections2wabbajack.cli:main"
-c2wj-gui = "collections2wabbajack.gui.app:main"
+c2mo2 = "collections2mo2.cli:main"
+c2mo2-gui = "collections2mo2.gui.app:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/collections2wabbajack"]
+packages = ["src/collections2mo2"]
 
 [tool.ruff]
 line-length = 100

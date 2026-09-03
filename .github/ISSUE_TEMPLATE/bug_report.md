@@ -13,14 +13,14 @@ Windows Credential Manager. If a log line contains it, redact it first.
 ## Collection
 
 - Collection URL:
-- Revision (if known, e.g. from `c2wj status` or the URL's `?revision=` query):
+- Revision (if known, e.g. from `c2mo2 status` or the URL's `?revision=` query):
 
 ## Instance
 
 - Instance path (the folder you passed to `--out`/`--instance`/the GUI):
-- Does `c2wj-instance.json` exist in that folder? (yes/no)
+- Does `c2mo2-instance.json` exist in that folder? (yes/no)
 - If yes, please attach it or paste its contents (it does not contain your API key).
-- How was the instance built: GUI wizard, or which `c2wj` command(s)?
+- How was the instance built: GUI wizard, or which `c2mo2` command(s)?
 
 ## What happened
 
@@ -41,6 +41,6 @@ paste here
 
 ## Environment
 
-- `c2wj --version` / commit or release you're on:
+- `c2mo2 --version` / commit or release you're on:
 - Windows version:
 - Nexus Premium: yes/no

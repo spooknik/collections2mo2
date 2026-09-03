@@ -1,4 +1,4 @@
-"""`c2wj add` / `c2wj remove`: collection layers on top of an existing instance.
+"""`c2mo2 add` / `c2mo2 remove`: collection layers on top of an existing instance.
 
 An MO2 instance is not one collection forever. A curator publishes a base list and
 then unofficial add-ons that assume it is installed (Gate to Sovngarde and its
@@ -7,8 +7,8 @@ already exists, as a new layer:
 
     <instance>/mods/                     shared: one MO2 mods tree
     <instance>/downloads/                shared: one archive store
-    <instance>/c2wj/<slug>-<rev>.*.json  per layer: what it downloaded and installed
-    <instance>/c2wj-instance.json        the ledger: layers, and who owns each folder
+    <instance>/c2mo2/<slug>-<rev>.*.json  per layer: what it downloaded and installed
+    <instance>/c2mo2-instance.json        the ledger: layers, and who owns each folder
 
 Everything the layer installs is owned by `collection:<slug>@<rev>`. A folder name
 that collides with a mod an earlier layer installed is *shared* when both layers
@@ -67,10 +67,11 @@ def cmd_add(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
     started = time.monotonic()
 
     paths = _instance_paths(args.instance)
+    create.migrate_legacy_instance(paths, rep)
     if not (paths.out / ledger.LEDGER_NAME).exists():
         rep.warn(
-            f"{paths.out} is not a c2wj instance ({ledger.LEDGER_NAME} not found). "
-            "Use `c2wj create` to make one first."
+            f"{paths.out} is not a c2mo2 instance ({ledger.LEDGER_NAME} not found). "
+            "Use `c2mo2 create` to make one first."
         )
         return 2
 
@@ -83,7 +84,7 @@ def cmd_add(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
     led = ledger.load(paths.out)
     create.migrate_instance(paths, led, rep)
     if not led.data.get("layers"):
-        rep.warn(f"{paths.out} has no base collection layer; run `c2wj create` first")
+        rep.warn(f"{paths.out} has no base collection layer; run `c2mo2 create` first")
         return 2
 
     game = led.data.get("game") or {}
@@ -100,7 +101,7 @@ def cmd_add(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
     if any(layer.get("slug") == slug for layer in led.data["layers"]):
         rep.log(f"{slug} is already a layer of this instance; re-running it as a refresh")
 
-    paths.c2wj.mkdir(parents=True, exist_ok=True)
+    paths.stage.mkdir(parents=True, exist_ok=True)
     before = set(led.data["mods"])
 
     ctx = create.add_layer(
@@ -273,8 +274,9 @@ def cmd_remove(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     rep = get_reporter(reporter)
     started = time.monotonic()
     paths = _instance_paths(args.instance)
+    create.migrate_legacy_instance(paths, rep)
     if not (paths.out / ledger.LEDGER_NAME).exists():
-        rep.warn(f"{paths.out} is not a c2wj instance ({ledger.LEDGER_NAME} not found)")
+        rep.warn(f"{paths.out} is not a c2mo2 instance ({ledger.LEDGER_NAME} not found)")
         return 2
 
     led = ledger.load(paths.out)
@@ -424,7 +426,7 @@ def cmd_remove(args: argparse.Namespace, reporter: Reporter | None = None) -> in
 def add_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "add",
-        help="layer another collection on top of an existing c2wj instance",
+        help="layer another collection on top of an existing c2mo2 instance",
     )
     p.add_argument("url", help="collection URL of the add-on collection")
     p.add_argument("--instance", required=True, help="the instance directory to add it to")

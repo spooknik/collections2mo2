@@ -1,4 +1,4 @@
-"""`c2wj create`: one command from a collection URL to a runnable MO2 instance.
+"""`c2mo2 create`: one command from a collection URL to a runnable MO2 instance.
 
 The pipeline stages (`fetch`, `survey`, `download`, `inspect`, `install`, `profile`,
 `build`) each remain usable on their own; `create` calls them in order, in-process,
@@ -7,10 +7,10 @@ those commands default to. The result is a self-contained instance:
 
     <out>/ModOrganizer.exe, mods/, profiles/, overwrite/, Stock Game/
     <out>/downloads/                 MO2's download folder *and* our archive store
-    <out>/c2wj-instance.json         the ledger: who owns which mod folder
-    <out>/c2wj/collections/<slug>/<revision>/archive/collection.json
-    <out>/c2wj/<slug>-<rev>.{downloads,inspect,install,survey}.json
-    <out>/c2wj/profile-report.json   the profile, rendered from *all* layers at once
+    <out>/c2mo2-instance.json         the ledger: who owns which mod folder
+    <out>/c2mo2/collections/<slug>/<revision>/archive/collection.json
+    <out>/c2mo2/<slug>-<rev>.{downloads,inspect,install,survey}.json
+    <out>/c2mo2/profile-report.json   the profile, rendered from *all* layers at once
 
 Every stage is skipped when its output is already there and consistent with the
 stage before it, so an interrupted run resumes and a repeat run is a no-op. The
@@ -18,7 +18,7 @@ skip checks live here rather than in the stages: they compare each stage's JSON
 against the previous stage's, which only the orchestrator can see.
 
 `create` is "initialise an instance, add its first collection layer, build it".
-`c2wj add` (see `layers.py`) runs the same `add_layer` against an instance that
+`c2mo2 add` (see `layers.py`) runs the same `add_layer` against an instance that
 already exists, which is why the stage JSON is named per layer: a second
 collection must not overwrite the first one's record of what it downloaded and
 installed. Instances written before layering carry plain `downloads.json` /
@@ -100,12 +100,12 @@ class Paths:
     out: Path
 
     @property
-    def c2wj(self) -> Path:
-        return self.out / "c2wj"
+    def stage(self) -> Path:
+        return self.out / "c2mo2"
 
     @property
     def collections(self) -> Path:
-        return self.c2wj / "collections"
+        return self.stage / "collections"
 
     @property
     def downloads(self) -> Path:
@@ -117,11 +117,11 @@ class Paths:
 
     @property
     def profile_report(self) -> Path:
-        return self.c2wj / "profile-report.json"
+        return self.stage / "profile-report.json"
 
     @property
     def build_meta(self) -> Path:
-        return self.out / "c2wj-build.json"
+        return self.out / "c2mo2-build.json"
 
 
 @dataclass(frozen=True)
@@ -155,19 +155,19 @@ class LayerPaths:
 
     @property
     def downloads_json(self) -> Path:
-        return self.paths.c2wj / f"{self.prefix}.downloads.json"
+        return self.paths.stage / f"{self.prefix}.downloads.json"
 
     @property
     def inspect_json(self) -> Path:
-        return self.paths.c2wj / f"{self.prefix}.inspect.json"
+        return self.paths.stage / f"{self.prefix}.inspect.json"
 
     @property
     def install_json(self) -> Path:
-        return self.paths.c2wj / f"{self.prefix}.install.json"
+        return self.paths.stage / f"{self.prefix}.install.json"
 
     @property
     def survey_json(self) -> Path:
-        return self.paths.c2wj / f"{self.prefix}.survey.json"
+        return self.paths.stage / f"{self.prefix}.survey.json"
 
     def ledger_files(self) -> dict[str, str]:
         """The layer's stage JSON as instance-relative paths, for the ledger."""
@@ -200,7 +200,7 @@ def _same_path(a: str | None, b: Path) -> bool:
 def migrate_instance(paths: Paths, led: ledger.Ledger, rep: Reporter) -> list[str]:
     """Move a pre-layering instance's stage JSON onto its base layer's per-layer names.
 
-    Renames `c2wj/downloads.json` to `c2wj/<slug>-<rev>.downloads.json` and friends,
+    Renames `c2mo2/downloads.json` to `c2mo2/<slug>-<rev>.downloads.json` and friends,
     repoints `inspect.json`'s reference to the `downloads.json` it came from, and fills
     in the base layer's `files` record. Returns the renames performed, empty for an
     instance that is already current.
@@ -212,7 +212,7 @@ def migrate_instance(paths: Paths, led: ledger.Ledger, rep: Reporter) -> list[st
     lp = LayerPaths(paths, base.get("slug") or "", base.get("revision"))
     moved: list[str] = []
     for key, legacy_name in STAGE_FILES.items():
-        legacy = paths.c2wj / legacy_name
+        legacy = paths.stage / legacy_name
         current = getattr(lp, key)
         if legacy.exists() and not current.exists():
             legacy.rename(current)
@@ -226,6 +226,107 @@ def migrate_instance(paths: Paths, led: ledger.Ledger, rep: Reporter) -> list[st
     if not base.get("files"):
         base["files"] = lp.ledger_files()
     return moved
+
+
+# -- pre-rename instances (`collections2wabbajack` / `c2wj`) --------------------------
+
+LEGACY_STAGE_DIR_NAME = "c2wj"
+LEGACY_BUILD_META_NAME = "c2wj-build.json"
+
+
+def migrate_legacy_instance(paths: Paths, rep: Reporter) -> list[str]:
+    """Rename a pre-`collections2mo2` instance's files onto their current names.
+
+    The project used to be called `collections2wabbajack` (CLI `c2wj`) and stamped that
+    name into the instance itself: the ledger `c2wj-instance.json`, the stage folder
+    `c2wj/`, the build record `c2wj-build.json`, and the generated display-override mod
+    `c2wj Display Settings` (folder, ledger entry and `modlist.txt` rows). Each is
+    renamed only when the current name is absent and the legacy one present, so this is
+    idempotent, safe to call on every open, and never clobbers a current file.
+
+    Runs before anything reads the instance -- see the call sites in `cmd_create`,
+    `layers.cmd_add` / `cmd_remove`, `update.cmd_update` / `cmd_status`, `tools`,
+    `wabbajack.cmd_wabbajack`, `profile.cmd_profile_instance` and `api.load_instance`.
+    Returns the renames performed, empty for an instance that is already current.
+    """
+    renamed: list[str] = []
+
+    def rename(legacy: Path, current: Path) -> None:
+        if not legacy.exists() or current.exists():
+            return
+        legacy.rename(current)
+        renamed.append(f"{legacy.name} -> {current.name}")
+        rep.log(f"migrated legacy name: {legacy.name} -> {current.name}")
+
+    rename(paths.out / ledger.LEGACY_LEDGER_NAME, paths.out / ledger.LEDGER_NAME)
+    rename(paths.out / LEGACY_STAGE_DIR_NAME, paths.stage)
+    rename(paths.out / LEGACY_BUILD_META_NAME, paths.build_meta)
+    renamed.extend(_migrate_legacy_display_mod(paths, rep))
+    return renamed
+
+
+def _migrate_legacy_display_mod(paths: Paths, rep: Reporter) -> list[str]:
+    """Rename the generated `c2wj Display Settings` mod, in the ledger and on disk.
+
+    Only when the ledger still marks it as ours (`generated_by` is the legacy marker) --
+    a folder of that name the user has repurposed is left alone. The ledger entry is
+    rekeyed in place (keeping its position in `mods`) and every `profiles/*/modlist.txt`
+    row for it is rewritten, `+`/`-` prefix preserved.
+    """
+    old_name = profile.LEGACY_DISPLAY_OVERRIDE_MOD_NAME
+    new_name = profile.DISPLAY_OVERRIDE_MOD_NAME
+    led = ledger.load(paths.out)
+    mods = led.data.get("mods")
+    if not isinstance(mods, dict):
+        return []
+    record = mods.get(old_name)
+    if not isinstance(record, dict):
+        return []
+    if record.get("generated_by") != profile.LEGACY_DISPLAY_OVERRIDE_MARKER:
+        return []
+    if new_name in mods:
+        return []
+
+    old_dir = paths.mods / old_name
+    new_dir = paths.mods / new_name
+    if old_dir.is_dir() and not new_dir.exists():
+        old_dir.rename(new_dir)
+    # `apply_sse_display_tweaks_override` only writes meta.ini when it is missing, so the
+    # legacy "Generated by c2wj" note would otherwise outlive the rename.
+    meta = new_dir / "meta.ini"
+    if meta.is_file():
+        try:
+            text = meta.read_text(encoding="utf-8")
+        except OSError:
+            text = None
+        if text and profile.LEGACY_DISPLAY_OVERRIDE_MARKER in text:
+            text = text.replace("Generated by c2wj (", "Generated by c2mo2 (").replace(
+                profile.LEGACY_DISPLAY_OVERRIDE_MARKER, profile.DISPLAY_OVERRIDE_MARKER
+            )
+            meta.write_text(text, encoding="utf-8")
+
+    record["generated_by"] = profile.DISPLAY_OVERRIDE_MARKER
+    # Rekey in place: rebuild `mods` so the entry keeps its position.
+    led.data["mods"] = {(new_name if k == old_name else k): v for k, v in mods.items()}
+    led.save()
+
+    for modlist in sorted(paths.out.glob("profiles/*/modlist.txt")):
+        try:
+            text = modlist.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        lines = text.splitlines(keepends=True)
+        changed = False
+        for i, line in enumerate(lines):
+            body = line.rstrip("\r\n")
+            if body[:1] in ("+", "-", "*") and body[1:] == old_name:
+                lines[i] = body[:1] + new_name + line[len(body) :]
+                changed = True
+        if changed:
+            modlist.write_text("".join(lines), encoding="utf-8")
+
+    rep.log(f"migrated legacy name: mod {old_name!r} -> {new_name!r}")
+    return [f"{old_name} -> {new_name}"]
 
 
 # -- reuse an existing download store -------------------------------------------------
@@ -718,7 +819,11 @@ def cmd_create(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         rep.warn("NEXUS_API_KEY is required (set it in .env; see .env.example)")
         return 2
 
-    paths.c2wj.mkdir(parents=True, exist_ok=True)
+    # Before any of our own folders are created, or the legacy `c2wj/` rename below
+    # would find `c2mo2/` already there and skip.
+    migrate_legacy_instance(paths, rep)
+
+    paths.stage.mkdir(parents=True, exist_ok=True)
     paths.downloads.mkdir(parents=True, exist_ok=True)
     paths.mods.mkdir(parents=True, exist_ok=True)
 
@@ -727,7 +832,7 @@ def cmd_create(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     layers = led.data.get("layers") or []
     if layers and layers[0].get("slug") != CollectionRef.parse(args.url).slug:
         rep.warn(
-            f"{paths.out} was created from {layers[0].get('slug')}; `c2wj add` is the command "
+            f"{paths.out} was created from {layers[0].get('slug')}; `c2mo2 add` is the command "
             "for layering another collection on top of it"
         )
 

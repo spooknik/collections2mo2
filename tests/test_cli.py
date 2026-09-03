@@ -1,4 +1,4 @@
-"""CLI smoke tests: `c2wj --help` and every subcommand's `--help` exit 0.
+"""CLI smoke tests: `c2mo2 --help` and every subcommand's `--help` exit 0.
 
 Runs the installed console script via subprocess (no network, no .env access --
 argparse handles --help and exits before any command body runs).
@@ -30,7 +30,7 @@ SUBCOMMANDS = [
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(  # noqa: PLW1510 - --help always exits 0/2, we assert on it
-        [sys.executable, "-m", "collections2wabbajack.cli", *args],
+        [sys.executable, "-m", "collections2mo2.cli", *args],
         capture_output=True,
         text=True,
         timeout=30,
@@ -40,7 +40,7 @@ def _run(args: list[str]) -> subprocess.CompletedProcess:
 def test_cli_help_exits_zero():
     result = _run(["--help"])
     assert result.returncode == 0
-    assert "c2wj" in result.stdout
+    assert "c2mo2" in result.stdout
 
 
 @pytest.mark.parametrize("subcommand", SUBCOMMANDS)

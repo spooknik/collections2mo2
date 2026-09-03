@@ -1,15 +1,15 @@
 # Development
 
 For architecture notes, module ownership, and non-obvious facts verified against the
-live Nexus API, see [`CLAUDE.md`](../CLAUDE.md) - that's the canonical technical
+live Nexus API, see [`architecture.md`](architecture.md) - that's the canonical technical
 reference this file doesn't try to duplicate.
 
 ## Setup
 
 ```
 uv sync                       # Python >= 3.12
-uv run c2wj --help
-uv run c2wj-gui
+uv run c2mo2 --help
+uv run c2mo2-gui
 ```
 
 `uv sync` installs both the CLI/engine dependencies and the GUI's (PySide6, keyring)
@@ -46,17 +46,17 @@ file.
 
 `create` is `fetch` -> (`survey`) -> `download` -> `inspect` -> `install` -> `profile`
 -> `build`, run in-process against one instance directory, resumable, with a ledger
-(`c2wj-instance.json`) written at the end. Each stage is also a standalone CLI command
+(`c2mo2-instance.json`) written at the end. Each stage is also a standalone CLI command
 (`docs/cli.md` has every option); useful for debugging one stage in isolation or
 inspecting the intermediate JSON.
 
 ```
-uv run c2wj fetch https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3 --report
-uv run c2wj download work/h2uqa3/68/archive/collection.json
-uv run c2wj inspect work/h2uqa3/68/downloads/downloads.json
-uv run c2wj install work/h2uqa3/68/downloads/inspect.json
-uv run c2wj profile work/h2uqa3/68/mo2/install.json --game-path "D:/Games/Skyrim Special Edition"
-uv run c2wj build work/h2uqa3/68/mo2 --game-path "D:/Games/Skyrim Special Edition"
+uv run c2mo2 fetch https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3 --report
+uv run c2mo2 download work/h2uqa3/68/archive/collection.json
+uv run c2mo2 inspect work/h2uqa3/68/downloads/downloads.json
+uv run c2mo2 install work/h2uqa3/68/downloads/inspect.json
+uv run c2mo2 profile work/h2uqa3/68/mo2/install.json --game-path "D:/Games/Skyrim Special Edition"
+uv run c2mo2 build work/h2uqa3/68/mo2 --game-path "D:/Games/Skyrim Special Edition"
 ```
 
 - `fetch` downloads the collection archive for a revision into
@@ -84,7 +84,7 @@ uv run c2wj build work/h2uqa3/68/mo2 --game-path "D:/Games/Skyrim Special Editio
 Development/verification collection:
 [SKSE and Behaviours Essentials (h2uqa3)](https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3),
 292 mods, with FOMOD choices, optionals, phases and rules - small enough to iterate on
-quickly. `docs/faq.md` and the acceptance notes referenced from `CLAUDE.md` also cover
+quickly. `docs/faq.md` and the acceptance notes referenced from `architecture.md` also cover
 a full-scale run (Gate to Sovngarde, ~2,000 mods) for the layering/update/tools/
 Wabbajack-export paths.
 
@@ -101,8 +101,8 @@ work/<slug>/<revision>/mo2/ModOrganizer.exe               # after `build`
 ```
 
 A `create`d instance lays these out differently (everything under one `<out>/`, with
-per-layer stage JSON under `<out>/c2wj/` and the ledger at `<out>/c2wj-instance.json`)
-- see `CLAUDE.md` for that layout.
+per-layer stage JSON under `<out>/c2mo2/` and the ledger at `<out>/c2mo2-instance.json`)
+- see `architecture.md` for that layout.
 
 `work/`, `tools/`, and `.env` are gitignored. **Never print `.env` contents or a real
 API key** - the pre-commit hook and `scripts/check_secrets.py` exist specifically to
@@ -111,10 +111,10 @@ catch that before it reaches a commit.
 ## GUI packaging
 
 ```
-uv run pyinstaller packaging/c2wj-gui.spec
+uv run pyinstaller packaging/c2mo2-gui.spec
 ```
 
-Builds a standalone `dist/c2wj-gui/c2wj-gui.exe`. See `packaging/README.md` for the
-`C2WJ_DATA_DIR` override (where a frozen build caches 7-Zip and MO2/Root Builder
+Builds a standalone `dist/c2mo2-gui/c2mo2-gui.exe`. See `packaging/README.md` for the
+`C2MO2_DATA_DIR` override (where a frozen build caches 7-Zip and MO2/Root Builder
 downloads) and known PyInstaller hook gaps for this project's dependencies
 (py7zr's compiled codecs, keyring's backend discovery).

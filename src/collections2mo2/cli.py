@@ -1,4 +1,4 @@
-"""c2wj command line."""
+"""c2mo2 command line."""
 
 from __future__ import annotations
 
@@ -107,7 +107,9 @@ def _tolerant_output() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     _tolerant_output()
-    p = argparse.ArgumentParser(prog="c2wj", description="Nexus collections -> MO2 / Wabbajack")
+    p = argparse.ArgumentParser(
+        prog="c2mo2", description="Nexus Mods collections -> Mod Organizer 2 instances"
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     f = sub.add_parser("fetch", help="download a collection revision's manifest")

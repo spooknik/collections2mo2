@@ -1,11 +1,11 @@
-"""`c2wj update` / `c2wj status`: move a collection layer to a newer revision.
+"""`c2mo2 update` / `c2mo2 status`: move a collection layer to a newer revision.
 
 A collection is a moving target: the curator publishes revision after revision, each
 one a handful of mods different from the last. Re-running `create` would re-download
 and re-install all of them; `update` works out the *delta* between the manifest the
 instance has installed and the one it is moving to, and touches only that.
 
-    c2wj update --instance <dir> [--layer <slug>] [--to <n>|latest] [--dry-run] [--yes]
+    c2mo2 update --instance <dir> [--layer <slug>] [--to <n>|latest] [--dry-run] [--yes]
 
 What the delta is made of (`diff_manifests`):
 
@@ -591,8 +591,9 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     rep = get_reporter(reporter)
     started = time.monotonic()
     paths = create.Paths(Path(args.instance).expanduser().resolve())
+    create.migrate_legacy_instance(paths, rep)
     if not (paths.out / ledger.LEDGER_NAME).exists():
-        rep.warn(f"{paths.out} is not a c2wj instance ({ledger.LEDGER_NAME} not found)")
+        rep.warn(f"{paths.out} is not a c2mo2 instance ({ledger.LEDGER_NAME} not found)")
         return 2
 
     load_dotenv()
@@ -765,10 +766,10 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     fresh_inspect: dict[str, dict[str, Any]] = {}
     fresh_install: dict[str, dict[str, Any]] = {}
 
-    tmp_manifest = paths.c2wj / f"{lp_new.prefix}.delta-manifest.json"
-    tmp_downloads = paths.c2wj / f"{lp_new.prefix}.delta-downloads.json"
-    tmp_inspect = paths.c2wj / f"{lp_new.prefix}.delta-inspect.json"
-    tmp_install = paths.c2wj / f"{lp_new.prefix}.delta-install.json"
+    tmp_manifest = paths.stage / f"{lp_new.prefix}.delta-manifest.json"
+    tmp_downloads = paths.stage / f"{lp_new.prefix}.delta-downloads.json"
+    tmp_inspect = paths.stage / f"{lp_new.prefix}.delta-inspect.json"
+    tmp_install = paths.stage / f"{lp_new.prefix}.delta-install.json"
     scratch = [tmp_manifest, tmp_downloads, tmp_inspect, tmp_install]
 
     if delta_mods:
@@ -1089,8 +1090,10 @@ def cmd_status(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     """Read-only: what this instance is made of and whether a newer revision exists."""
     rep = get_reporter(reporter)
     paths = create.Paths(Path(args.instance).expanduser().resolve())
+    # The only thing `status` ever writes: renaming a pre-rename instance's own files.
+    create.migrate_legacy_instance(paths, rep)
     if not (paths.out / ledger.LEDGER_NAME).exists():
-        rep.warn(f"{paths.out} is not a c2wj instance ({ledger.LEDGER_NAME} not found)")
+        rep.warn(f"{paths.out} is not a c2mo2 instance ({ledger.LEDGER_NAME} not found)")
         return 2
 
     load_dotenv()
@@ -1173,7 +1176,7 @@ def cmd_status(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     rep.log("")
     rep.log(f"profile:   {report.get('profile') or '?'}")
     rep.log(
-        f"           {'in sync with the ledger' if in_sync else 'OUT OF SYNC: re-render it (c2wj update / add / remove)'}"
+        f"           {'in sync with the ledger' if in_sync else 'OUT OF SYNC: re-render it (c2mo2 update / add / remove)'}"
     )
     rep.done("status", f"{len(layers)} layer(s), {len(owners)} mod folder(s)")
     return 0

@@ -1,4 +1,4 @@
-"""A `collections2wabbajack.reporter.Reporter` that talks to the Qt GUI thread.
+"""A `collections2mo2.reporter.Reporter` that talks to the Qt GUI thread.
 
 `QtReporter` is a `QObject` with one signal per `Reporter` method. It is constructed on
 the GUI thread (so its signals queue safely to GUI-thread slots) and handed to a worker

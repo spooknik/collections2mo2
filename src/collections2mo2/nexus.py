@@ -12,7 +12,7 @@ import requests
 
 API_BASE = "https://api.nexusmods.com"
 GRAPHQL_URL = f"{API_BASE}/v2/graphql"
-USER_AGENT = "collections2wabbajack/0.0.1 (+https://github.com/spooknik/collections2wabbajack)"
+USER_AGENT = "collections2mo2/0.0.1 (+https://github.com/spooknik/collections2mo2)"
 
 COLLECTION_URL_RE = re.compile(
     r"^https?://(?:www\.)?nexusmods\.com/games/(?P<game>[a-z0-9_-]+)/collections/(?P<slug>[a-z0-9]+)",

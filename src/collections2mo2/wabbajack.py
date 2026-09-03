@@ -1,4 +1,4 @@
-"""`c2wj wabbajack`: compile a generated MO2 instance into a `.wabbajack` modlist.
+"""`c2mo2 wabbajack`: compile a generated MO2 instance into a `.wabbajack` modlist.
 
 The last step of the pipeline. Everything before it produced a portable MO2 instance
 (`mods/`, `profiles/`, `downloads/` with `.meta` sidecars, optionally a `Stock Game`
@@ -43,7 +43,7 @@ are not guesses):
   the collection modified (`PatchStockGameFiles`). So the copy costs hashing time, not
   distribution size, and the folder may be called anything.
 
-`c2wj build` also copies the MO2 release archive (and Root Builder's) into the instance's
+`c2mo2 build` also copies the MO2 release archive (and Root Builder's) into the instance's
 `downloads/` with a `.meta`, alongside caching them in the repo's `tools/`, so MO2's own
 program files (`ModOrganizer.exe`, `dlls/`, `plugins/`, ...) have an archive to be
 referenced from and compile as `FromArchive` like any other mod, instead of being
@@ -77,6 +77,7 @@ from typing import Any
 
 import requests
 
+from . import create as create_mod
 from . import ledger as ledger_mod
 from .reporter import Reporter, get_reporter
 
@@ -97,9 +98,11 @@ OUTPUT_SUBDIR = "wabbajack"
 # folder lives *inside* the compile source, so without this the compiler would index the
 # placeholder image, `compile.log` and (on a second run) the previous `.wabbajack` itself,
 # none of which any archive can produce.
-DEFAULT_IGNORE = ["c2wj", "crashDumps", "logs", "overwrite", OUTPUT_SUBDIR]
+# "c2wj" is the pre-rename stage folder: an instance built before the project became
+# `collections2mo2` still has one if it has not yet been opened (and migrated).
+DEFAULT_IGNORE = ["c2mo2", "c2wj", "crashDumps", "logs", "overwrite", OUTPUT_SUBDIR]
 
-# Tool binaries are installed from GitHub/Nexus by `c2wj tools`, not from an archive in
+# Tool binaries are installed from GitHub/Nexus by `c2mo2 tools`, not from an archive in
 # downloads/, so no hash in the list can resolve them: they have to be inlined.
 DEFAULT_NOMATCH_INCLUDE = ["Tools"]
 
@@ -191,7 +194,7 @@ def game_name(domain: str | None, mo2_name: str | None = None) -> str:
         return key
     raise WabbajackError(
         "the ledger does not record which game this instance is for; "
-        "re-run `c2wj build --game-path ...` or edit c2wj-instance.json"
+        "re-run `c2mo2 build --game-path ...` or edit c2mo2-instance.json"
     )
 
 
@@ -459,7 +462,7 @@ class Defaults:
         name = base.get("name") or base.get("slug") or "Modlist"
         author = base.get("author") or "Unknown"
         url = collection_url(led, base)
-        note = "Converted from a Nexus Mods collection with collections2wabbajack."
+        note = "Converted from a Nexus Mods collection with collections2mo2."
         description = f"{name} by {author}. {note}"
         if url:
             description = f"{description} Source collection: {url}"
@@ -893,7 +896,7 @@ def check_traced(instance: Path, led: ledger_mod.Ledger) -> list[TracedEntry]:
 
 
 def _read_build_meta(instance: Path) -> dict[str, Any]:
-    path = instance / "c2wj-build.json"
+    path = instance / "c2mo2-build.json"
     if not path.exists():
         return {}
     try:
@@ -906,13 +909,13 @@ def _read_build_meta(instance: Path) -> dict[str, Any]:
 def _release_archives_covered(instance: Path, build_meta: dict[str, Any]) -> set[str]:
     """Top-level instance entries a `downloads/` archive now accounts for.
 
-    `c2wj build` (since the fix below) copies the MO2 release archive into
+    `c2mo2 build` (since the fix below) copies the MO2 release archive into
     `downloads/` with a `.meta` and records the top-level names it wrote
     (`ModOrganizer.exe`, `dlls`, `plugins`, ...) as `mo2_top_level` in
-    `c2wj-build.json`. When that archive is genuinely present and its `.meta`
+    `c2mo2-build.json`. When that archive is genuinely present and its `.meta`
     resolves, those names will compile as `FromArchive` instead of being inlined, so
     `check_program_files` should not count them. An instance built before this existed
-    (no `c2wj-build.json`, or one with no `mo2_top_level`) has no such archive and
+    (no `c2mo2-build.json`, or one with no `mo2_top_level`) has no such archive and
     falls back to the old behaviour: everything not otherwise accounted for is inlined.
     """
     version = build_meta.get("mo2_version")
@@ -936,7 +939,7 @@ def check_program_files(instance: Path, led: ledger_mod.Ledger) -> list[InlineEn
     A hand-built Wabbajack modlist keeps the Mod Organizer release archive in `downloads/`
     with a `.meta`, so the compiler emits `ModOrganizer.exe`, `dlls\\`, `plugins\\` and the
     rest as `FromArchive` directives (verified by reading the `modlist` manifest out of a
-    real `.wabbajack`). `c2wj build` now does the same (see `_ensure_release_download` in
+    real `.wabbajack`). `c2mo2 build` now does the same (see `_ensure_release_download` in
     build.py) and records which top-level names came from that archive, so those are no
     longer counted here; only files with genuinely nothing behind them -- and instances
     built before this existed -- are inlined.
@@ -1041,7 +1044,7 @@ def precompile_checklist(instance: Path, led: ledger_mod.Ledger) -> Checklist:
             # from an upstream archive.
             checklist.warnings.append(
                 f"{human(program)} of instance-specific top-level files (ModOrganizer.ini, "
-                "the c2wj ledger, portable.txt, ...) will be inlined -- there is no archive "
+                "the c2mo2 ledger, portable.txt, ...) will be inlined -- there is no archive "
                 "these could come from, which is expected and usually small"
             )
         else:
@@ -1049,8 +1052,8 @@ def precompile_checklist(instance: Path, led: ledger_mod.Ledger) -> Checklist:
                 f"{human(program)} of Mod Organizer's own program files will be inlined: no "
                 "Mod.Organizer-<version>.7z (with a resolving .meta) was found in downloads/, "
                 "so the compiler has nothing to match them against. This instance was likely "
-                "built before `c2wj build` started copying that archive into downloads/ for "
-                "this reason; re-run `c2wj build` to add it"
+                "built before `c2mo2 build` started copying that archive into downloads/ for "
+                "this reason; re-run `c2mo2 build` to add it"
             )
     if checklist.stock_game is None:
         checklist.warnings.append(
@@ -1140,7 +1143,7 @@ def run_compile(
     cmd = [str(cli), "compile", "-i", str(settings_file), "-o", str(out_dir)]
     rep.log("running: " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
 
-    work = Path(tempfile.mkdtemp(prefix="c2wj-wabbajack-"))
+    work = Path(tempfile.mkdtemp(prefix="c2mo2-wabbajack-"))
     scratch_log = work / "compile.log"
     try:
         with contextlib.ExitStack() as stack:
@@ -1180,7 +1183,7 @@ def record_in_ledger(
     *,
     compiled_at: str | None,
 ) -> Path:
-    """Merge a `wabbajack` section into `c2wj-instance.json` (atomic write).
+    """Merge a `wabbajack` section into `c2mo2-instance.json` (atomic write).
 
     Written through `ledger.Ledger.save`, which replaces the file via a temp file in the
     same directory, so a half-written ledger is never observable.
@@ -1206,10 +1209,11 @@ def cmd_wabbajack(args: argparse.Namespace, reporter: Reporter | None = None) ->
     if not instance.is_dir():
         rep.warn(f"{instance} is not a directory")
         return 1
+    create_mod.migrate_legacy_instance(create_mod.Paths(instance), rep)
     if not (instance / ledger_mod.LEDGER_NAME).exists():
         rep.warn(
             f"{instance / ledger_mod.LEDGER_NAME} not found: this does not look like a "
-            "c2wj instance (run `c2wj create` first)"
+            "c2mo2 instance (run `c2mo2 create` first)"
         )
         return 1
 

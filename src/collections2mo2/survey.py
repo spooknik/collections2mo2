@@ -415,12 +415,12 @@ def _print_report(
 
     layouts = Counter(e.layout for e in fetched)
     print("\n== layouts")
-    for k, v in sorted(layouts.items(), key=lambda kv: (kv[0] or "")):
+    for k, v in sorted(layouts.items(), key=lambda kv: kv[0] or ""):
         print(f"  {k}: {v}")
 
     archive_types = Counter(e.archive_type for e in fetched)
     print("\n== archive types")
-    for k, v in sorted(archive_types.items(), key=lambda kv: (kv[0] or "")):
+    for k, v in sorted(archive_types.items(), key=lambda kv: kv[0] or ""):
         print(f"  {k or '(none)'}: {v}")
 
     total_size = sum(e.size or 0 for e in fetched)

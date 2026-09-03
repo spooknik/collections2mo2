@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from collections2wabbajack import create
+from collections2mo2 import create
 
 
 class _CollectingReporter:

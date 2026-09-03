@@ -1,4 +1,4 @@
-"""`c2wj-gui` entry point: the wizard window."""
+"""`c2mo2-gui` entry point: the wizard window."""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ RESETTABLE_PAGES = ["collection", "location", "tools", "display", "review", "pro
 class WizardWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("collections2wabbajack")
+        self.setWindowTitle("collections2mo2")
         self.resize(920, 720)
 
         self.state = WizardState()
@@ -193,7 +193,7 @@ class WizardWindow(QMainWindow):
         self.back_btn.setEnabled(bool(self._history) and not self._busy)
         self.next_btn.setVisible(self._current not in NO_NEXT)
         self.next_btn.setEnabled(page.is_ready() and not self._busy)
-        self.setWindowTitle(f"collections2wabbajack -- {page.title}")
+        self.setWindowTitle(f"collections2mo2 -- {page.title}")
         self._update_account_bar()
 
     def _navigate_to(self, name: str, *, push_history: bool) -> None:

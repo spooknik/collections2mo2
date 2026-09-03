@@ -5,7 +5,7 @@ run fast and without `QT_QPA_PLATFORM=offscreen`.
 
 from __future__ import annotations
 
-from collections2wabbajack.gui.progress_calc import (
+from collections2mo2.gui.progress_calc import (
     RateEstimator,
     format_bytes,
     format_duration,

@@ -1,7 +1,7 @@
 """Download optional modding tools into a generated MO2 instance.
 
-`c2wj tools list` prints the catalogue (`tools_catalog.json`, next to this module) with
-installed/not-installed status. `c2wj tools install <id...> --mo2-dir <instance>` resolves
+`c2mo2 tools list` prints the catalogue (`tools_catalog.json`, next to this module) with
+installed/not-installed status. `c2mo2 tools install <id...> --mo2-dir <instance>` resolves
 each catalogue entry's source (a GitHub release asset, a Nexus "main" file, or a direct
 URL), downloads it into `<repo>/tools/cache/` (the same on-disk cache location build.py
 uses for the MO2/Root Builder downloads, `<repo>/tools/cache/`, though this module does
@@ -18,13 +18,13 @@ one wrapping folder, and moves the result to `<mo2-dir>/Tools/<id>/`. It then:
 - installs any of the catalogue entry's `companion_mods` (a tool like DynDOLOD that
   needs its own mods present, e.g. DynDOLOD Resources SE / DLL NG) into
   `<mo2-dir>/mods/<Name>/` via `installer.install_single_mod` -- the same archive ->
-  layout/FOMOD-default machinery `c2wj install` uses for a collection's own mods, just
+  layout/FOMOD-default machinery `c2mo2 install` uses for a collection's own mods, just
   without a manifest behind it -- owned by `tool:<id>` in the ledger, and re-renders the
   profile (`profile.render_instance`) so they show up enabled in `modlist.txt`; and
-- records the install in `<mo2-dir>/c2wj-instance.json` under `tools[id]` (via
+- records the install in `<mo2-dir>/c2mo2-instance.json` under `tools[id]` (via
   `ledger.py`, so companion mods land in the same `mods` map a collection's do).
 
-`c2wj tools remove <id...> --mo2-dir <instance>` is the inverse: deletes `Tools/<id>`,
+`c2mo2 tools remove <id...> --mo2-dir <instance>` is the inverse: deletes `Tools/<id>`,
 drops its `[customExecutables]` entries, removes its companion mods (only the folders it
 solely owns -- shared with nothing else, since a companion mod is not something a
 collection would also pin), drops the ledger records, and re-renders the profile.
@@ -55,13 +55,15 @@ from typing import Any
 
 import requests
 
+from . import create as create_mod
 from . import installer as installer_mod
 from . import ledger as ledger_mod
 from .naming import sanitize_folder_name
 from .nexus import USER_AGENT, AuthRequired, NexusClient, NexusError
+from .reporter import get_reporter
 from .sevenzip import extract
 
-# Repo root is two levels above this file: src/collections2wabbajack/tools.py
+# Repo root is two levels above this file: src/collections2mo2/tools.py
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CACHE_DIR = REPO_ROOT / "tools" / "cache"
 CATALOG_PATH = Path(__file__).resolve().parent / "tools_catalog.json"
@@ -70,6 +72,11 @@ GITHUB_API = "https://api.github.com"
 _GITHUB_HEADERS = {"Accept": "application/vnd.github+json", "User-Agent": USER_AGENT}
 _CHUNK_SIZE = 1 << 20  # 1 MiB
 LEDGER_NAME = ledger_mod.LEDGER_NAME
+
+
+def _open_instance(mo2_dir: Path) -> None:
+    """Bring a pre-rename (`c2wj`) instance onto its current names before we touch it."""
+    create_mod.migrate_legacy_instance(create_mod.Paths(mo2_dir), get_reporter(None))
 
 
 class ToolError(RuntimeError):
@@ -253,7 +260,7 @@ def _flatten_single_root(temp_dir: Path) -> Path:
 
 def _extract_tool(archive: Path, entry: dict[str, Any], tool_dir: Path) -> None:
     strip = bool((entry.get("install") or {}).get("strip_single_root"))
-    with tempfile.TemporaryDirectory(prefix=f"c2wj-tool-{entry['id']}-") as tmp:
+    with tempfile.TemporaryDirectory(prefix=f"c2mo2-tool-{entry['id']}-") as tmp:
         tmp_path = Path(tmp)
         extract(archive, tmp_path)
         root = _flatten_single_root(tmp_path) if strip else tmp_path
@@ -720,6 +727,8 @@ def cmd_tools_list(args: argparse.Namespace) -> int:
     companion_catalog = load_companion_catalog()
     companion_by_id = _catalog_by_id(companion_catalog)
     mo2_dir = Path(args.mo2_dir).resolve() if args.mo2_dir else None
+    if mo2_dir is not None and mo2_dir.is_dir():
+        _open_instance(mo2_dir)
     led = ledger_mod.load(mo2_dir) if mo2_dir else None
     ledger_data: dict[str, Any] = led.data if led is not None else {"tools": {}}
 
@@ -801,7 +810,7 @@ def _install_companion_mods(
 ) -> tuple[list[dict[str, Any]], bool]:
     """Install a tool's `companion_mods` into `<mo2_dir>/mods/`.
 
-    Reuses exactly the archive -> layout/FOMOD-default machinery `c2wj install` uses
+    Reuses exactly the archive -> layout/FOMOD-default machinery `c2mo2 install` uses
     for a collection's own mods (`installer.install_single_mod`), just without a
     manifest behind it. Returns `(records, ok)`: `records` is what to store under
     `led.data["tools"][tool_id]["companion_mods"]` (one dict per companion mod
@@ -819,7 +828,7 @@ def _install_companion_mods(
     mods_dir.mkdir(parents=True, exist_ok=True)
     downloads_dir = mo2_dir / "downloads"
     downloads_dir.mkdir(parents=True, exist_ok=True)
-    tmp_root = mo2_dir / ".c2wj-tools-tmp"
+    tmp_root = mo2_dir / ".c2mo2-tools-tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
     game_name = (led.data.get("game") or {}).get("mo2_name") or ""
 
@@ -1037,6 +1046,7 @@ def cmd_tools_install(args: argparse.Namespace) -> int:
     if not mo2_dir.exists():
         print(f"error: {mo2_dir} does not exist", file=sys.stderr)
         return 1
+    _open_instance(mo2_dir)
 
     ids: list[str] = list(dict.fromkeys(args.ids or []))
     if args.all_default:
@@ -1051,7 +1061,7 @@ def cmd_tools_install(args: argparse.Namespace) -> int:
     unknown = [i for i in ids if i not in by_id]
     if unknown:
         print(f"error: unknown tool id(s): {', '.join(unknown)}", file=sys.stderr)
-        print("see: c2wj tools list", file=sys.stderr)
+        print("see: c2mo2 tools list", file=sys.stderr)
         return 2
 
     client = _client()
@@ -1089,6 +1099,7 @@ def cmd_tools_remove(args: argparse.Namespace) -> int:
     if not mo2_dir.exists():
         print(f"error: {mo2_dir} does not exist", file=sys.stderr)
         return 1
+    _open_instance(mo2_dir)
 
     ids: list[str] = list(dict.fromkeys(args.ids or []))
     if not ids:
@@ -1164,7 +1175,7 @@ def cmd_tools_refresh(args: argparse.Namespace) -> int:
 
     For fixing an existing instance whose xEdit/DynDOLOD/TexGen entries predate
     `-D:"{game_data}"` being added to the catalogue (or were registered before
-    `build --stock-game` ran and never got rebased): `c2wj tools refresh --mo2-dir
+    `build --stock-game` ran and never got rebased): `c2mo2 tools refresh --mo2-dir
     <instance>` rewrites every tool recorded in the ledger; passing ids restricts it to
     those. Tools no longer in the catalogue (or disabled) are refreshed from the
     executables recorded at install time, so a stale entry still gets corrected even if
@@ -1176,6 +1187,7 @@ def cmd_tools_refresh(args: argparse.Namespace) -> int:
     if not mo2_dir.exists():
         print(f"error: {mo2_dir} does not exist", file=sys.stderr)
         return 1
+    _open_instance(mo2_dir)
 
     ini_path = mo2_dir / "ModOrganizer.ini"
     if not ini_path.exists():
@@ -1237,7 +1249,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     lp.set_defaults(func=cmd_tools_list)
 
     ip = tool_sub.add_parser("install", help="download and register modding tools")
-    ip.add_argument("ids", nargs="*", help="tool ids to install (see `c2wj tools list`)")
+    ip.add_argument("ids", nargs="*", help="tool ids to install (see `c2mo2 tools list`)")
     ip.add_argument("--mo2-dir", required=True, help="portable MO2 instance directory")
     ip.add_argument(
         "--all-default",
@@ -1256,7 +1268,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
     rp = tool_sub.add_parser(
         "remove", help="remove installed modding tools and their companion mods"
     )
-    rp.add_argument("ids", nargs="+", help="tool ids to remove (see `c2wj tools list`)")
+    rp.add_argument("ids", nargs="+", help="tool ids to remove (see `c2mo2 tools list`)")
     rp.add_argument("--mo2-dir", required=True, help="portable MO2 instance directory")
     rp.set_defaults(func=cmd_tools_remove)
 

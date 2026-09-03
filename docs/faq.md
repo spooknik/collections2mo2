@@ -9,15 +9,15 @@ collection's own copy every time.
 Set your choice in the wizard's Display page, or from the CLI:
 
 ```
-c2wj profile-instance --instance <instance-dir> --resolution 2560x1440 --window borderless --vsync off
+c2mo2 profile-instance --instance <instance-dir> --resolution 2560x1440 --window borderless --vsync off
 ```
 
-Whenever you choose anything other than "keep", `c2wj` also writes a small,
-top-priority override mod ("c2wj Display Settings") on top of SSE Display Tweaks, so
+Whenever you choose anything other than "keep", `c2mo2` also writes a small,
+top-priority override mod ("c2mo2 Display Settings") on top of SSE Display Tweaks, so
 your choice always wins regardless of what the collection itself ships. The choice is
 remembered in the instance's ledger and re-applied (refreshing that override mod)
 every time you `add`, `remove`, or `update` a layer - you don't have to set it again
-each time. `c2wj profile-instance --forget-display` clears the memory and removes the
+each time. `c2mo2 profile-instance --forget-display` clears the memory and removes the
 generated mod, reverting to whatever the collection's own settings are.
 
 ## MO2 shows `SkyrimRuntimeSwapper.exe` when I launch through SKSE on Gate to Sovngarde
@@ -42,7 +42,7 @@ not your mods. Current catalogue entries pass `-D:"<Stock Game>\Data"` to fix th
 If you built your instance before this was added, run:
 
 ```
-c2wj tools refresh --mo2-dir <instance-dir>
+c2mo2 tools refresh --mo2-dir <instance-dir>
 ```
 
 This only rewrites the `[customExecutables]` arguments for tools already installed -
@@ -72,7 +72,7 @@ link isn't available) is not implemented yet.
 
 ## Can I add my own mods to a converted instance?
 
-Yes. Drop them into `mods/` (or install them through MO2 itself) - `c2wj` only tracks
+Yes. Drop them into `mods/` (or install them through MO2 itself) - `c2mo2` only tracks
 ownership of the mods it installed, so anything else is treated as yours and keeps its
 position in `modlist.txt` across `add`, `remove`, and `update`.
 
@@ -80,7 +80,7 @@ position in `modlist.txt` across `add`, `remove`, and `update`.
 
 For mods where Vortex recorded no FOMOD answers ("fresh install" mode - the curator
 never touched that installer, or it was added after the collection's answers were
-recorded), `c2wj` takes the installer's own defaults. This is listed explicitly in
+recorded), `c2mo2` takes the installer's own defaults. This is listed explicitly in
 the run's log/output so you can review and reinstall with `--choices-overrides` if you
 want something different.
 
@@ -99,7 +99,7 @@ means something about the mod list changed underneath the curator. Pass
 instead. An MD5 mismatch (the file exists but isn't the one the collection expects)
 still stops the run either way; that's a different, more serious kind of problem.
 
-## Does `c2wj` support Vortex "replicate" mode patches?
+## Does `c2mo2` support Vortex "replicate" mode patches?
 
 Not yet. `hashes`-mode mods (Vortex's "Replicate" - an exact file list, optionally
 with binary `patches` against an existing file) are supported for the exact-file-list
@@ -112,3 +112,10 @@ installs.
 The game-domain mapping covers Skyrim, Skyrim VR, Fallout 4, Fallout New Vegas,
 Fallout 3, and Oblivion in addition to Skyrim SE, but only Skyrim SE has been verified
 end to end. Other games may work but haven't been tested.
+
+## I have an instance built by the old `c2wj` name. Does it still work?
+
+Yes. The first time any `c2mo2` command or the GUI opens it, the `c2wj-instance.json`
+ledger, the `c2wj/` folder, `c2wj-build.json`, and the generated display-settings mod
+are renamed to their `c2mo2` names automatically, and a stored API key or
+already-downloaded tools under the old per-user folder are still found.

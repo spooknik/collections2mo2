@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from collections2wabbajack import fomod
+from collections2mo2 import fomod
 
 FIXTURES = Path(__file__).parent / "fixtures" / "fomod"
 

@@ -12,8 +12,8 @@ import os
 
 import pytest
 
-from collections2wabbajack import api
-from collections2wabbajack.reporter import NullReporter
+from collections2mo2 import api
+from collections2mo2.reporter import NullReporter
 
 # -- create_instance: argument mapping ------------------------------------------------
 
@@ -183,7 +183,7 @@ def test_has_update_and_wabbajack_support_are_bool():
 
 @pytest.mark.skipif(not api.has_update_support(), reason="update.py not present in this build")
 def test_update_collection_layer_maps_arguments(monkeypatch):
-    from collections2wabbajack import update as update_mod
+    from collections2mo2 import update as update_mod
 
     captured = {}
 
@@ -206,7 +206,7 @@ def test_update_collection_layer_maps_arguments(monkeypatch):
     not api.has_wabbajack_support(), reason="wabbajack.py not present in this build"
 )
 def test_export_to_wabbajack_maps_arguments(monkeypatch):
-    from collections2wabbajack import wabbajack as wabbajack_mod
+    from collections2mo2 import wabbajack as wabbajack_mod
 
     captured = {}
 
@@ -307,3 +307,68 @@ def test_validate_api_key_rejected(monkeypatch):
 def test_validate_api_key_requires_nonempty():
     with pytest.raises(api.ApiError):
         api.validate_api_key("   ")
+
+
+# -- pre-rename data dir / env var -------------------------------------------------------
+
+
+def test_data_dir_override_accepts_the_legacy_env_var(monkeypatch, tmp_path):
+    monkeypatch.delenv("C2MO2_DATA_DIR", raising=False)
+    monkeypatch.setenv("C2WJ_DATA_DIR", str(tmp_path / "legacy-data"))
+    monkeypatch.setattr(api.sevenzip_mod, "TOOLS_DIR", api.sevenzip_mod.TOOLS_DIR)
+    monkeypatch.setattr(api.build, "CACHE_DIR", api.build.CACHE_DIR)
+    monkeypatch.setattr(api.tools_mod, "CACHE_DIR", api.tools_mod.CACHE_DIR)
+
+    base = api._apply_data_dir_override()
+    assert base == tmp_path / "legacy-data"
+    assert api.sevenzip_mod.TOOLS_DIR == tmp_path / "legacy-data" / "tools"
+    assert api.build.CACHE_DIR == tmp_path / "legacy-data" / "tools" / "cache"
+
+
+def test_data_dir_override_prefers_the_current_env_var(monkeypatch, tmp_path):
+    monkeypatch.setenv("C2MO2_DATA_DIR", str(tmp_path / "current"))
+    monkeypatch.setenv("C2WJ_DATA_DIR", str(tmp_path / "legacy"))
+    monkeypatch.setattr(api.sevenzip_mod, "TOOLS_DIR", api.sevenzip_mod.TOOLS_DIR)
+    monkeypatch.setattr(api.build, "CACHE_DIR", api.build.CACHE_DIR)
+    monkeypatch.setattr(api.tools_mod, "CACHE_DIR", api.tools_mod.CACHE_DIR)
+
+    assert api._apply_data_dir_override() == tmp_path / "current"
+
+
+def test_data_dir_override_is_none_without_either_env_var(monkeypatch):
+    monkeypatch.delenv("C2MO2_DATA_DIR", raising=False)
+    monkeypatch.delenv("C2WJ_DATA_DIR", raising=False)
+    monkeypatch.setattr(api.sys, "frozen", False, raising=False)
+    assert api._apply_data_dir_override() is None
+
+
+def test_default_data_dir_reuses_the_legacy_folder_when_it_is_the_only_one(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    (tmp_path / api.LEGACY_DATA_DIR_NAME).mkdir()
+    assert api._default_data_dir() == tmp_path / api.LEGACY_DATA_DIR_NAME
+
+    (tmp_path / "collections2mo2").mkdir()
+    assert api._default_data_dir() == tmp_path / "collections2mo2"
+
+
+def test_default_data_dir_is_the_new_name_on_a_clean_machine(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert api._default_data_dir() == tmp_path / "collections2mo2"
+
+
+def test_saved_api_key_falls_back_to_the_legacy_keyring_service(monkeypatch):
+    fake = _FakeKeyring()
+    fake.store[(api.LEGACY_KEYRING_SERVICE, api.KEYRING_USERNAME)] = "old-key"
+    monkeypatch.setattr(api.keyring, "get_password", fake.get_password)
+    monkeypatch.setattr(api.keyring, "set_password", fake.set_password)
+    monkeypatch.setattr(api.keyring, "delete_password", fake.delete_password)
+
+    assert api.get_saved_api_key() == "old-key"
+
+    # A key saved under the current name wins, and clearing removes both.
+    api.save_api_key("new-key")
+    assert fake.store[(api.KEYRING_SERVICE, api.KEYRING_USERNAME)] == "new-key"
+    assert api.get_saved_api_key() == "new-key"
+    api.clear_api_key()
+    assert api.get_saved_api_key() is None
+    assert fake.store == {}

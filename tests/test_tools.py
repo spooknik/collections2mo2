@@ -16,9 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from collections2wabbajack import ledger as ledger_mod
-from collections2wabbajack import tools
-from collections2wabbajack.sevenzip import TOOLS_DIR
+from collections2mo2 import ledger as ledger_mod
+from collections2mo2 import tools
+from collections2mo2.sevenzip import TOOLS_DIR
 
 _SEVENZIP_AVAILABLE = (TOOLS_DIR / "7za.exe").exists() and (TOOLS_DIR / "7z.dll").exists()
 
@@ -398,7 +398,7 @@ def test_install_companion_mods_installs_a_fomod_with_defaults(
 ):
     # DynDOLOD Resources SE (install: "fomod-defaults") is a real FOMOD, not a plain
     # archive -- this exercises the same fomod.evaluate()-driven branch of
-    # installer._install_one that `c2wj install` uses, just for a companion mod.
+    # installer._install_one that `c2mo2 install` uses, just for a companion mod.
     archive = tmp_path / "src" / "DynDOLOD Resources SE.zip"
     archive.parent.mkdir()
     with zipfile.ZipFile(archive, "w") as zf:

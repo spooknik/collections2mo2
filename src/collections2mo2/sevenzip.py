@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.request import urlretrieve
 
-# Repo root is two levels above this file: src/collections2wabbajack/sevenzip.py
+# Repo root is two levels above this file: src/collections2mo2/sevenzip.py
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "tools"
 

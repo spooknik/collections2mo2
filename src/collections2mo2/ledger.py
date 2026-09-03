@@ -1,4 +1,4 @@
-"""`<instance>/c2wj-instance.json`: who put what into this MO2 instance.
+"""`<instance>/c2mo2-instance.json`: who put what into this MO2 instance.
 
 An instance is not one collection forever: a second collection can be layered on
 top, tools get added, and the user installs their own mods by hand. Nothing in
@@ -34,10 +34,10 @@ Layering (schema 2) made two of those fields plural:
   the key when the layer introduced it.
 
 Each layer also records the stage JSON it produced (`files`), named per layer
-(`c2wj/<slug>-<rev>.install.json` and friends) so layers never clobber each other.
+(`c2mo2/<slug>-<rev>.install.json` and friends) so layers never clobber each other.
 
 A layer is re-pinned rather than replaced when the collection publishes a new
-revision (`update_layer_revision`, used by `c2wj update`): it keeps its position in
+revision (`update_layer_revision`, used by `c2mo2 update`): it keeps its position in
 `layers`, its `added` timestamp and its `profile`, gains an `updated` timestamp, and
 appends the revision it left to `previous_revisions`.
 
@@ -54,7 +54,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-LEDGER_NAME = "c2wj-instance.json"
+LEDGER_NAME = "c2mo2-instance.json"
+# Pre-rename name (the project was `collections2wabbajack`, CLI `c2wj`). `load`
+# still reads it so an instance built before the rename opens; `create.migrate_legacy_instance`
+# renames it on disk the first time such an instance is opened.
+LEGACY_LEDGER_NAME = "c2wj-instance.json"
 VERSION = 2
 
 USER_OWNER = "user"
@@ -117,7 +121,7 @@ def _normalise_ini_section(entries: Any) -> dict[str, dict[str, Any]]:
 
 
 class Ledger:
-    """The parsed `c2wj-instance.json` of one MO2 instance."""
+    """The parsed `c2mo2-instance.json` of one MO2 instance."""
 
     def __init__(self, instance_dir: Path, data: dict[str, Any] | None = None):
         self.instance_dir = Path(instance_dir)
@@ -220,7 +224,7 @@ class Ledger:
     ) -> dict[str, Any] | None:
         """Re-pin an existing layer to `new_revision`, in place; returns the layer record.
 
-        `c2wj update` moves a layer forward without changing what it *is*: it keeps its
+        `c2mo2 update` moves a layer forward without changing what it *is*: it keeps its
         position in `layers` (which is the order the profile renders them in), its
         `added` timestamp, its `profile` and the separators it owns, and appends the
         revision it is leaving to `previous_revisions`. Registering a second layer for
@@ -488,11 +492,18 @@ class Ledger:
 
 
 def load(instance_dir: Path | str) -> Ledger:
-    """Read `<instance_dir>/c2wj-instance.json`, or start a fresh ledger if absent."""
+    """Read `<instance_dir>/c2mo2-instance.json`, or start a fresh ledger if absent.
+
+    Falls back to the pre-rename `c2wj-instance.json` so an instance that has not yet
+    been through `create.migrate_legacy_instance` still loads.
+    """
     instance_dir = Path(instance_dir)
     path = instance_dir / LEDGER_NAME
     if not path.exists():
-        return Ledger(instance_dir)
+        legacy = instance_dir / LEGACY_LEDGER_NAME
+        if not legacy.exists():
+            return Ledger(instance_dir)
+        path = legacy
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):

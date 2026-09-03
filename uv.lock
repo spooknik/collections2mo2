@@ -347,7 +347,7 @@ wheels = [
 ]
 
 [[package]]
-name = "collections2wabbajack"
+name = "collections2mo2"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [

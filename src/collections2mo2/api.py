@@ -22,7 +22,7 @@ from a temporary extraction directory that is wiped after every run, so 7-Zip an
 would re-bootstrap (multi-hundred-MB downloads) on every launch. `_apply_data_dir_override`
 below reassigns those three module attributes (a plain global lookup at call time in all
 three modules, verified by reading them -- so reassignment after import takes effect)
-to a persistent per-user folder when running frozen, or when `C2WJ_DATA_DIR` is set
+to a persistent per-user folder when running frozen, or when `C2MO2_DATA_DIR` is set
 explicitly. This does not edit `sevenzip.py` / `build.py` / `tools.py`.
 """
 
@@ -103,13 +103,28 @@ class OperationCancelled(Exception):
 # -- packaging: keep 7-Zip / MO2 caches out of a wiped PyInstaller temp dir -----------
 
 
+LEGACY_DATA_DIR_NAME = "collections2wabbajack"
+LEGACY_DATA_DIR_ENV = "C2WJ_DATA_DIR"
+
+
 def _default_data_dir() -> Path:
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home())
-    return Path(base) / "collections2wabbajack"
+    """The per-user cache folder for 7-Zip / MO2 downloads.
+
+    The project used to be called `collections2wabbajack`; an install that already
+    bootstrapped its tools under the old folder keeps using it, so a rename does not
+    cost the user a multi-hundred-MB re-download. New installs get the new name.
+    """
+    base = Path(os.environ.get("LOCALAPPDATA") or str(Path.home()))
+    current = base / "collections2mo2"
+    if not current.exists():
+        legacy = base / LEGACY_DATA_DIR_NAME
+        if legacy.is_dir():
+            return legacy
+    return current
 
 
 def _apply_data_dir_override() -> Path | None:
-    override = os.environ.get("C2WJ_DATA_DIR")
+    override = os.environ.get("C2MO2_DATA_DIR") or os.environ.get(LEGACY_DATA_DIR_ENV)
     if not override and getattr(sys, "frozen", False):
         override = str(_default_data_dir())
     if not override:
@@ -130,7 +145,8 @@ GUI_CACHE_DIR = (DATA_DIR_OVERRIDE or _default_data_dir()) / "gui-cache"
 
 # -- sign-in ----------------------------------------------------------------------------
 
-KEYRING_SERVICE = "collections2wabbajack"
+KEYRING_SERVICE = "collections2mo2"
+LEGACY_KEYRING_SERVICE = "collections2wabbajack"
 KEYRING_USERNAME = "nexus-api-key"
 NEXUS_API_KEY_URL = "https://www.nexusmods.com/users/myaccount?tab=api+access"
 
@@ -140,11 +156,20 @@ def nexus_api_key_signup_url() -> str:
 
 
 def get_saved_api_key() -> str | None:
-    """The API key stored in the OS credential store, or `None` if there isn't one."""
-    try:
-        return keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
-    except keyring.errors.KeyringError:
-        return None
+    """The API key stored in the OS credential store, or `None` if there isn't one.
+
+    Falls back to the pre-rename service name (`collections2wabbajack`) so a user who
+    signed in before the rename stays signed in; `save_api_key` only ever writes the
+    current name.
+    """
+    for service in (KEYRING_SERVICE, LEGACY_KEYRING_SERVICE):
+        try:
+            key = keyring.get_password(service, KEYRING_USERNAME)
+        except keyring.errors.KeyringError:
+            continue
+        if key:
+            return key
+    return None
 
 
 def save_api_key(api_key: str) -> None:
@@ -152,10 +177,15 @@ def save_api_key(api_key: str) -> None:
 
 
 def clear_api_key() -> None:
-    try:
-        keyring.delete_password(KEYRING_SERVICE, KEYRING_USERNAME)
-    except keyring.errors.PasswordDeleteError:
-        pass
+    """Sign out. Clears the legacy service name too, or `get_saved_api_key`'s fallback
+    would sign the user straight back in."""
+    for service in (KEYRING_SERVICE, LEGACY_KEYRING_SERVICE):
+        try:
+            if keyring.get_password(service, KEYRING_USERNAME) is None:
+                continue
+            keyring.delete_password(service, KEYRING_USERNAME)
+        except keyring.errors.KeyringError:
+            pass
 
 
 def activate_api_key(api_key: str) -> None:
@@ -313,7 +343,7 @@ def run_fomod_survey(
 
     Non-blocking in intent only insofar as the caller runs this off the UI thread; it
     still makes network calls and can take a while on a large collection, which is why
-    it is rate-limit-aware (mirrors `c2wj survey`'s exit code 3) and safe to re-run --
+    it is rate-limit-aware (mirrors `c2mo2 survey`'s exit code 3) and safe to re-run --
     results are cached in `GUI_CACHE_DIR` keyed by slug/revision.
     """
     rep = get_reporter(reporter)
@@ -528,6 +558,8 @@ def list_tool_groups(mo2_dir: str | Path | None = None) -> list[tuple[str, list[
     catalog = tools.load_catalog()
     installed_tools: dict[str, Any] = {}
     mo2_path = Path(mo2_dir).resolve() if mo2_dir else None
+    if mo2_path is not None and mo2_path.is_dir():
+        create.migrate_legacy_instance(create.Paths(mo2_path), NullReporter())
     if mo2_path is not None and (mo2_path / ledger.LEDGER_NAME).exists():
         installed_tools = ledger.load(mo2_path).data.get("tools") or {}
 
@@ -629,7 +661,7 @@ def create_instance(
     rootbuilder_version: str = build.DEFAULT_ROOTBUILDER_VERSION,
     reporter: Reporter | None = None,
 ) -> int:
-    """`c2wj create`: collection URL -> a runnable, self-contained MO2 instance.
+    """`c2mo2 create`: collection URL -> a runnable, self-contained MO2 instance.
 
     `resolution` is validated the same way the CLI does (`'auto'`, `'keep'`, or `WxH`).
     """
@@ -681,11 +713,12 @@ class InstanceSummary:
 
 def instance_exists(instance_dir: str | Path) -> bool:
     """Cheap, offline existence check for the GUI's recent-instances list -- true if
-    `instance_dir` still holds a c2wj ledger. Unlike `load_instance`, this touches
+    `instance_dir` still holds a c2mo2 ledger. Unlike `load_instance`, this touches
     neither the network nor every layer's revision, so it is safe to call for every
     entry on startup (pruning stale recents)."""
     try:
-        return (Path(instance_dir) / ledger.LEDGER_NAME).is_file()
+        base = Path(instance_dir)
+        return (base / ledger.LEDGER_NAME).is_file() or (base / ledger.LEGACY_LEDGER_NAME).is_file()
     except OSError:
         return False
 
@@ -695,8 +728,9 @@ def load_instance(instance_dir: str | Path) -> InstanceSummary:
     revision on Nexus, for the Manage tab. Does not require an API key -- collection
     metadata is anonymous GraphQL -- but a key gets more reliable results."""
     paths = create.Paths(Path(instance_dir).expanduser().resolve())
+    create.migrate_legacy_instance(paths, NullReporter())
     if not (paths.out / ledger.LEDGER_NAME).exists():
-        raise ApiError(f"{paths.out} is not a c2wj instance ({ledger.LEDGER_NAME} not found).")
+        raise ApiError(f"{paths.out} is not a c2mo2 instance ({ledger.LEDGER_NAME} not found).")
 
     led = ledger.load(paths.out)
     game = led.data.get("game") or {}
@@ -753,7 +787,7 @@ def add_collection_layer(
     reuse_downloads: str | None = None,
     reporter: Reporter | None = None,
 ) -> int:
-    """`c2wj add`: layer another collection on top of an existing instance."""
+    """`c2mo2 add`: layer another collection on top of an existing instance."""
     ns = argparse.Namespace(
         url=url,
         instance=str(instance_dir),
@@ -776,7 +810,7 @@ def remove_collection_layer(
     force: bool = False,
     reporter: Reporter | None = None,
 ) -> int:
-    """`c2wj remove`: remove a collection layer, keeping shared and user mods."""
+    """`c2mo2 remove`: remove a collection layer, keeping shared and user mods."""
     ns = argparse.Namespace(
         slug=slug,
         instance=str(instance_dir),
@@ -837,7 +871,7 @@ def update_collection_layer(
     choices_overrides: str | None = None,
     reporter: Reporter | None = None,
 ) -> int:
-    """`c2wj update`: move a layer to a newer revision, applying only the delta.
+    """`c2mo2 update`: move a layer to a newer revision, applying only the delta.
 
     `--yes` is always passed -- `update.cmd_update` otherwise prompts on a terminal
     the GUI does not have (`_confirm` in `update.py`), which would hang the worker
@@ -875,7 +909,7 @@ def export_to_wabbajack(
     dry_run: bool = False,
     reporter: Reporter | None = None,
 ) -> int:
-    """`c2wj wabbajack`: compile an instance into a `.wabbajack` modlist."""
+    """`c2mo2 wabbajack`: compile an instance into a `.wabbajack` modlist."""
     module = _try_import("wabbajack")
     if module is None:
         raise ApiError("Wabbajack export is not available yet in this build.")

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from collections2wabbajack import ledger, profile
+from collections2mo2 import ledger, profile
 
 # --------------------------------------------------------- _compute_order / order_mods
 

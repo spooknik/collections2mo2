@@ -1,12 +1,12 @@
 """Tests for layout.plan_layout(): the 14 layout-normalisation cases from the
-layout fix (see layout.py's module docstring and CLAUDE.md's "Non-obvious facts").
+layout fix (see layout.py's module docstring and docs/architecture.md's "Non-obvious facts").
 """
 
 from __future__ import annotations
 
 import json
 
-from collections2wabbajack import layout
+from collections2mo2 import layout
 
 # 1. root Data -----------------------------------------------------------------
 

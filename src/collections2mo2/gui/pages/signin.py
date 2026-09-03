@@ -27,7 +27,7 @@ class SignInPage(WizardPage):
 
         layout = QVBoxLayout(self)
         intro = QLabel(
-            "collections2wabbajack downloads mod files straight from Nexus Mods on your "
+            "collections2mo2 downloads mod files straight from Nexus Mods on your "
             "behalf, using your account's personal API key. Automatic downloads require a "
             "<b>Nexus Premium</b> membership -- without Premium, Nexus will not issue the "
             "direct download links this tool needs.\n\n"

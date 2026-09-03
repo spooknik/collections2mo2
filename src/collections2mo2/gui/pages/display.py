@@ -34,7 +34,7 @@ class DisplayPage(WizardPage):
         )
         note = QLabel(
             "If a collection ships SSE Display Tweaks, it overrides SkyrimPrefs.ini's display "
-            "settings entirely -- so when you choose anything other than Keep here, c2wj also "
+            "settings entirely -- so when you choose anything other than Keep here, c2mo2 also "
             "writes a small override mod on top of it, so your choice still applies."
         )
         note.setWordWrap(True)

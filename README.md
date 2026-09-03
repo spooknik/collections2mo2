@@ -1,10 +1,10 @@
-# collections2wabbajack
+# collections2mo2
 
-Turn a Nexus Mods collection into a working Mod Organizer 2 instance, without Vortex,
-in one command or one guided GUI wizard - and optionally export it as a `.wabbajack`
-modlist for others to install.
+Nexus Mods collections as portable Mod Organizer 2 instances, without Vortex, in one
+command or one guided GUI wizard - and optionally export the finished instance as a
+`.wabbajack` modlist for others to install.
 
-`collections2wabbajack` (`c2wj`) downloads a collection's manifest, downloads every mod
+`collections2mo2` (`c2mo2`) downloads a collection's manifest, downloads every mod
 it references, replays the curator's recorded FOMOD choices, applies the curator's mod
 order and rules, merges the collection's INI tweaks, and lays it all down as a
 self-contained, portable MO2 instance - with the game copied into a `Stock Game` folder
@@ -52,7 +52,7 @@ instance to a `.wabbajack` modlist.
 - Free disk space: roughly the collection's download size, plus the same again for
   the extracted mods, plus about 20 GB for the `Stock Game` copy.
 - [Wabbajack](https://www.wabbajack.org/) only if you want to export a `.wabbajack`
-  - `c2wj wabbajack` will download `wabbajack-cli` itself if it isn't already
+  - `c2mo2 wabbajack` will download `wabbajack-cli` itself if it isn't already
     installed.
 - A short install path (e.g. `D:\GTS`, not `C:\Users\...\Documents\My Modding
   Projects\...`) - Windows' 260-character path limit is real with a 2,000-mod
@@ -65,7 +65,7 @@ Windows SmartScreen may warn on a future packaged `.exe` until code signing is s
 
 ```
 uv sync
-uv run c2wj-gui
+uv run c2mo2-gui
 ```
 
 The wizard: paste your Nexus API key (stored in Windows Credential Manager, never
@@ -82,22 +82,22 @@ uv sync
 cp .env.example .env      # paste your personal Nexus API key into .env
 
 # Build a complete instance in one step
-uv run c2wj create https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3 \
+uv run c2mo2 create https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3 \
     --out "D:/h2uqa3" --game-path "D:/SteamLibrary/steamapps/common/Skyrim Special Edition" \
     --stock-game
 
 # Install optional modding tools
-uv run c2wj tools install xedit bethini-pie loot --mo2-dir "D:/h2uqa3"
+uv run c2mo2 tools install xedit bethini-pie loot --mo2-dir "D:/h2uqa3"
 
 # Layer an add-on collection on top
-uv run c2wj add https://www.nexusmods.com/games/skyrimspecialedition/collections/xk05aw \
+uv run c2mo2 add https://www.nexusmods.com/games/skyrimspecialedition/collections/xk05aw \
     --instance "D:/h2uqa3"
 
 # Move a layer to its latest published revision (only the delta is re-downloaded)
-uv run c2wj update --instance "D:/h2uqa3" --yes
+uv run c2mo2 update --instance "D:/h2uqa3" --yes
 
 # Export to a .wabbajack modlist
-uv run c2wj wabbajack --instance "D:/h2uqa3"
+uv run c2mo2 wabbajack --instance "D:/h2uqa3"
 ```
 
 See [`docs/cli.md`](docs/cli.md) for every subcommand and option.
@@ -118,7 +118,7 @@ Built and confirmed working end to end on:
 - **Publishing a compiled `.wabbajack` of someone else's collection requires that
   curator's permission.** Community conversions of Gate to Sovngarde, for example,
   obtained it first - do the same.
-- `c2wj` identifies itself to Nexus Mods with its own User-Agent, honours Nexus's
+- `c2mo2` identifies itself to Nexus Mods with its own User-Agent, honours Nexus's
   rate limits, and only ever downloads with your own Premium key - it does not proxy,
   cache, or redistribute anyone's files.
 - Whatever you build is yours to use. The collection's content - the mods themselves -
@@ -131,13 +131,13 @@ Full answers in [`docs/faq.md`](docs/faq.md). Short version:
 
 - **My resolution/vsync setting was ignored.** Some collections ship SSE Display
   Tweaks, which overrides `SkyrimPrefs.ini` entirely. Set it in the wizard, or
-  `c2wj profile-instance --resolution WxH`.
+  `c2mo2 profile-instance --resolution WxH`.
 - **MO2 shows `SkyrimRuntimeSwapper.exe` when I launch SKSE.** By design on
   collections that need a specific game version - it downgrades at launch and
   reverts on exit.
 - **First MO2 start takes a minute or more.** It's indexing a couple thousand mods.
   Normal.
-- **xEdit/DynDOLOD only see vanilla plugins.** Run `c2wj tools refresh` on instances
+- **xEdit/DynDOLOD only see vanilla plugins.** Run `c2mo2 tools refresh` on instances
   built before this was fixed.
 - **"Path too long" errors.** Install to a short path.
 - **"A required patch is missing" from the Runtime Swapper.** Your `Stock Game` copy
@@ -181,4 +181,4 @@ Wabbajack, or any collection curator.
   outside Vortex
 
 For development docs (architecture, tests, linting, the `work/` layout), see
-[`docs/development.md`](docs/development.md) and [`CLAUDE.md`](CLAUDE.md).
+[`docs/development.md`](docs/development.md) and [`docs/architecture.md`](docs/architecture.md).
