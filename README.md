@@ -58,8 +58,11 @@ instance to a `.wabbajack` modlist.
   Projects\...`) - and not under Program Files, Documents, Desktop, OneDrive or a
   Steam library. The wizard and `create` warn about all of these.
 
-Running from source with `uv` for now; there's no signed release build yet, so
-Windows SmartScreen may warn on a future packaged `.exe` until code signing is set up.
+The packaged `.exe` on the releases page is not code-signed yet, so Windows SmartScreen
+shows "Windows protected your PC" on first launch (More info -> Run anyway), and Windows
+Defender has flagged some builds as a virus. That is a false positive; see
+[Windows says the download is a virus](docs/faq.md#windows-says-the-download-is-a-virus)
+for why, how to verify the file, and how to run from source instead.
 
 ## Quick start: GUI
 

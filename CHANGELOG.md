@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Fixed
+
+- Windows Defender flagged the 0.1.0 `c2mo2-gui.exe` as a virus. The release workflow now
+  compiles PyInstaller's bootloader from source instead of shipping the prebuilt stub that
+  antivirus vendors flag by hash, and the exe carries a version resource (publisher,
+  product, version). The FAQ explains the false positive, how to verify a download against
+  the release's SHA-256 digest, and how to run from source instead.
+
 ## 0.1.0 - 2026-09-03
 
 First public release. `collections2mo2` (`c2mo2`) turns a Nexus Mods collection manifest

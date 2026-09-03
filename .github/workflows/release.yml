@@ -8,6 +8,14 @@ on:
 permissions:
   contents: write
 
+env:
+  # Build PyInstaller from its sdist and force a fresh bootloader compile (MSVC is on the
+  # runner). The prebuilt bootloader that ships in the wheel *and* the sdist is flagged by
+  # Windows Defender because malware authors ship the identical stub; a locally compiled
+  # one has a hash no AV vendor has seen. See packaging/README.md, "Antivirus".
+  UV_NO_BINARY_PACKAGE: pyinstaller
+  PYINSTALLER_COMPILE_BOOTLOADER: "1"
+
 jobs:
   release:
     runs-on: windows-latest
@@ -21,9 +29,22 @@ jobs:
           enable-cache: true
           python-version: "3.12"
 
+      - name: Drop any cached PyInstaller build
+        # A wheel built from the sdist on an earlier run (before the compile was forced)
+        # would be reused from the uv cache; the env var is not part of the cache key.
+        shell: bash
+        run: uv cache clean pyinstaller
+
       - name: Sync dependencies
         shell: bash
         run: uv sync --frozen
+
+      - name: Show bootloader fingerprint
+        shell: bash
+        run: |
+          for f in .venv/Lib/site-packages/PyInstaller/bootloader/Windows-64bit-intel/*.exe; do
+            sha256sum "$f"
+          done
 
       - name: Lint (ruff check)
         shell: bash
@@ -50,6 +71,10 @@ jobs:
       - name: Build GUI executable
         shell: bash
         run: uv run pyinstaller packaging/c2mo2-gui.spec
+
+      - name: Show exe version resource
+        shell: pwsh
+        run: (Get-Item dist/c2mo2-gui/c2mo2-gui.exe).VersionInfo | Format-List ProductName, ProductVersion, FileVersion, CompanyName, FileDescription
 
       - name: Zip GUI build
         shell: pwsh

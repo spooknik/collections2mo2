@@ -98,6 +98,11 @@ gitignored. Never print `.env` contents or the API key.
 - Instance-location warnings live in `create.instance_path_warnings` and `api.path_warnings`
   delegates to it (api imports create, not the other way round), so `create` and the wizard
   show the same text.
+- PyInstaller's prebuilt bootloader stub is what Windows Defender flags (generic
+  `Wacatac`/`Wacapew` names). It ships in the sdist too, so `--no-binary` alone changes nothing;
+  `PYINSTALLER_COMPILE_BOOTLOADER=1` forces a `waf` compile with MSVC (~20 s). `release.yml` sets
+  that plus `UV_NO_BINARY_PACKAGE=pyinstaller` and cleans uv's pyinstaller cache first; the spec
+  also stamps a `VSVersionInfo` resource from the pyproject version. See packaging/README.md.
 - A `--resolution`/`--vsync`/`--window` choice is remembered in the ledger's `display` key and
   re-applied whenever a render is given `keep` for that field (`profile._resolve_effective_display`),
   so `add`/`remove`/`update` -- which never pass these flags -- keep refreshing the generated SSE

@@ -1,5 +1,39 @@
 # FAQ
 
+## Windows says the download is a virus
+
+Windows Defender (or SmartScreen) may quarantine `c2mo2-gui.exe` from the releases page,
+usually under a generic, machine-learning name such as `Trojan:Win32/Wacatac` or
+`Program:Win32/Wacapew.C!ml`. It is a false positive, and a well-known one:
+
+- **It's a PyInstaller build.** Every PyInstaller program starts with the same small
+  "bootloader" stub, and because malware authors use the same free tool, antivirus vendors
+  have learned to distrust that stub on sight. Since 0.1.1 the release workflow compiles its
+  own bootloader instead of shipping the shared prebuilt one, which clears most of these
+  detections, and the exe carries a proper version resource (publisher, product, version),
+  which Defender's heuristics also weigh.
+- **It isn't code-signed** and has no download history with Microsoft, so it gets no
+  "reputation" credit. Signing is being looked into.
+- **What it does looks suspicious** to a behaviour scanner: it downloads 7-Zip and Mod
+  Organizer 2, unpacks hundreds of archives and writes thousands of files.
+
+What to do:
+
+1. **Verify the file.** GitHub shows a SHA-256 digest next to every release asset; compare it
+   with `Get-FileHash .\c2mo2-gui-<tag>-windows-x64.zip` in PowerShell. A matching digest
+   means the zip is exactly what the release workflow built from the tagged source (the
+   build log is public under the repository's Actions tab).
+2. **Restore it.** Windows Security -> Virus & threat protection -> Protection history ->
+   pick the item -> Actions -> Restore (or Allow). Then add the folder you unzipped it into
+   under Virus & threat protection settings -> Exclusions, or Defender will take it again on
+   the next scan.
+3. **Or skip the exe.** `uv sync` then `uv run c2mo2-gui` runs the same code from source
+   with no packaged binary involved (see the Quick start in the README).
+4. **Report it.** Microsoft clears specific false positives at
+   <https://www.microsoft.com/en-us/wdsi/filesubmission>; more reports get a hash cleared
+   faster. Opening an issue with the detection name helps too, so the maintainer can submit
+   the same build.
+
 ## My resolution/vsync/window setting was ignored
 
 Some collections ship **SSE Display Tweaks**, which overrides `SkyrimPrefs.ini`'s

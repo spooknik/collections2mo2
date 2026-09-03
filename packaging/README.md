@@ -46,7 +46,46 @@ The `.exe` in that zip is unsigned; Windows SmartScreen will warn on first launc
 protected your PC"). Click "More info" -> "Run anyway" to proceed -- there is no code-signing
 certificate for this project.
 
-## Build status (last verified: 2026-09-02)
+## Antivirus false positives
+
+Windows Defender flagged the 0.1.0 exe (`Wacatac`/`Wacapew`-style generic detections). Two
+things in this repo address that; the user-facing explanation is in `docs/faq.md`.
+
+**A locally compiled bootloader.** Every PyInstaller exe starts with PyInstaller's
+bootloader stub, and AV vendors flag the prebuilt stub by hash because malware ships the
+identical bytes. The stub ships in both the wheel *and* the sdist (PyInstaller keeps the
+Windows binaries in `MANIFEST.in` so MSYS2 users don't need a compiler), so plain
+`--no-binary` installs silently reuse it; `PYINSTALLER_COMPILE_BOOTLOADER=1` forces
+`hatch_build.py` to run `waf configure all` instead. `release.yml` sets that plus
+`UV_NO_BINARY_PACKAGE=pyinstaller` for the whole job and runs `uv cache clean pyinstaller`
+first so a wheel built on an earlier run can't be reused (the env var isn't part of uv's
+cache key). The workflow prints the bootloader hashes in a "Show bootloader fingerprint"
+step; they must differ from run to run. To do the same locally (needs Visual Studio 2022 or
+the Build Tools with the C++ workload; takes ~20 s):
+
+```
+PYINSTALLER_COMPILE_BOOTLOADER=1 uv sync --no-binary-package pyinstaller --reinstall-package pyinstaller
+uv run --no-sync pyinstaller packaging/c2mo2-gui.spec
+```
+
+A later plain `uv sync` leaves the compiled copy in place (same version, so uv considers it
+satisfied); verify with
+`sha256sum .venv/Lib/site-packages/PyInstaller/bootloader/Windows-64bit-intel/runw.exe`,
+which must not match the hash from the PyPI wheel.
+
+**A version resource.** The spec stamps the exe with a `VSVersionInfo` block (company,
+product, description, file/product version) built from the `[project] version` in
+`pyproject.toml`, so it never needs editing by hand. An exe without one scores worse with
+Defender's heuristics. Check it with
+`(Get-Item dist/c2mo2-gui/c2mo2-gui.exe).VersionInfo` in PowerShell (the release
+workflow prints it too).
+
+Neither replaces code signing, which is the only thing that also removes the SmartScreen
+prompt; SignPath.io offers free signing for open-source projects via a GitHub Actions
+integration and is the intended next step. Individual detections can be reported at
+<https://www.microsoft.com/en-us/wdsi/filesubmission>.
+
+## Build status (last verified: 2026-09-03)
 
 Built cleanly: `dist\c2mo2-gui\c2mo2-gui.exe` plus `dist\c2mo2-gui\_internal\` (includes
 `_internal\collections2mo2\tools_catalog.json`, confirming the `datas` entry
