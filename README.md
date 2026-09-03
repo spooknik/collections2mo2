@@ -152,6 +152,9 @@ Full answers in [`docs/faq.md`](docs/faq.md). Short version:
 - **Which Skyrim version does it need?** Whatever the collection was built against. It never changes your game: with Stock Game it works on a copy, so you can downgrade or patch that copy freely, and Steam's install stays untouched. The wizard and `create` warn when your game's version differs from the collection's.
 - **First MO2 start takes a minute or more.** It's indexing a couple thousand mods.
   Normal.
+- **The game says DynDOLOD's scripts are the wrong version.** The collection ships its own
+  DynDOLOD Resources/DLL NG and an older c2mo2 installed newer copies above them. Install
+  the DynDOLOD tool again and it removes its copies (see `docs/faq.md`).
 - **xEdit/DynDOLOD only see vanilla plugins.** Run `c2mo2 tools refresh` on instances
   built before this was fixed.
 - **"Path too long" errors.** Install to a short path.

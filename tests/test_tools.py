@@ -549,3 +549,144 @@ def test_cmd_tools_list_prints_a_companion_mods_section(capsys: pytest.CaptureFi
     assert "companion mods:" in out
     assert "dyndolod-resources" in out
     assert "dyndolod-dll-ng" in out
+
+
+# -- companion mods a collection layer already pins ------------------------------------
+
+
+def _fake_dll_ng_companion() -> dict:
+    return {
+        "id": "dyndolod-dll-ng",
+        "name": "DynDOLOD DLL NG and Scripts",
+        "source": {
+            "type": "nexus",
+            "domain": "skyrimspecialedition",
+            "mod_id": 97720,
+            "file": "latest-main",
+        },
+        "install": "plain",
+    }
+
+
+def _instance_with_layer(tmp_path: Path, mods: list[dict]) -> tuple[Path, ledger_mod.Ledger]:
+    """An instance whose one collection layer ('gts') pins `mods` in its manifest."""
+    mo2_dir = tmp_path / "inst"
+    (mo2_dir / "mods").mkdir(parents=True)
+    led = ledger_mod.Ledger(mo2_dir)
+    led.set_game(domain="skyrimspecialedition", mo2_name="SkyrimSE")
+    manifest_rel = "c2mo2/gts-1.manifest.json"
+    manifest = mo2_dir / manifest_rel
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps({"info": {"domainName": "skyrimspecialedition"}, "mods": mods}),
+        encoding="utf-8",
+    )
+    led.register_layer("gts", 1, name="Gate to Sovngarde", manifest=manifest_rel)
+    led.save()
+    return mo2_dir, led
+
+
+def _refuse_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_args, **_kwargs):
+        raise AssertionError("a companion mod the collection provides must not be fetched")
+
+    monkeypatch.setattr(tools, "resolve_source", boom)
+    monkeypatch.setattr(tools, "_download_cached", boom)
+
+
+_GTS_DLL_NG = {
+    "name": "DynDOLOD DLL NG and Scripts",
+    "version": "Alpha-30",
+    "source": {"type": "nexus", "modId": 97720, "fileId": 700001, "md5": "ab"},
+}
+
+
+def test_install_companion_mods_defers_to_a_collection_that_pins_the_same_mod(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # GTS ships DynDOLOD DLL NG at the version its LOD was generated with; the
+    # catalogue's newest-main copy must not be installed above it (the DLL then
+    # rejects the scripts at game start).
+    mo2_dir, led = _instance_with_layer(tmp_path, [_GTS_DLL_NG])
+    monkeypatch.setattr(tools, "load_companion_catalog", lambda: [_fake_dll_ng_companion()])
+    _refuse_network(monkeypatch)
+
+    entry = {"id": "dyndolod", "companion_mods": ["dyndolod-dll-ng"]}
+    records, ok = tools._install_companion_mods(entry, mo2_dir, client=None, led=led, force=False)
+
+    assert ok is True
+    assert len(records) == 1
+    assert records[0]["id"] == "dyndolod-dll-ng"
+    assert "folder" not in records[0]
+    provided = records[0]["provided_by"]
+    assert (provided["layer"], provided["revision"]) == ("gts", 1)
+    assert provided["mod"] == "DynDOLOD DLL NG and Scripts"
+    assert provided["version"] == "Alpha-30"
+    assert not (mo2_dir / "mods" / "DynDOLOD DLL NG and Scripts").exists()
+    assert led.data["mods"] == {}
+    status = tools._companion_status("dyndolod-dll-ng", {"companion_mods": records}, mo2_dir)
+    assert status == "provided by Gate to Sovngarde"
+
+
+def test_install_companion_mods_removes_its_own_earlier_copy_when_the_collection_has_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # An instance built before this rule: the tool's copy is in mods/ and overriding
+    # the collection's. Re-running the install must take it back out.
+    mo2_dir, led = _instance_with_layer(tmp_path, [_GTS_DLL_NG])
+    folder = mo2_dir / "mods" / "DynDOLOD DLL NG and Scripts"
+    (folder / "SKSE" / "Plugins").mkdir(parents=True)
+    (folder / "SKSE" / "Plugins" / "DynDOLOD.DLL").write_bytes(b"\x00")
+    led.set_mod_owner(
+        folder.name,
+        "tool:dyndolod",
+        tag="companion:dyndolod-dll-ng@Alpha-42",
+        install_mode="fresh",
+    )
+    monkeypatch.setattr(tools, "load_companion_catalog", lambda: [_fake_dll_ng_companion()])
+    _refuse_network(monkeypatch)
+
+    entry = {"id": "dyndolod", "companion_mods": ["dyndolod-dll-ng"]}
+    records, ok = tools._install_companion_mods(entry, mo2_dir, client=None, led=led, force=False)
+
+    assert ok is True
+    assert records[0]["provided_by"]["layer"] == "gts"
+    assert not folder.exists()
+    assert folder.name not in led.data["mods"]
+
+
+def test_install_companion_mods_leaves_a_same_named_folder_it_does_not_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    mo2_dir, led = _instance_with_layer(tmp_path, [_GTS_DLL_NG])
+    folder = mo2_dir / "mods" / "DynDOLOD DLL NG and Scripts"
+    folder.mkdir()
+    (folder / "keep.txt").write_text("mine", encoding="utf-8")
+    led.set_mod_owner(folder.name, "collection:gts@1", tag="vortex-tag", install_mode="fresh")
+    monkeypatch.setattr(tools, "load_companion_catalog", lambda: [_fake_dll_ng_companion()])
+    _refuse_network(monkeypatch)
+
+    entry = {"id": "dyndolod", "companion_mods": ["dyndolod-dll-ng"]}
+    records, ok = tools._install_companion_mods(entry, mo2_dir, client=None, led=led, force=False)
+
+    assert ok is True
+    assert records[0]["provided_by"]["layer"] == "gts"
+    assert (folder / "keep.txt").is_file()
+    assert led.owners_of(folder.name) == ["collection:gts@1"]
+
+
+def test_collection_nexus_mods_ignores_other_games_and_non_nexus_sources(tmp_path: Path):
+    mo2_dir, led = _instance_with_layer(
+        tmp_path,
+        [
+            {"name": "Direct", "source": {"type": "browse", "url": "https://x"}},
+            {"name": "NoId", "source": {"type": "nexus"}},
+            _GTS_DLL_NG,
+        ],
+    )
+    found = tools._collection_nexus_mods(mo2_dir, led)
+    assert set(found) == {97720}
+    other_game = dict(_fake_dll_ng_companion())
+    other_game["source"] = {**other_game["source"], "domain": "fallout4"}
+    assert tools._provided_by_collection(other_game, found) is None
+    assert tools._provided_by_collection(_fake_dll_ng_companion(), found)["layer"] == "gts"

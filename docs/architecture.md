@@ -113,6 +113,12 @@ gitignored. Never print `.env` contents or the API key.
   Display Tweaks override mod instead of silently reverting to the collection's own settings;
   `profile-instance --forget-display` clears it.
 
+- `tools install` skips a companion mod (DynDOLOD Resources SE / DLL NG) when any layer's
+  manifest pins the same Nexus `modId` (`tools._collection_nexus_mods`), and removes a copy an
+  earlier run installed. Companion mods render *above* every collection block, so the
+  catalogue's newest-main copies overrode GTS's pinned ones and DynDOLOD's DLL rejected the
+  scripts at game start (2026-09-03). Re-running the tool install repairs such an instance.
+
 ## Shared contracts
 
 - `naming.mod_folder_name(mod)` is the single source of truth for MO2 mod folder names; the

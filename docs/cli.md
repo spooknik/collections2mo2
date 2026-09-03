@@ -156,7 +156,9 @@ SSE Display Tweaks. `--forget-display` clears that memory.
 (`tools_catalog.json`: xEdit, BethINI Pie, LOOT, NifSkope, Synthesis, Cathedral Assets
 Optimizer, Pandora Behaviour Engine+, DynDOLOD + its Resources SE and DLL NG
 companion mods) into an instance's `Tools\` folder and registers them as MO2
-executables.
+executables. A companion mod that one of the instance's collections already pins (same
+Nexus mod) is not installed: the collection's copy is the version its LOD was generated
+with, and `tools list` shows the companion as `provided by <collection>`.
 
 ### `c2mo2 tools list`
 

@@ -3,8 +3,9 @@
 ## Windows says the download is a virus
 
 Windows Defender (or SmartScreen) may quarantine `c2mo2-gui.exe` from the releases page,
-usually under a generic, machine-learning name such as `Trojan:Win32/Wacatac` or
-`Program:Win32/Wacapew.C!ml`. It is a false positive, and a well-known one:
+usually under a generic, machine-learning name such as `Trojan:Win32/Wacatac`,
+`Program:Win32/Wacapew.C!ml` or `Trojan:Win32/Bearfoos.A!ml`. It is a false positive, and a
+well-known one:
 
 - **It's a PyInstaller build.** Every PyInstaller program starts with the same small
   "bootloader" stub, and because malware authors use the same free tool, antivirus vendors
@@ -16,6 +17,12 @@ usually under a generic, machine-learning name such as `Trojan:Win32/Wacatac` or
   "reputation" credit. Signing is being looked into.
 - **What it does looks suspicious** to a behaviour scanner: it downloads 7-Zip and Mod
   Organizer 2, unpacks hundreds of archives and writes thousands of files.
+- **The verdict can arrive hours later.** The `!ml` suffix means a cloud classifier, not a
+  signature, and Defender re-checks files it already knows against fresh cloud verdicts on
+  its scheduled scans. An exe that ran fine at lunch can be quarantined mid-afternoon while
+  it is still running; that is the same file getting a new verdict, not a reaction to
+  something the app did. Restoring it without adding an exclusion (step 2 below) means the
+  next scheduled scan takes it again.
 
 What to do:
 
@@ -77,6 +84,28 @@ MO2 indexes every mod folder on its first start. For a 2,000-mod collection that
 take well over a minute; the GUI's Progress page shows a note about this after
 `create` finishes, and the "Launch Mod Organizer" button gives MO2 that time before
 declaring itself done.
+
+## The game says DynDOLOD's scripts (or DynDOLOD.DLL) are the wrong version
+
+This happens when the collection ships its own DynDOLOD Resources SE and DynDOLOD DLL NG
+and Scripts (Gate to Sovngarde does, pinned at the versions its curator generated LOD
+with) *and* the DynDOLOD tool was installed from the Tools page or `c2mo2 tools install
+dyndolod`. Up to 0.1.2 the tool install also put the newest Nexus versions of those two
+mods into the instance as "companion mods", placed above the collection in MO2's mod
+list, so they overrode the collection's copies; the DLL then refuses to run against
+scripts and LOD plugins built with a different version.
+
+Now a companion mod that any collection layer already pins is not installed, and
+`c2mo2 tools list` shows it as `provided by <collection>`. To repair an instance built
+before that: install DynDOLOD again (Tools page, or
+`c2mo2 tools install dyndolod --mo2-dir <instance>`); it removes its own two mod folders
+and re-renders the profile. Doing it by hand works too: in MO2, delete the
+`DynDOLOD Resources SE` and `DynDOLOD DLL NG and Scripts` entries that sit *above* the
+collection's separators, and keep the ones inside them.
+
+If you later generate LOD yourself with the DynDOLOD build the tool installed, DynDOLOD
+tells you at startup when it needs newer Resources or a newer DLL than the collection
+pins; update those two mods in MO2 as it asks, not through c2mo2.
 
 ## xEdit/DynDOLOD only see vanilla plugins, not the collection's
 

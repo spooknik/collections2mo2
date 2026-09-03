@@ -20,7 +20,11 @@ one wrapping folder, and moves the result to `<mo2-dir>/Tools/<id>/`. It then:
   `<mo2-dir>/mods/<Name>/` via `installer.install_single_mod` -- the same archive ->
   layout/FOMOD-default machinery `c2mo2 install` uses for a collection's own mods, just
   without a manifest behind it -- owned by `tool:<id>` in the ledger, and re-renders the
-  profile (`profile.render_instance`) so they show up enabled in `modlist.txt`; and
+  profile (`profile.render_instance`) so they show up enabled in `modlist.txt`. A
+  companion mod that one of the instance's collection layers already pins (same Nexus
+  mod id in the layer's manifest) is *not* installed: the collection's copy is the
+  version its curator generated LOD against, and the catalogue's newest-main copy would
+  sit above the collection in MO2 and override it (`_collection_nexus_mods`); and
 - records the install in `<mo2-dir>/c2mo2-instance.json` under `tools[id]` (via
   `ledger.py`, so companion mods land in the same `mods` map a collection's do).
 
@@ -58,6 +62,7 @@ import requests
 from . import create as create_mod
 from . import installer as installer_mod
 from . import ledger as ledger_mod
+from .manifest import load_manifest
 from .naming import sanitize_folder_name
 from .nexus import USER_AGENT, AuthRequired, NexusClient, NexusError
 from .reporter import get_reporter
@@ -717,6 +722,8 @@ def _companion_status(
         return "not installed"
     installed = {c.get("id"): c for c in (tool_record.get("companion_mods") or [])}
     rec = installed.get(companion_id)
+    if rec and rec.get("provided_by"):
+        return f"provided by {rec['provided_by'].get('layer_name') or 'collection'}"
     if rec and (mo2_dir / "mods" / rec.get("folder", "")).is_dir():
         return "installed"
     return "not installed"
@@ -801,6 +808,64 @@ def _companion_tag(companion_id: str, version: str) -> str:
     return f"companion:{companion_id}@{version}"
 
 
+def _collection_nexus_mods(mo2_dir: Path, led: ledger_mod.Ledger) -> dict[int, dict[str, Any]]:
+    """Nexus mod id -> the first collection layer mod that pins it, across every layer.
+
+    Read from each layer's manifest (`layers[].manifest`, instance-relative). Used to
+    keep a tool's companion mod out of an instance whose collection already ships
+    that mod: GTS pins DynDOLOD Resources SE and DLL NG at the versions its
+    pre-generated LOD was built with, and the catalogue's newest-main copies, placed
+    above the collection block, made the DynDOLOD DLL reject the scripts at startup.
+    """
+    found: dict[int, dict[str, Any]] = {}
+    for layer in led.data.get("layers") or []:
+        rel = layer.get("manifest")
+        if not rel:
+            continue
+        path = Path(rel)
+        path = path if path.is_absolute() else mo2_dir / path
+        if not path.exists():
+            continue
+        try:
+            manifest = load_manifest(path)
+        except (OSError, ValueError):
+            continue
+        domain = (manifest.get("info") or {}).get("domainName") or ""
+        for mod in manifest.get("mods") or []:
+            src = mod.get("source") or {}
+            mod_id = src.get("modId")
+            if src.get("type", "nexus") != "nexus" or not isinstance(mod_id, int):
+                continue
+            found.setdefault(
+                mod_id,
+                {
+                    "layer": layer.get("slug"),
+                    "revision": layer.get("revision"),
+                    "layer_name": layer.get("name") or layer.get("slug") or "",
+                    "domain": domain,
+                    "mod": mod.get("name") or "",
+                    "version": str(mod.get("version") or ""),
+                    "optional": bool(mod.get("optional")),
+                },
+            )
+    return found
+
+
+def _provided_by_collection(
+    companion: dict[str, Any], collection_mods: dict[int, dict[str, Any]]
+) -> dict[str, Any] | None:
+    """The collection-layer mod that already pins `companion`'s Nexus mod, if any."""
+    src = companion.get("source") or {}
+    if src.get("type") != "nexus":
+        return None
+    provided = collection_mods.get(src.get("mod_id"))
+    if provided is None:
+        return None
+    if src.get("domain") and provided["domain"] and provided["domain"] != src["domain"]:
+        return None
+    return provided
+
+
 def _install_companion_mods(
     entry: dict[str, Any],
     mo2_dir: Path,
@@ -831,6 +896,7 @@ def _install_companion_mods(
     tmp_root = mo2_dir / ".c2mo2-tools-tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
     game_name = (led.data.get("game") or {}).get("mo2_name") or ""
+    collection_mods = _collection_nexus_mods(mo2_dir, led)
 
     records: list[dict[str, Any]] = []
     ok = True
@@ -839,6 +905,27 @@ def _install_companion_mods(
         if companion is None:
             print(f"[{tool_id}] warning: unknown companion mod id {companion_id!r}, skipped")
             ok = False
+            continue
+        name = companion.get("name") or companion_id
+
+        provided = _provided_by_collection(companion, collection_mods)
+        if provided is not None:
+            # The collection's pinned copy wins. A copy an earlier run of this tool put
+            # in place (sole owner, our companion tag) is removed so the collection's
+            # mod is no longer overridden; anything else with that folder name is left.
+            folder = sanitize_folder_name(name)
+            existing = led.data.get("mods", {}).get(folder) or {}
+            our_tag = str(existing.get("tag") or "").startswith(f"companion:{companion_id}@")
+            if our_tag and led.owners_of(folder) == [owner]:
+                shutil.rmtree(mods_dir / folder, ignore_errors=True)
+                led.remove_mod_owner(folder, owner)
+                print(f"[{tool_id}] companion removed: {folder} (the collection's copy takes over)")
+            pinned = f"{provided['mod']} {provided['version']}".strip()
+            print(
+                f"[{tool_id}] companion {name}: already provided by "
+                f"{provided['layer_name']} ({pinned}); the collection's copy is used"
+            )
+            records.append({"id": companion_id, "name": name, "provided_by": provided})
             continue
 
         try:
