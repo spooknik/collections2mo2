@@ -46,6 +46,28 @@ The `.exe` in that zip is unsigned; Windows SmartScreen will warn on first launc
 protected your PC"). Click "More info" -> "Run anyway" to proceed -- there is no code-signing
 certificate for this project.
 
+## Nuitka build (experimental)
+
+`packaging/build-nuitka.sh` builds the same GUI with [Nuitka](https://nuitka.net) instead
+of PyInstaller: the Python is compiled to C and linked into a native `c2mo2-gui.exe`, so
+there is no PyInstaller bootloader, no `_MEI` archive and no `_internal\` layout for an
+antivirus classifier to recognise. Nuitka is not a project dependency (`uv run --with`
+fetches it into a throwaway overlay) and nothing in the release workflow uses this yet.
+
+Result of the first build (Nuitka 4.2, MSVC 14.44, 2026-09-03): 5 minutes, zero
+warnings, `dist-nuitka\run_gui.dist\` at 92 MB in 96 files (PyInstaller: 118 MB in 243
+files), the exe carries the icon and version resource, and it launches to the home page
+with the keyring-stored API key found. Two things to know:
+
+- Nuitka does not set `sys.frozen`; compiled modules get a `__compiled__` global instead.
+  `api._is_packaged` checks both, so the `%LOCALAPPDATA%\collections2mo2\tools\` redirect
+  (see `C2MO2_DATA_DIR` above) applies to either build.
+- A clean local Defender scan of the output means nothing: the PyInstaller build scans
+  clean locally too, and the detections in the wild came from the cloud classifier on a
+  downloaded, never-seen file. Whether a Nuitka exe fares better there can only be learned
+  by shipping one. Nuitka's own FAQ says its output gets flagged as well, less often than
+  PyInstaller's onefile builds.
+
 ## Antivirus false positives
 
 Windows Defender flagged the 0.1.0 exe (`Wacatac`/`Wacapew`-style generic detections). Two
@@ -81,9 +103,83 @@ Defender's heuristics. Check it with
 workflow prints it too).
 
 Neither replaces code signing, which is the only thing that also removes the SmartScreen
-prompt; SignPath.io offers free signing for open-source projects via a GitHub Actions
-integration and is the intended next step. Individual detections can be reported at
-<https://www.microsoft.com/en-us/wdsi/filesubmission>.
+prompt (see "Code signing" below). Individual detections can be reported at
+<https://www.microsoft.com/en-us/wdsi/filesubmission>; for the `!ml` (cloud classifier)
+names that is the step that actually clears a build, so do it for every release that gets
+flagged, with the zip's SHA-256 from the release page.
+
+## Code signing (SignPath)
+
+`release.yml` is wired for [SignPath.io](https://signpath.io), which signs open-source
+Windows binaries for free with a certificate issued by the
+[SignPath Foundation](https://signpath.org). The signing step is skipped while the
+repository variable `SIGNPATH_ORGANIZATION_ID` is unset, so releases keep shipping
+unsigned until the application below is approved; nothing else in the workflow changes.
+
+What the workflow does once it is on: uploads `dist/c2mo2-gui/` as a GitHub artifact
+(`actions/upload-artifact` wraps it in a zip), submits that artifact to SignPath with
+`signpath/github-action-submit-signing-request@v2`, waits for the request to be signed,
+verifies the returned `c2mo2-gui.exe` carries a valid Authenticode signature, and zips the
+signed folder as the release asset. Only the exe is signed;
+`signpath-artifact-configuration.xml` (next to this file) explains why the DLLs under
+`_internal\` are left alone.
+
+One-time setup, in order (the Foundation's terms are at <https://signpath.org/terms.html>):
+
+1. **Turn on two-factor authentication on the GitHub account.** The terms require MFA for
+   every team member on both GitHub and SignPath.
+2. **Add the "Code signing policy" section below to README.md** (the terms require it on
+   the project page: attribution line, team roles, privacy statement). Do this before
+   applying; it is part of what they look at.
+3. **Apply** at <https://signpath.org/apply> with the repository URL, licence
+   (GPL-3.0-or-later), the releases page and a one-paragraph description. The project
+   must already have released the binary it wants signed (it has). Reports put turnaround
+   at about a week.
+4. **Install the SignPath GitHub App** (<https://github.com/apps/signpath>) on
+   `spooknik/collections2mo2`; it is how SignPath verifies that a signing request really
+   came from a workflow run in this repository. **Then, in the SignPath organisation you
+   are given:** add the predefined GitHub.com trusted build system and link it to the
+   project; create a project with slug
+   `collections2mo2`; add an artifact configuration with slug `c2mo2-gui` and the XML from
+   `signpath-artifact-configuration.xml`; create a signing policy with slug
+   `release-signing` that uses the Foundation certificate, requires origin verification
+   against this repository, and has "Use approval process" on (the terms require a manual
+   approval per release). The origin check must accept the tag refs the release workflow
+   runs on (`v*`); check how the policy's allowed-ref pattern treats tags when you set it
+   up. A second `test-signing` policy is optional and unused here.
+5. **Create an API token** in SignPath for a user with submitter rights on that policy and
+   store it in the GitHub repository as the secret `SIGNPATH_API_TOKEN`; store the
+   organisation id (from the SignPath URL) as the repository *variable*
+   `SIGNPATH_ORGANIZATION_ID` (Settings -> Secrets and variables -> Actions). The variable
+   is what switches the signing step on.
+6. **Push the next release tag.** The job pauses at the signing step until you approve the
+   request in SignPath's web UI (it waits up to an hour); then it verifies the signature
+   and publishes. If the signed artifact does not come back as `c2mo2-gui.exe` at the root
+   of `dist/c2mo2-gui-signed/`, adjust the "Use the signed build" step; that layout has
+   not been exercised against a real signing run yet.
+
+Section to add to README.md (wording of the first line and the privacy sentence is
+prescribed by the terms; update the roster if the team grows):
+
+```markdown
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://signpath.io), certificate by
+[SignPath Foundation](https://signpath.org).
+
+- Committers and reviewers: [spooknik](https://github.com/spooknik)
+- Approvers: [spooknik](https://github.com/spooknik)
+
+This program will not transfer any information to other networked systems unless
+specifically requested by the user or the person installing or operating it. It talks to
+Nexus Mods (with the API key you enter) and to GitHub (to fetch 7-Zip, Mod Organizer 2
+and modding tools) only when you run a build.
+```
+
+After the first signed release, drop the "not code-signed" sentences from README.md
+(Requirements, Status and limitations), `docs/faq.md` and the Releases section above, and
+expect SmartScreen to keep warning for a while: a new certificate has no reputation yet
+and earns it from downloads.
 
 ## Build status (last verified: 2026-09-03)
 

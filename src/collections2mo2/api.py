@@ -125,9 +125,16 @@ def _default_data_dir() -> Path:
     return current
 
 
+def _is_packaged() -> bool:
+    """True inside a packaged build: PyInstaller sets `sys.frozen`; Nuitka does not, and
+    instead defines `__compiled__` in every module it compiled (verified with a probe
+    build of Nuitka 4.2, 2026-09-03: `sys.frozen` is absent there)."""
+    return bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
+
+
 def _apply_data_dir_override() -> Path | None:
     override = os.environ.get("C2MO2_DATA_DIR") or os.environ.get(LEGACY_DATA_DIR_ENV)
-    if not override and getattr(sys, "frozen", False):
+    if not override and _is_packaged():
         override = str(_default_data_dir())
     if not override:
         return None

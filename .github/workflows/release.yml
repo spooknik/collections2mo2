@@ -7,6 +7,9 @@ on:
 
 permissions:
   contents: write
+  # The SignPath action reads the run's job details and downloads the unsigned artifact
+  # with GITHUB_TOKEN.
+  actions: read
 
 env:
   # Build PyInstaller from its sdist and force a fresh bootloader compile (MSVC is on the
@@ -17,8 +20,50 @@ env:
   PYINSTALLER_COMPILE_BOOTLOADER: "1"
 
 jobs:
+  # Experimental second build of the GUI with Nuitka (packaging/README.md, "Nuitka build"),
+  # published next to the PyInstaller zip so the two can be compared as downloads: Windows
+  # Defender's cloud classifier only ever sees a file once it comes from the internet.
+  nuitka:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        shell: bash
+        run: uv sync --frozen
+
+      - name: Build GUI executable with Nuitka
+        shell: bash
+        run: bash packaging/build-nuitka.sh
+
+      - name: Show exe version resource
+        shell: pwsh
+        run: (Get-Item dist-nuitka/run_gui.dist/c2mo2-gui.exe).VersionInfo | Format-List ProductName, ProductVersion, FileVersion, CompanyName, FileDescription
+
+      - name: Zip Nuitka build
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          Rename-Item dist-nuitka/run_gui.dist c2mo2-gui
+          Compress-Archive -Path "dist-nuitka/c2mo2-gui" -DestinationPath "c2mo2-gui-$tag-windows-x64-nuitka.zip"
+
+      - name: Upload Nuitka zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuitka-zip
+          path: c2mo2-gui-*-windows-x64-nuitka.zip
+          if-no-files-found: error
+
   release:
     runs-on: windows-latest
+    needs: nuitka
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -76,6 +121,51 @@ jobs:
         shell: pwsh
         run: (Get-Item dist/c2mo2-gui/c2mo2-gui.exe).VersionInfo | Format-List ProductName, ProductVersion, FileVersion, CompanyName, FileDescription
 
+      # -- Code signing (SignPath.io, SignPath Foundation certificate) ----------------
+      # Off until the repository variable SIGNPATH_ORGANIZATION_ID exists; the release
+      # then ships unsigned exactly as before. Setup steps: packaging/README.md,
+      # "Code signing (SignPath)". The artifact configuration lives in
+      # packaging/signpath-artifact-configuration.xml.
+      - name: Upload unsigned GUI build
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        id: upload-unsigned
+        uses: actions/upload-artifact@v7
+        with:
+          name: c2mo2-gui-unsigned
+          path: dist/c2mo2-gui
+          if-no-files-found: error
+
+      - name: Sign GUI executable
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: collections2mo2
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: c2mo2-gui
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          # Release signing needs a manual approval in SignPath's web UI; the default
+          # 600 s is not enough for a human. The job waits up to an hour.
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: dist/c2mo2-gui-signed
+
+      - name: Use the signed build
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: |
+          $exe = "dist/c2mo2-gui-signed/c2mo2-gui.exe"
+          if (-not (Test-Path $exe)) {
+            Get-ChildItem -Recurse dist/c2mo2-gui-signed | Select-Object -First 20 FullName
+            throw "signed artifact did not come back as $exe; adjust this step to its layout"
+          }
+          $sig = Get-AuthenticodeSignature $exe
+          $sig | Format-List Status, StatusMessage, SignerCertificate
+          if ($sig.Status -ne 'Valid') { throw "Authenticode status is $($sig.Status), not Valid" }
+          Remove-Item -Recurse -Force dist/c2mo2-gui
+          Rename-Item dist/c2mo2-gui-signed c2mo2-gui
+
       - name: Zip GUI build
         shell: pwsh
         run: |
@@ -95,6 +185,12 @@ jobs:
             echo "value=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Fetch Nuitka zip
+        uses: actions/download-artifact@v7
+        with:
+          name: nuitka-zip
+          path: nuitka-zip
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -102,5 +198,6 @@ jobs:
           generate_release_notes: true
           files: |
             ${{ env.ZIP_PATH }}
+            nuitka-zip/*.zip
             dist/*.whl
             dist/*.tar.gz

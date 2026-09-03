@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration for the c2mo2-gui release build.
+
+  Paste this into the SignPath project (Artifact configurations -> add, slug `c2mo2-gui`);
+  it is not read by anything in this repository. release.yml uploads the PyInstaller
+  output folder `dist/c2mo2-gui/` with actions/upload-artifact, which always wraps it in a
+  zip, so the root element has to be <zip-file> and paths are relative to that folder.
+
+  Only c2mo2-gui.exe is signed. Everything under `_internal/` (python3x.dll, the Qt and
+  PySide6 DLLs, the .pyd extension modules) is a third party's binary, and the SignPath
+  Foundation terms allow signing your own source's artifacts only. Windows SmartScreen
+  and Defender reputation look at the launched exe, not at the DLLs it loads.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="c2mo2-gui.exe">
+      <authenticode-sign/>
+    </pe-file>
+  </zip-file>
+</artifact-configuration>
