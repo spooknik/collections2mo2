@@ -55,8 +55,7 @@ instance to a `.wabbajack` modlist.
   - `c2mo2 wabbajack` will download `wabbajack-cli` itself if it isn't already
     installed.
 - A short install path (e.g. `D:\GTS`, not `C:\Users\...\Documents\My Modding
-  Projects\...`) - Windows' 260-character path limit is real with a 2,000-mod
-  instance.
+  Projects\...`) 
 
 Running from source with `uv` for now; there's no signed release build yet, so
 Windows SmartScreen may warn on a future packaged `.exe` until code signing is set up.
