@@ -64,6 +64,9 @@ read as a fallback.
   executable in a fresh instance.
 
 ### Changed
+- The wizard's "Check FOMODs" pre-flight button is gone. It spent one Nexus API call per
+  mod from the same hourly budget the downloads need, and the install log reports the
+  same thing (which mods used installer defaults). `c2mo2 survey` stays on the CLI.
 - The profile summary now says "N skipped (reference mods not in this collection)" for
   curator rules that reference mods outside the collection, instead of "ignored
   (unresolvable)"; those rules were and are harmless.

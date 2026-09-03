@@ -55,6 +55,33 @@ archive layouts can bump into it. Mod folder names are already capped and
 deduplicated, but the instance's own path still counts against the budget. Install to
 something short, like `D:\GTS`, not a long nested path under `Documents`.
 
+## How does this tool handle different versions of Skyrim?
+
+It never changes your game version, and it does not check it either. What it does:
+
+- **It works on a copy.** With "Copy the game into the instance" (`--stock-game`), the
+  game folder your `--game-path` points at is copied into `<instance>\Stock Game`, and MO2
+  is pointed at the copy. Every DLL patch, SKSE build and downgrade then touches the copy;
+  Steam's install stays exactly as Steam left it, and a later Steam update does not touch
+  the instance.
+- **The collection says which version it wants.** Every collection manifest records the
+  game version the curator built against (for example `1.6.1170.0`), and the curator
+  usually states it on the collection's Nexus page. Skyrim SE and AE are the same Steam
+  app and the same Nexus game; "AE" means the 1.6.x runtime, with or without the
+  Creation Club content.
+- **Match it before you build.** SKSE and every DLL plugin are compiled for an exact
+  executable version; on the wrong one SKSE refuses to start or plugins fail to load.
+  If your Steam install is not the version the collection names, either use Steam's
+  depot/branch tools to get there first, or build anyway and run a downgrader patcher
+  against `<instance>\Stock Game` afterwards. Because it is a copy, that is safe.
+- **Some collections handle it themselves.** Gate to Sovngarde and others ship a
+  Runtime Swapper that swaps the executable to the required version at launch and
+  reverts it on exit (see the entry above). Those still expect the `Stock Game` copy to
+  be the version they say.
+
+`c2mo2 update` follows *collection* revisions, not game updates. If Steam updates the
+game under you, the instance keeps running on its own copy.
+
 ## The Runtime Swapper says "A required patch is missing"
 
 Your `Stock Game` copy isn't the exact game version the collection was built against

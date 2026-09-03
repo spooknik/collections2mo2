@@ -1,4 +1,4 @@
-"""Page 3: paste a collection URL, fetch its metadata, optionally survey FOMODs."""
+"""Page 3: paste a collection URL, fetch its metadata, pick a revision."""
 
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ class CollectionPage(WizardPage):
     def __init__(self, state, parent=None):
         super().__init__(state, parent)
         self._fetch_worker: EngineWorker | None = None
-        self._survey_worker: EngineWorker | None = None
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Nexus Mods collection URL:"))
@@ -60,25 +59,6 @@ class CollectionPage(WizardPage):
         self.info_box = info_box
         layout.addWidget(info_box)
 
-        survey_box = QGroupBox("Optional pre-flight")
-        survey_layout = QVBoxLayout(survey_box)
-        survey_layout.addWidget(
-            QLabel(
-                "Checks which mods without a recorded FOMOD install ship an installer "
-                "anyway. Uses part of Nexus's hourly API budget and is skipped by default; "
-                "it never blocks Continue."
-            )
-        )
-        self.survey_btn = QPushButton("Check FOMODs")
-        self.survey_btn.clicked.connect(self._run_survey)
-        survey_layout.addWidget(self.survey_btn)
-        self.survey_status = QLabel("")
-        self.survey_status.setWordWrap(True)
-        survey_layout.addWidget(self.survey_status)
-        survey_box.setEnabled(False)
-        self.survey_box = survey_box
-        layout.addWidget(survey_box)
-
         layout.addStretch(1)
         self.set_ready(False)
 
@@ -93,7 +73,6 @@ class CollectionPage(WizardPage):
             return
         self.fetch_btn.setEnabled(False)
         self.info_box.setVisible(False)
-        self.survey_box.setEnabled(False)
         self.status_label.setText("Fetching collection metadata...")
         self._fetch_worker = EngineWorker(
             api.fetch_collection_summary, {"url": url, "api_key": self.state.api_key or None}
@@ -123,7 +102,6 @@ class CollectionPage(WizardPage):
         self.revision_combo.blockSignals(False)
         self.state.selected_revision = self.revision_combo.currentData()
         self.info_box.setVisible(True)
-        self.survey_box.setEnabled(True)
         self.set_ready(True)
 
     def _on_fetch_failed(self, message: str) -> None:
@@ -133,45 +111,6 @@ class CollectionPage(WizardPage):
 
     def _on_revision_changed(self, _index: int) -> None:
         self.state.selected_revision = self.revision_combo.currentData()
-
-    def _run_survey(self) -> None:
-        if self.state.collection_summary is None:
-            return
-        self.survey_btn.setEnabled(False)
-        self.survey_status.setText("Surveying (this uses part of Nexus's hourly API budget)...")
-        self._survey_worker = EngineWorker(
-            api.run_fomod_survey,
-            {
-                "url": self.state.collection_url,
-                "revision": self.state.selected_revision,
-                "api_key": self.state.api_key,
-                "jobs": self.state.jobs,
-            },
-        )
-        self._survey_worker.succeeded.connect(self._on_survey_done)
-        self._survey_worker.failed.connect(self._on_survey_failed)
-        self._survey_worker.start()
-
-    def _on_survey_done(self, summary: api.SurveySummary) -> None:
-        self.survey_btn.setEnabled(True)
-        self.state.survey_summary = summary
-        if summary.status == "rate_limited":
-            self.survey_status.setText(
-                f"{summary.detail} ({summary.fetched}/{summary.targets} checked so far, "
-                f"{summary.fresh_fomod_count} found with a FOMOD installer)."
-            )
-        elif summary.status == "ok":
-            self.survey_status.setText(
-                f"Checked {summary.fetched}/{summary.targets} mods -- "
-                f"{summary.fresh_fomod_count} have a FOMOD installer not recorded in the "
-                "collection (defaults will be used for those)."
-            )
-        else:
-            self.survey_status.setText(f"Survey did not complete: {summary.detail}")
-
-    def _on_survey_failed(self, message: str) -> None:
-        self.survey_btn.setEnabled(True)
-        self.survey_status.setText(message)
 
     def on_leave(self) -> bool:
         return self.state.collection_summary is not None

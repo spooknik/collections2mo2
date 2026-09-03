@@ -18,7 +18,6 @@ class WizardState:
     collection_url: str = ""
     collection_summary: api.CollectionSummary | None = None
     selected_revision: int | None = None
-    survey_summary: api.SurveySummary | None = None
 
     # -- location / game --------------------------------------------------------
     # An instance folder the run must go into rather than freshly choose: set by the
@@ -57,7 +56,6 @@ class WizardState:
         self.collection_url = ""
         self.collection_summary = None
         self.selected_revision = None
-        self.survey_summary = None
         self.instance_dir = None
         self.game_path = None
         self.stock_game = True
