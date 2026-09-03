@@ -119,6 +119,12 @@ gitignored. Never print `.env` contents or the API key.
   catalogue's newest-main copies overrode GTS's pinned ones and DynDOLOD's DLL rejected the
   scripts at game start (2026-09-03). Re-running the tool install repairs such an instance.
 
+- The PyInstaller spec swaps any OpenSSL DLL resolved from outside `sys.base_prefix` for the
+  interpreter's own and drops Qt's `qopensslbackend.dll`: in a Git Bash shell PATH has Git's
+  OpenSSL under the same `libcrypto-3-x64.dll` name CPython 3.13 uses, and the frozen `_ssl`
+  then fails ("procedure could not be found"), so the GUI opens on Sign-in with an HTTPS error.
+  CI's Python 3.12 names its DLLs `libcrypto-3.dll` and never collided (2026-09-03).
+
 ## Shared contracts
 
 - `naming.mod_folder_name(mod)` is the single source of truth for MO2 mod folder names; the

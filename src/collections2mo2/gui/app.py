@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import api
+from .. import __version__, api
 from .pages.base import WizardPage
 from .pages.collection import CollectionPage
 from .pages.display import DisplayPage
@@ -56,11 +56,16 @@ NO_NEXT = {"home", "review", "progress", "manage"}
 # own state (or none) and are left alone.
 RESETTABLE_PAGES = ["collection", "location", "tools", "display", "review", "progress"]
 
+# Shown in the title bar on every page. `__version__` comes from the installed package
+# metadata, which the PyInstaller spec and build-nuitka.sh bundle on purpose; without it
+# a packaged build would say 0.0.0+unknown here and in the Nexus User-Agent.
+WINDOW_TITLE = f"collections2mo2 {__version__}"
+
 
 class WizardWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("collections2mo2")
+        self.setWindowTitle(WINDOW_TITLE)
         self.setWindowIcon(app_icon())
         self.resize(920, 720)
 
@@ -196,7 +201,7 @@ class WizardWindow(QMainWindow):
         self.back_btn.setEnabled(bool(self._history) and not self._busy)
         self.next_btn.setVisible(self._current not in NO_NEXT)
         self.next_btn.setEnabled(page.is_ready() and not self._busy)
-        self.setWindowTitle(f"collections2mo2 -- {page.title}")
+        self.setWindowTitle(f"{WINDOW_TITLE} -- {page.title}")
         self._update_account_bar()
 
     def _navigate_to(self, name: str, *, push_history: bool) -> None:

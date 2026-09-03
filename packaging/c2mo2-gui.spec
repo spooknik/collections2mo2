@@ -8,8 +8,10 @@
 
 import os
 import re
+import sys
 import tomllib
 
+from PyInstaller.utils.hooks import copy_metadata
 from PyInstaller.utils.win32.versioninfo import (
     FixedFileInfo,
     StringFileInfo,
@@ -33,6 +35,16 @@ ICON = os.path.join(ASSETS, "icon.ico")
 # version from pyproject.toml (single source of truth; never edit the numbers here).
 with open(os.path.join(REPO_ROOT, "pyproject.toml"), "rb") as fh:
     VERSION = tomllib.load(fh)["project"]["version"]
+
+# `copy_metadata` below ships whatever dist-info is *installed*; after a version bump that
+# is stale until `uv sync` runs, and the frozen app would then report the old version.
+from importlib.metadata import version as _installed_version  # noqa: E402
+
+if _installed_version("collections2mo2") != VERSION:
+    raise SystemExit(
+        f"installed collections2mo2 metadata is {_installed_version('collections2mo2')} but "
+        f"pyproject.toml says {VERSION}; run `uv sync` before building"
+    )
 
 
 def _version_tuple(text):
@@ -85,6 +97,9 @@ a = Analysis(
     datas=[
         (CATALOG, "collections2mo2"),
         (ASSETS, os.path.join("collections2mo2", "gui", "assets")),
+        # The package's dist-info, so importlib.metadata resolves `__version__` in the
+        # frozen app (window title, Nexus User-Agent) instead of "0.0.0+unknown".
+        *copy_metadata("collections2mo2"),
     ],
     hiddenimports=[
         "collections2mo2.gui.pages.signin",
@@ -104,6 +119,38 @@ a = Analysis(
     noarchive=False,
     cipher=block_cipher,
 )
+
+# -- OpenSSL: ship Python's own copy, never one found on PATH ---------------------------
+# PySide6's hook collects Qt's TLS plugins, and qopensslbackend.dll names OpenSSL by file
+# name (libcrypto-3-x64.dll / libssl-3-x64.dll on 64-bit). PyInstaller resolves those
+# names through PATH, and a Git Bash shell has Git's own OpenSSL (a different version) on
+# PATH. When Python's _ssl.pyd uses the same file names (CPython 3.13 does; 3.12 says
+# libcrypto-3.dll), the Git copy wins the name clash and the frozen app cannot import
+# ssl at all ("The specified procedure could not be found"). Seen 2026-09-03 with uv's
+# CPython 3.13.13 + Git 2.x. The app never uses Qt networking, so the OpenSSL plugin is
+# dropped (Qt keeps its Schannel backend), and any OpenSSL DLL PyInstaller picked up from
+# outside the running interpreter is swapped for the interpreter's own file.
+_openssl_names = re.compile(r"^lib(crypto|ssl)-3[-\w]*\.dll$", re.IGNORECASE)
+_python_dlls = os.path.join(sys.base_prefix, "DLLs")
+_fixed = []
+for dest, src, kind in a.binaries:
+    base = os.path.basename(dest)
+    if base.lower() == "qopensslbackend.dll":
+        print(f"spec: dropping Qt OpenSSL TLS plugin {dest}")
+        continue
+    if _openssl_names.match(base):
+        own = os.path.join(_python_dlls, base)
+        if not os.path.abspath(src).lower().startswith(os.path.abspath(sys.base_prefix).lower()):
+            if not os.path.exists(own):
+                raise SystemExit(
+                    f"{base} was resolved from {src}, outside the Python install, and "
+                    f"{own} does not exist to replace it"
+                )
+            print(f"spec: {base}: using {own} instead of {src}")
+            src = own
+    _fixed.append((dest, src, kind))
+a.binaries = type(a.binaries)(_fixed)
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(

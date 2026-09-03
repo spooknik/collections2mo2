@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A `c2mo2-gui.exe` built with PyInstaller from a Git Bash shell on Python 3.13 could ship
+  Git's OpenSSL instead of Python's and then fail every HTTPS request ("the SSL module is
+  not available"), landing on the Sign-in page with that error. The spec now always
+  bundles the interpreter's own OpenSSL. Released builds (Python 3.12) were not affected.
 - Installing the DynDOLOD tool on a collection that ships its own DynDOLOD Resources SE or
   DynDOLOD DLL NG and Scripts (Gate to Sovngarde does) put the newest Nexus versions of
   those two mods above the collection, and the DLL then rejected the collection's scripts
@@ -17,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The GUI shows its version in the window title (the CLI already had `--version`).
+  Packaged builds now bundle the package metadata, so they report the real version
+  instead of `0.0.0+unknown`, in the title and in the Nexus User-Agent.
 - Every release now also ships `c2mo2-gui-<tag>-windows-x64-nuitka.zip`, the same GUI
   compiled with Nuitka instead of PyInstaller (`packaging/build-nuitka.sh`). It is an
   experiment to see which build Windows Defender's cloud classifier objects to; the two

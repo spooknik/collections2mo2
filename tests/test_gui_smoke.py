@@ -1001,3 +1001,16 @@ def test_review_page_states_the_game_version(qtbot):
 
     state.game_version_check = ("mismatch", "This collection targets ...")
     assert _game_version_line(state) == "<b>Game version:</b> This collection targets ..."
+
+
+def test_wizard_window_title_carries_the_version(qtbot):
+    # The packaged builds bundle the package metadata (PyInstaller spec `copy_metadata`,
+    # build-nuitka.sh `--include-distribution-metadata`) precisely so this reads a real
+    # version there; here it is whatever the editable install reports.
+    from collections2mo2 import __version__
+    from collections2mo2.gui.app import WizardWindow
+
+    window = WizardWindow()
+    qtbot.addWidget(window)
+    assert __version__ in window.windowTitle()
+    assert window.pages[window._current].title in window.windowTitle()

@@ -11,6 +11,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION=$(uv run --no-sync python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+# --include-distribution-metadata ships the *installed* metadata; after a version bump it is
+# stale until `uv sync` runs, and the app would then report the old version in its title.
+INSTALLED=$(uv run --no-sync python -c "from importlib.metadata import version; print(version('collections2mo2'))")
+if [ "$INSTALLED" != "$VERSION" ]; then
+  echo "installed collections2mo2 metadata is $INSTALLED but pyproject.toml says $VERSION; run 'uv sync' first" >&2
+  exit 1
+fi
 
 uv run --no-sync --with nuitka --with ordered-set --with zstandard python -m nuitka \
   --standalone \
@@ -19,6 +26,7 @@ uv run --no-sync --with nuitka --with ordered-set --with zstandard python -m nui
   --enable-plugin=pyside6 \
   --include-package=collections2mo2 \
   --include-package=keyring.backends \
+  --include-distribution-metadata=collections2mo2 \
   --include-data-files=src/collections2mo2/tools_catalog.json=collections2mo2/tools_catalog.json \
   --include-data-dir=src/collections2mo2/gui/assets=collections2mo2/gui/assets \
   --windows-console-mode=disable \

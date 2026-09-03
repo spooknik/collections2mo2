@@ -46,6 +46,22 @@ The `.exe` in that zip is unsigned; Windows SmartScreen will warn on first launc
 protected your PC"). Click "More info" -> "Run anyway" to proceed -- there is no code-signing
 certificate for this project.
 
+## OpenSSL in the PyInstaller build
+
+The spec post-processes `a.binaries` so the frozen app ships the running interpreter's
+own `libcrypto-3*.dll` / `libssl-3*.dll` and drops Qt's `qopensslbackend.dll` TLS
+plugin. Without that, a build run from a Git Bash shell can silently break HTTPS: the
+PySide6 hook collects the Qt OpenSSL plugin, which names OpenSSL by file name, PyInstaller
+resolves that name through PATH, Git's `mingw64\bin` supplies its own (older) OpenSSL,
+and when Python's `_ssl` uses the same file names (CPython 3.13 does, 3.12 does not) the
+Git copy shadows it. The app then starts, finds the saved key, and fails every request
+with "Can't connect to HTTPS URL because the SSL module is not available", so the GUI
+falls back to the Sign-in page with that error. Found 2026-09-03 on a local build with
+uv's CPython 3.13.13; the CI builds (Python 3.12) were never affected. The spec prints a
+`spec:` line for every substitution it makes, and fails if it cannot find the
+interpreter's copy. The version shows in the title bar, so a build that starts on Sign-in
+despite a saved key is the first thing to suspect.
+
 ## Nuitka build (experimental)
 
 `packaging/build-nuitka.sh` builds the same GUI with [Nuitka](https://nuitka.net) instead
