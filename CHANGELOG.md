@@ -45,6 +45,10 @@ read as a fallback.
   settings page, a review step, live per-file progress with rate/ETA, and a Manage tab for
   updating, layering onto, or exporting an existing instance.
 
+- `create --tools <id ...>` installs catalogue tools as the pipeline's last stage; the GUI
+  wizard's Tools page now actually does this (previously the selection was shown on the
+  review page but never installed).
+
 ### Changed
 
 - Renamed the project from `collections2wabbajack`/`c2wj` to `collections2mo2`/`c2mo2` -

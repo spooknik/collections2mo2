@@ -29,8 +29,6 @@ explicitly. This does not edit `sevenzip.py` / `build.py` / `tools.py`.
 from __future__ import annotations
 
 import argparse
-import contextlib
-import io
 import os
 import re
 import shutil
@@ -47,7 +45,7 @@ from . import sevenzip as sevenzip_mod
 from . import tools as tools_mod
 from .manifest import fetch_manifest, load_manifest
 from .nexus import API_BASE, AuthRequired, CollectionRef, NexusClient, NexusError
-from .reporter import NullReporter, Reporter, get_reporter
+from .reporter import NullReporter, Reporter, get_reporter, stdout_to_reporter
 
 __all__ = [
     "ApiError",
@@ -593,30 +591,7 @@ def list_tool_groups(mo2_dir: str | Path | None = None) -> list[tuple[str, list[
     return list(groups.items())
 
 
-class _LineReporterStream(io.TextIOBase):
-    """Redirects `print()`-based output (tools.py has no `Reporter` hooks) to a Reporter."""
-
-    def __init__(self, rep: Reporter):
-        self._rep = rep
-        self._buf = ""
-
-    def write(self, text: str) -> int:  # type: ignore[override]
-        self._buf += text
-        while "\n" in self._buf:
-            line, self._buf = self._buf.split("\n", 1)
-            line = line.rstrip("\r")
-            if line:
-                self._rep.log(line)
-        return len(text)
-
-    def flush(self) -> None:
-        return None
-
-
-@contextlib.contextmanager
-def _stdout_to_reporter(rep: Reporter):
-    with contextlib.redirect_stdout(_LineReporterStream(rep)):
-        yield
+_stdout_to_reporter = stdout_to_reporter
 
 
 def install_tools(
@@ -659,11 +634,14 @@ def create_instance(
     allow_missing: bool = False,
     mo2_version: str = build.DEFAULT_MO2_VERSION,
     rootbuilder_version: str = build.DEFAULT_ROOTBUILDER_VERSION,
+    tool_ids: list[str] | None = None,
     reporter: Reporter | None = None,
 ) -> int:
     """`c2mo2 create`: collection URL -> a runnable, self-contained MO2 instance.
 
     `resolution` is validated the same way the CLI does (`'auto'`, `'keep'`, or `WxH`).
+    `tool_ids` are catalogue tools to install into the new instance once it is built
+    (the wizard's Tools page; `--tools` on the CLI).
     """
     resolution = profile._parse_resolution_arg(resolution)
     ns = argparse.Namespace(
@@ -682,6 +660,7 @@ def create_instance(
         allow_missing=allow_missing,
         mo2_version=mo2_version,
         rootbuilder_version=rootbuilder_version,
+        tools=list(tool_ids or []),
     )
     return create.cmd_create(ns, reporter=reporter)
 

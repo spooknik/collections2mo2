@@ -58,3 +58,45 @@ def test_finish_omits_hint_when_run_failed(tmp_path: Path):
     rc = create._finish(run, rep, paths, started=0.0, mod_count=42)
     assert rc == 1
     assert not any("first start indexes" in line for line in rep.logs)
+
+
+def test_install_tools_stage_runs_after_ledger_and_records_ok(monkeypatch, tmp_path: Path):
+    from collections2mo2 import tools
+
+    calls = []
+
+    def fake_install(ns):
+        calls.append(ns)
+        print("  downloading xEdit")  # tools.py prints; must reach the reporter
+        return 0
+
+    monkeypatch.setattr(tools, "cmd_tools_install", fake_install)
+    rep = _CollectingReporter()
+    run = create.Run(rep)
+    paths = create.Paths(tmp_path / "inst")
+
+    rc = create.install_tools_stage(paths, ["xedit", "loot"], run, rep)
+
+    assert rc == 0
+    assert len(calls) == 1
+    assert calls[0].ids == ["xedit", "loot"]
+    assert Path(calls[0].mo2_dir) == paths.out
+    assert calls[0].all_default is False and calls[0].force is False
+    assert [(s.name, s.status) for s in run.stages] == [("tools", "ok")]
+    assert not run.failed
+    assert "  downloading xEdit" in rep.logs
+
+
+def test_install_tools_stage_failure_is_a_failed_stage(monkeypatch, tmp_path: Path):
+    from collections2mo2 import tools
+
+    monkeypatch.setattr(tools, "cmd_tools_install", lambda ns: 1)
+    rep = _CollectingReporter()
+    run = create.Run(rep)
+
+    rc = create.install_tools_stage(create.Paths(tmp_path / "inst"), ["xedit"], run, rep)
+
+    assert rc == 1
+    assert run.failed
+    assert run.stages[0].name == "tools"
+    assert any("tools failed" in w for w in rep.warnings)

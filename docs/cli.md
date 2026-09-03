@@ -44,6 +44,7 @@ c2mo2 create <url> --out OUT --game-path GAME_PATH [options]
 | `--allow-missing` | carry on when Nexus no longer serves a file the collection pinned (the author deleted it); those mods are left out and listed in the summary. An md5 mismatch still stops the run. |
 | `--mo2-version MO2_VERSION` | Mod Organizer 2 release to install (default: `2.5.2`) |
 | `--rootbuilder-version ROOTBUILDER_VERSION` | Root Builder release to install (default: `5.1.1`) |
+| `--tools ID [ID ...]` | catalogue tools to install once the instance is built (ids from `c2mo2 tools list`); the same thing the GUI's Tools page does |
 
 ## Instance lifecycle
 

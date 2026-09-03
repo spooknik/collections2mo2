@@ -59,7 +59,23 @@ def test_create_instance_maps_arguments(monkeypatch):
     assert ns.allow_missing is True
     assert ns.mo2_version == api.build.DEFAULT_MO2_VERSION
     assert ns.rootbuilder_version == api.build.DEFAULT_ROOTBUILDER_VERSION
+    assert ns.tools == []
     assert captured["reporter"] is reporter
+
+
+def test_create_instance_passes_tool_ids_through(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        api.create, "cmd_create", lambda ns, reporter=None: captured.setdefault("ns", ns) and 0
+    )
+    rc = api.create_instance(
+        url="https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3",
+        out="D:/Skyrim",
+        game_path="E:/Games/Skyrim Special Edition",
+        tool_ids=["xedit", "loot"],
+    )
+    assert rc == 0
+    assert captured["ns"].tools == ["xedit", "loot"]
 
 
 def test_create_instance_validates_resolution(monkeypatch):

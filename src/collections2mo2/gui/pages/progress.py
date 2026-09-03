@@ -74,6 +74,7 @@ class ProgressPage(WizardPage):
             "window": s.window,
             "skip_survey": True,
             "allow_missing": False,
+            "tool_ids": list(s.tool_ids),
         }
         self._worker = EngineWorker(api.create_instance, kwargs, reporter=reporter)
         self._worker.succeeded.connect(self._on_finished)

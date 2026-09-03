@@ -61,3 +61,9 @@ def test_cli_version_exits_zero():
     result = _run(["--version"])
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == f"c2mo2 {collections2mo2.__version__}"
+
+
+def test_create_help_lists_tools_option():
+    result = _run(["create", "--help"])
+    assert result.returncode == 0
+    assert "--tools" in result.stdout

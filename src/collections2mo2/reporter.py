@@ -31,6 +31,8 @@ them.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 from typing import Protocol, runtime_checkable
 
@@ -200,3 +202,30 @@ class ConsoleReporter:
 def get_reporter(reporter: Reporter | None) -> Reporter:
     """Every stage's `reporter=None` default: fall back to the console."""
     return reporter if reporter is not None else ConsoleReporter()
+
+
+class _LineReporterStream(io.TextIOBase):
+    """Redirects `print()`-based output (tools.py has no `Reporter` hooks) to a Reporter."""
+
+    def __init__(self, rep: Reporter):
+        self._rep = rep
+        self._buf = ""
+
+    def write(self, text: str) -> int:  # type: ignore[override]
+        self._buf += text
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            line = line.rstrip("\r")
+            if line:
+                self._rep.log(line)
+        return len(text)
+
+    def flush(self) -> None:
+        return None
+
+
+@contextlib.contextmanager
+def stdout_to_reporter(rep: Reporter):
+    """Route `print()` output from a legacy stdout-based command through `rep.log`."""
+    with contextlib.redirect_stdout(_LineReporterStream(rep)):
+        yield

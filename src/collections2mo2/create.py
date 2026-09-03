@@ -43,7 +43,7 @@ from . import archive_inspect, build, installer, ledger, profile, survey
 from .downloader import mo2_game_name, run_download
 from .manifest import fetch_manifest, load_manifest
 from .nexus import AuthRequired, CollectionRef, NexusClient, NexusError
-from .reporter import Reporter, get_reporter
+from .reporter import Reporter, get_reporter, stdout_to_reporter
 
 # The instance path, the mod folder name (up to 80 chars) and the mod's own nested
 # files all share Windows' 260-character budget.
@@ -914,7 +914,37 @@ def cmd_create(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         if len(user_mods) > 20:
             rep.log(f"  ... +{len(user_mods) - 20} more")
 
+    # -- tools (after the ledger save above: `tools install` writes the ledger itself) --
+    tool_ids = list(dict.fromkeys(getattr(args, "tools", None) or []))
+    if tool_ids:
+        install_tools_stage(paths, tool_ids, run, rep)
+
     return _finish(run, rep, paths, started, mod_count=len(mods_on_disk))
+
+
+def install_tools_stage(paths: Paths, tool_ids: list[str], run: Run, rep: Reporter) -> int:
+    """`create --tools` / the wizard's Tools page: install catalogue tools into the new
+    instance as the pipeline's last stage.
+
+    Runs after the ledger stage has saved, because `tools.cmd_tools_install` loads and
+    writes the ledger itself (recording each tool under `tools[id]`); running it earlier
+    would let `create`'s in-memory ledger clobber those records. A failed tool is a
+    failed stage in the summary, but the instance itself is complete and launchable --
+    `c2mo2 tools install` or the Manage tab can retry.
+    """
+    from . import tools  # tools imports create (legacy migration); keep this one lazy
+
+    rep.stage("tools", len(tool_ids))
+    with stdout_to_reporter(rep):
+        rc = tools.cmd_tools_install(
+            _namespace(ids=tool_ids, mo2_dir=str(paths.out), all_default=False, force=False)
+        )
+    if rc != 0:
+        run.record("tools", "failed", "one or more tools did not install; see the log above")
+        return rc
+    run.record("tools", "ok", ", ".join(tool_ids))
+    rep.done("tools", f"installed {', '.join(tool_ids)}")
+    return 0
 
 
 def _finish(
@@ -1012,5 +1042,12 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         "--rootbuilder-version",
         default=build.DEFAULT_ROOTBUILDER_VERSION,
         help=f"Root Builder release to install (default: {build.DEFAULT_ROOTBUILDER_VERSION})",
+    )
+    p.add_argument(
+        "--tools",
+        nargs="+",
+        metavar="ID",
+        default=[],
+        help="catalogue tools to install once the instance is built (ids from `c2mo2 tools list`)",
     )
     p.set_defaults(func=cmd_create)

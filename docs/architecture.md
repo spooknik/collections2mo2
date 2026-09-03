@@ -9,7 +9,8 @@ A standalone Python CLI (`c2mo2`) that turns a Nexus Mods collection (the Vortex
 Mod Organizer 2 portable instance, with an optional Wabbajack compile at the end. It replaces
 the earlier attempt to do this as an MO2 Python plugin; MO2's plugin API cannot do file-level
 installs or write profiles. Pipeline: `fetch` -> `download` -> `inspect` -> `install` -> `profile`
--> `build`; `create` runs all of them into one instance dir (`<out>/c2mo2/` holds the stage JSON,
+-> `build` (-> `tools` when `--tools`/the GUI Tools page asks for catalogue tools; it runs last
+because `tools install` writes the ledger itself); `create` runs all of them into one instance dir (`<out>/c2mo2/` holds the stage JSON,
 `<out>/downloads/` the archives) and writes the ledger `c2mo2-instance.json` (`ledger.py`).
 An instance can hold several collections as layers: `create` = init + `add` the first layer +
 `build`, and `c2mo2 add` / `c2mo2 remove` (`layers.py`) put further collections on and off, sharing
