@@ -1,6 +1,6 @@
 [project]
 name = "collections2mo2"
-version = "0.1.2"
+version = "0.1.3"
 description = "Convert Nexus Mods collections into Mod Organizer 2 instances, with Wabbajack export"
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }

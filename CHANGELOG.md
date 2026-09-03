@@ -4,6 +4,30 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Fixed
+
+- Installing the DynDOLOD tool on a collection that ships its own DynDOLOD Resources SE or
+  DynDOLOD DLL NG and Scripts (Gate to Sovngarde does) put the newest Nexus versions of
+  those two mods above the collection, and the DLL then rejected the collection's scripts
+  at game start. A companion mod any collection layer already pins is now skipped and the
+  collection's copy used; re-running the tool install removes the copies an earlier
+  version installed.
+
+### Added
+
+- Every release now also ships `c2mo2-gui-<tag>-windows-x64-nuitka.zip`, the same GUI
+  compiled with Nuitka instead of PyInstaller (`packaging/build-nuitka.sh`). It is an
+  experiment to see which build Windows Defender's cloud classifier objects to; the two
+  are functionally identical.
+
+### Changed
+
+- The release workflow can sign `c2mo2-gui.exe` through SignPath.io once the project is
+  accepted into the SignPath Foundation programme (see packaging/README.md); until the
+  repository variable that enables it exists, releases build exactly as before.
+
 ## 0.1.2 - 2026-09-03
 
 ### Fixed
