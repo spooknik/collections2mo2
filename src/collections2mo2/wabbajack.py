@@ -80,6 +80,7 @@ import requests
 from . import create as create_mod
 from . import ledger as ledger_mod
 from .reporter import Reporter, get_reporter
+from .sevenzip import NO_WINDOW
 
 # Repo root is two levels above this file, as in build.py; third-party binaries are
 # staged in the gitignored tools/ rather than installed system-wide.
@@ -1158,6 +1159,7 @@ def run_compile(
                     errors="replace",
                     bufsize=1,
                     cwd=str(work),
+                    creationflags=NO_WINDOW,
                 )
             )
             assert proc.stdout is not None

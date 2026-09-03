@@ -47,7 +47,7 @@ import requests
 
 from . import downloader as downloader_mod
 from .reporter import Reporter, get_reporter
-from .sevenzip import extract, list_archive
+from .sevenzip import NO_WINDOW, extract, list_archive
 
 # Repo root is two levels above this file: src/collections2mo2/build.py
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -288,7 +288,9 @@ def _run_robocopy(src: Path, dst: Path) -> list[str]:
         "/NJH",
         "/NP",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, check=False, creationflags=NO_WINDOW
+    )
     if result.returncode >= 8:
         raise RuntimeError(
             f"robocopy failed (exit code {result.returncode}) copying {src} -> {dst}:\n"

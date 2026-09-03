@@ -33,11 +33,23 @@ alone gets us a RAR-capable, portable console binary:
    filename, looked up next to itself, regardless of the .exe's own name).
 
 End state: tools/7za.exe + tools/7z.dll, which together handle .7z/.zip/.rar.
+
+`ensure_7za` is called from every listing/extraction, including the parallel workers of
+the inspect and install stages, so the bootstrap is serialised with a module-level lock:
+on a first run four workers would otherwise all download and unpack 7-Zip into the same
+folder at once, deleting each other's staging files mid-extraction, and every archive in
+flight during those seconds would fail to list (seen on the first frozen-app run of a
+1,966-mod collection: the first 18 archives failed, everything after them was fine).
+
+Child processes are started with CREATE_NO_WINDOW. The frozen GUI has no console of its
+own (PyInstaller `console=False`), so without it every 7za.exe call pops up a console
+window for a fraction of a second and steals focus.
 """
 
 from __future__ import annotations
 
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.request import urlretrieve
@@ -68,6 +80,13 @@ _MSI_MEMBERS = {
     "_7z.dll": "7z.dll",
 }
 
+# Windows-only flag (0 elsewhere): run console children without creating a console window.
+# Shared by every subprocess call site in the package (robocopy, wabbajack-cli) so a windowed
+# frozen build never flashes terminals; output is captured through pipes regardless.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+_BOOTSTRAP_LOCK = threading.Lock()
+
 
 @dataclass
 class ArchiveEntry:
@@ -84,16 +103,33 @@ def _run_7z(exe: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
         encoding="utf-8",
         errors="replace",
         check=False,
+        creationflags=NO_WINDOW,
     )
 
 
 def ensure_7za() -> Path:
-    """Return the path to tools/7za.exe, bootstrapping it if needed (see module docstring)."""
+    """Return the path to tools/7za.exe, bootstrapping it if needed (see module docstring).
+
+    Safe to call from many threads at once: the first caller bootstraps while the rest wait
+    on the lock and then find the finished binary.
+    """
     exe = TOOLS_DIR / "7za.exe"
     dll = TOOLS_DIR / "7z.dll"
     if exe.exists() and dll.exists():
         return exe
+    with _BOOTSTRAP_LOCK:
+        # Re-resolve under the lock: TOOLS_DIR is reassigned by api.py for the frozen app,
+        # and another thread may have finished the bootstrap while we waited.
+        exe = TOOLS_DIR / "7za.exe"
+        dll = TOOLS_DIR / "7z.dll"
+        if exe.exists() and dll.exists():
+            return exe
+        _bootstrap_7za(exe, dll)
+    return exe
 
+
+def _bootstrap_7za(exe: Path, dll: Path) -> None:
+    """Download and assemble tools/7za.exe + tools/7z.dll (the three steps in the docstring)."""
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
     bootstrap = TOOLS_DIR / "_7zr-bootstrap.exe"
     extra_bundle = TOOLS_DIR / "_7z-extra-download.7z"
@@ -143,7 +179,6 @@ def ensure_7za() -> Path:
     result = _run_7z(exe, [])
     if "7-Zip" not in result.stdout:
         raise RuntimeError(f"7za.exe did not report itself as 7-Zip: {result.stdout!r}")
-    return exe
 
 
 def _entry_from_block(block: dict[str, str]) -> ArchiveEntry:

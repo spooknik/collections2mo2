@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Fixed
+
+- On a first run of the packaged app, the inspect stage could fail a handful of archives
+  (the first 18 of Gate to Sovngarde) because every parallel worker tried to bootstrap
+  7-Zip at the same time and they deleted each other's staging files. The bootstrap is
+  now serialised and happens once before the workers start; the reason for any archive
+  that still fails is written to the log and to `inspect.json` (`failures`) instead of only
+  the console.
+- The packaged GUI flashed a console window, stealing focus, for every 7-Zip, robocopy and
+  wabbajack-cli call. Child processes now run without a window.
+
 ## 0.1.1 - 2026-09-03
 
 ### Fixed

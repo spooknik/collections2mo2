@@ -5,6 +5,13 @@ archive that downloaded successfully, lists its contents via sevenzip.py and
 classifies its on-disk layout. The headline question this answers: of the
 `fresh`-install mods, how many ship a FOMOD installer (fomod/ModuleConfig.xml)
 that will need special handling later.
+
+inspect.json: `{"downloads_json": <path>, "entries": [...], "failures": [...]}`. Each
+entry is the manifest fields in MANIFEST_ENTRY_FIELDS plus the inspection result from
+`inspect_archive`. `failures` lists `{"name", "file_name", "error"}` for archives that
+could not be listed; they are absent from `entries`, and the command exits 1 when the
+list is non-empty. 7-Zip is bootstrapped once before the worker pool starts, so a
+bootstrap problem is reported as one stage error rather than as per-archive failures.
 """
 
 from __future__ import annotations
@@ -17,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .reporter import Reporter, get_reporter
-from .sevenzip import ArchiveEntry, list_archive
+from .sevenzip import ArchiveEntry, ensure_7za, list_archive
 
 MANIFEST_ENTRY_FIELDS = (
     "name",
@@ -168,7 +175,7 @@ def _inspect_one(entry: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] 
         return base, None, str(exc)
 
 
-def _print_report(entries: list[dict[str, Any]], failures: list[tuple[str, str]]) -> None:
+def _print_report(entries: list[dict[str, Any]], failures: list[dict[str, str]]) -> None:
     archive_types = Counter(e["archive_type"] for e in entries)
     layouts = Counter(e["layout"] for e in entries)
     mode_fomod = Counter((e["install_mode"], e["has_fomod"]) for e in entries)
@@ -210,8 +217,8 @@ def _print_report(entries: list[dict[str, Any]], failures: list[tuple[str, str]]
 
     if failures:
         print(f"\n== FAILED to inspect ({len(failures)})")
-        for name, err in failures:
-            print(f"  - {name}: {err}")
+        for f in failures:
+            print(f"  - {f['name']}: {f['error']}")
 
 
 def cmd_inspect(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
@@ -221,8 +228,15 @@ def cmd_inspect(args: argparse.Namespace, reporter: Reporter | None = None) -> i
     candidates = [e for e in data.get("entries", []) if e.get("status") in ("ok", "skipped")]
 
     rep.stage("inspect", len(candidates))
+    try:
+        # Once, serially, before the pool: see sevenzip.ensure_7za.
+        ensure_7za()
+    except Exception as exc:  # noqa: BLE001 - a download/extraction problem, reported whole
+        rep.warn(f"inspect: could not set up 7-Zip: {exc}")
+        return 1
+
     results: list[dict[str, Any]] = []
-    failures: list[tuple[str, str]] = []
+    failures: list[dict[str, str]] = []
     done = 0
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
         futures = {pool.submit(_inspect_one, e): e for e in candidates}
@@ -232,17 +246,25 @@ def cmd_inspect(args: argparse.Namespace, reporter: Reporter | None = None) -> i
             name = base.get("name") or base.get("file_name") or "?"
             rep.progress(done, len(candidates), f"{'FAILED  ' if error else 'ok      '} {name}")
             if error is not None:
-                failures.append((name, error))
+                failures.append(
+                    {"name": name, "file_name": base.get("file_name") or "", "error": error}
+                )
                 continue
             results.append({**base, **inspection})
 
     results.sort(key=lambda e: e.get("name") or "")
+    failures.sort(key=lambda f: f["name"])
 
     out_path = Path(args.out) if args.out else downloads_json.parent / "inspect.json"
     out_path.write_text(
-        json.dumps({"downloads_json": str(downloads_json), "entries": results}, indent=2),
+        json.dumps(
+            {"downloads_json": str(downloads_json), "entries": results, "failures": failures},
+            indent=2,
+        ),
         encoding="utf-8",
     )
+    for f in failures:
+        rep.warn(f"inspect failed: {f['name']} ({f['file_name']}): {f['error']}")
     rep.done(
         "inspect",
         f"{len(results)} archives inspected, {len(failures)} failed -> {out_path}",

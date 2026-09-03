@@ -103,6 +103,10 @@ gitignored. Never print `.env` contents or the API key.
   `PYINSTALLER_COMPILE_BOOTLOADER=1` forces a `waf` compile with MSVC (~20 s). `release.yml` sets
   that plus `UV_NO_BINARY_PACKAGE=pyinstaller` and cleans uv's pyinstaller cache first; the spec
   also stamps a `VSVersionInfo` resource from the pyproject version. See packaging/README.md.
+- `sevenzip.ensure_7za` is called from parallel workers; its bootstrap is serialised with a
+  module lock and `cmd_inspect` calls it once before its pool (the first frozen GTS run lost the
+  first 18 archives to four concurrent bootstraps). All child processes pass
+  `sevenzip.NO_WINDOW` (`CREATE_NO_WINDOW`) because the windowed exe otherwise flashes consoles.
 - A `--resolution`/`--vsync`/`--window` choice is remembered in the ledger's `display` key and
   re-applied whenever a render is given `keep` for that field (`profile._resolve_effective_display`),
   so `add`/`remove`/`update` -- which never pass these flags -- keep refreshing the generated SSE
