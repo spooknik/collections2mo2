@@ -34,6 +34,17 @@ What to do:
    faster. Opening an issue with the detection name helps too, so the maintainer can submit
    the same build.
 
+## The run stopped part way. Do I have to download everything again?
+
+No. Run the same create again on the same folder and it picks up where it stopped. Every
+stage is skipped when its output is already there and matches the stage before it, and
+the download stage verifies each archive on disk against the manifest's MD5, re-fetching
+only the ones that are missing or don't match. A repeat run of a finished instance is a
+no-op. In the GUI, choose the same instance folder (or "Set up a collection here" on the
+Manage tab); on the CLI, repeat the `c2mo2 create` command. To start a second instance
+of the same collection without downloading twice, pass `--reuse-downloads` pointing at
+the first instance's `downloads` folder.
+
 ## My resolution/vsync/window setting was ignored
 
 Some collections ship **SSE Display Tweaks**, which overrides `SkyrimPrefs.ini`'s

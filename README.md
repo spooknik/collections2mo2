@@ -39,6 +39,15 @@ From there you can install optional tools (xEdit, LOOT, DynDOLOD, ...), layer mo
 collections on top, update a layer to a newer revision, or export the finished
 instance to a `.wabbajack` modlist.
 
+**Every stage is resumable.** A stage is skipped when its output is already on disk and
+consistent with the stage before it, and the download stage checks each archive against
+the manifest's MD5 rather than trusting the file name. So if a run stops part way (a
+dropped connection, a stage that failed, closing the app) just run the same create again
+on the same folder: in the GUI pick the same instance folder, on the CLI repeat the
+command. A 60 GB collection that got as far as inspecting picks up at inspect without
+downloading a single archive again. `--reuse-downloads <folder>` seeds a new instance from
+another instance's download store the same way, by hardlinking the archives that match.
+
 ## Requirements
 
 - Windows 10 or 11.
