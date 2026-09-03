@@ -126,7 +126,7 @@ def test_report_game_version_warns_on_a_mismatch(monkeypatch):
     rep = _CollectingReporter()
     manifest = {"info": {"gameVersions": ["1.6.1170.0"]}}
 
-    status, _message = create.report_game_version(manifest, "D:/Skyrim", "SkyrimSE", rep)
+    status, message = create.report_game_version(manifest, "D:/Skyrim", "SkyrimSE", rep)
 
     assert status == "mismatch"
     assert rep.logs == []
@@ -139,7 +139,7 @@ def test_report_game_version_warns_when_the_version_cannot_be_read(monkeypatch):
     monkeypatch.setattr(create.game_version, "installed_game_version", lambda path, name: None)
     rep = _CollectingReporter()
 
-    status, _message = create.report_game_version(
+    status, message = create.report_game_version(
         {"info": {"gameVersions": ["1.6.1170.0"]}}, "D:/Skyrim", "SkyrimSE", rep
     )
 
@@ -161,9 +161,10 @@ def test_report_game_version_addon_mismatch_is_a_note_not_a_warning(monkeypatch)
     monkeypatch.setattr(create.game_version, "installed_game_version", lambda *a, **k: "1.7.104.0")
     manifest = {"info": {"gameVersions": ["1.6.1170.0"]}}
     rep = _CollectingReporter()
-    status, _message = create.report_game_version(
+    status, message = create.report_game_version(
         manifest, "D:/Skyrim", "SkyrimSE", rep, is_base=False
     )
     assert status == "mismatch"
     assert rep.warnings == []
-    assert any("add-on collection" in line for line in rep.logs)
+    assert "add-on collection" in message
+    assert rep.logs == [message]
