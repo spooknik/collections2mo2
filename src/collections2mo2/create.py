@@ -39,7 +39,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from . import archive_inspect, build, installer, ledger, profile, survey
+from . import archive_inspect, build, game_version, installer, ledger, profile, survey
 from .downloader import mo2_game_name, run_download
 from .manifest import fetch_manifest, load_manifest
 from .nexus import AuthRequired, CollectionRef, NexusClient, NexusError
@@ -56,6 +56,156 @@ STAGE_FILES = {
     "install_json": "install.json",
     "survey_json": "survey.json",
 }
+
+
+# -- instance location warnings ------------------------------------------------------
+
+
+def _norm_path(text: str | Path) -> str:
+    """A lowercase, forward-slashed, trailing-slash-free form for prefix comparisons.
+
+    Windows path comparison is case-insensitive and separator-agnostic, and the GUI
+    hands us whatever the user typed, so normalise both sides rather than relying on
+    `Path.relative_to` (which is exact-case on the string it stores).
+    """
+    return str(text).replace("\\", "/").rstrip("/").lower()
+
+
+def _is_within(path: str | Path, parent: str | Path | None) -> bool:
+    """True when `path` is `parent` or lives under it."""
+    if not parent:
+        return False
+    child, root = _norm_path(path), _norm_path(parent)
+    if not root:
+        return False
+    return child == root or child.startswith(root + "/")
+
+
+def _has_component(path: str | Path, names: set[str]) -> bool:
+    return any(part in names for part in _norm_path(path).split("/"))
+
+
+def instance_path_warnings(path: str | Path, game_path: str | Path | None = None) -> list[str]:
+    """Human-readable warnings about `path` as an instance location; empty if it's fine.
+
+    Advisory only -- nothing here refuses a path. `create` prints these before it starts
+    and the GUI's location page shows them live under the folder field, so both surfaces
+    stay in step (`api.path_warnings` delegates here).
+    """
+    text = str(Path(path))
+    warnings: list[str] = []
+
+    if len(text) > PATH_WARN_LEN:
+        warnings.append(
+            f"This path is {len(text)} characters long. Windows caps full paths at 260, and "
+            f"mod files nest deeply inside the instance -- {PATH_WARN_LEN} or fewer "
+            "(e.g. D:\\Skyrim) leaves room for the deepest file."
+        )
+
+    program_dirs = [
+        os.environ.get("ProgramFiles"),
+        os.environ.get("ProgramFiles(x86)"),
+        os.environ.get("ProgramW6432"),
+    ]
+    if any(_is_within(text, d) for d in program_dirs) or _has_component(
+        text, {"program files", "program files (x86)"}
+    ):
+        warnings.append(
+            "This path is under Program Files. Windows protects those folders, and MO2, "
+            "its plugins and the mods themselves write there constantly -- UAC and file "
+            "virtualisation break that. Pick a folder outside Program Files "
+            "(e.g. D:\\Skyrim)."
+        )
+
+    system_root = os.environ.get("SystemRoot") or "C:\\Windows"
+    if _is_within(text, system_root):
+        warnings.append(
+            "This path is inside the Windows folder. Do not install a modding instance "
+            "there: it is Windows' own directory, permission-restricted and serviced by "
+            "Windows Update. Pick a folder like D:\\Skyrim instead."
+        )
+
+    lowered = text.lower()
+    if "onedrive" in lowered:
+        warnings.append(
+            "This path is inside OneDrive. OneDrive can sync or lock files mid-install; pick "
+            "a folder outside it."
+        )
+
+    try:
+        home = Path.home()
+    except (OSError, RuntimeError):
+        home = None
+    if home is not None and _is_within(text, home / "Documents"):
+        warnings.append(
+            "This path is under Documents. A dedicated folder (e.g. D:\\Skyrim) is usually "
+            "faster and avoids backup/antivirus tools scanning tens of thousands of mod files."
+        )
+
+    desktops = [home / "Desktop" if home is not None else None]
+    onedrive = os.environ.get("OneDrive")
+    if onedrive:
+        desktops.append(Path(onedrive) / "Desktop")
+    if any(_is_within(text, d) for d in desktops):
+        warnings.append(
+            "This path is on the Desktop. Like Documents it is swept up by backup, sync and "
+            "antivirus tools scanning tens of thousands of mod files, and it starts the path "
+            "far from the drive root. A dedicated folder (e.g. D:\\Skyrim) is faster and safer."
+        )
+
+    if _has_component(text, {"steamapps"}):
+        warnings.append(
+            "This path is inside a Steam library (steamapps). Steam verifies and updates the "
+            "files under its library and can overwrite or delete the instance; keep the "
+            "instance outside every Steam library folder."
+        )
+
+    if game_path and _is_within(text, game_path):
+        warnings.append(
+            "This path is inside the game folder. Building an instance there would copy the "
+            "game into itself when the game is copied into the instance (--stock-game); "
+            "keep the instance in its own folder (e.g. D:\\Skyrim)."
+        )
+
+    return warnings
+
+
+def report_game_version(
+    manifest: dict[str, Any],
+    game_path: Path | str | None,
+    game_name: str | None,
+    rep: Reporter,
+    *,
+    is_base: bool = True,
+) -> tuple[str, str] | None:
+    """Log how the installed game version compares with the one the collection targets.
+
+    Advisory: a match is a log line, a mismatch or an unreadable version is a warning,
+    and neither ever fails a stage. The collection can still be built against the wrong
+    runtime -- with `--stock-game` the fix (a downgrade patcher) is applied to the copy
+    afterwards. Returns the `(status, message)` it reported, or None when the manifest
+    names no game version.
+
+    For an add-on layer (`is_base=False`, i.e. `c2mo2 add`) the base collection's version
+    is the one that matters, and curators fill the field loosely on add-ons, so a
+    mismatch is a plain log line there rather than a warning.
+    """
+    versions = game_version.manifest_game_versions(manifest)
+    result = game_version.check_game_version(versions, game_path, game_name)
+    if result is None:
+        return None
+    status, message = result
+    if status == "match" or not is_base:
+        if status != "match":
+            message = (
+                f"note: this add-on collection lists game version {', '.join(versions)}; "
+                "the base collection's version is the one that applies"
+            )
+            result = (status, message)
+        rep.log(message)
+    else:
+        rep.warn(message)
+    return result
 
 
 @dataclass
@@ -559,6 +709,8 @@ def add_layer(
         run.record("fetch", "ok", f"{info.name} revision {revision}, {mod_count} mods")
         rep.done("fetch", f"{info.name} [{domain}] revision {revision} -> {manifest_path}")
 
+    report_game_version(manifest, game_path, game_name, rep, is_base=not led.data.get("layers"))
+
     ctx = LayerContext(
         slug=ref.slug,
         revision=revision,
@@ -806,12 +958,8 @@ def cmd_create(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         rep.warn(f"--game-path {game_path} is not a directory")
         return 2
 
-    if len(str(paths.out)) > PATH_WARN_LEN:
-        rep.warn(
-            f"instance path is {len(str(paths.out))} characters ({paths.out}). Windows caps "
-            f"full paths at 260 and mod files nest deeply under it; {PATH_WARN_LEN} or fewer "
-            "(e.g. D:\\Skyrim) leaves room for the deepest mod file."
-        )
+    for warning in instance_path_warnings(paths.out, game_path):
+        rep.warn(f"{paths.out}: {warning}")
 
     load_dotenv()
     api_key = os.environ.get("NEXUS_API_KEY") or None

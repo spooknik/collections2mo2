@@ -62,6 +62,16 @@ read as a fallback.
 - The script extender (SKSE, SKSE VR, F4SE, NVSE) is found by its loader executable in
   the installed mod folders, not just by mod name, and is pinned as MO2's default
   executable in a fresh instance.
+- A game version check: the wizard's location page and `c2mo2 create` read the game
+  executable's own version and compare it with the version the collection was built
+  against (`info.gameVersions`), confirming a match on one line and warning on a
+  difference. Advisory only - it never blocks a run, because a `Stock Game` copy can be
+  downgraded or patched afterwards. `c2mo2 report` prints the collection's target
+  version too.
+- More instance-folder location warnings: Program Files, the Windows folder, the
+  Desktop (including OneDrive's), a Steam library (`steamapps`) and the game folder
+  itself, alongside the existing long-path, OneDrive and Documents warnings. `create`
+  now prints the same list the wizard shows.
 
 ### Changed
 - The wizard's "Check FOMODs" pre-flight button is gone. It spent one Nexus API call per

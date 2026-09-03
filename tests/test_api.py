@@ -180,6 +180,144 @@ def test_path_warnings_empty_for_short_path():
     assert api.path_warnings("D:/Skyrim") == []
 
 
+def _neutral_location_env(monkeypatch, tmp_path):
+    """Make the environment-derived warnings deterministic: a home and the Program
+    Files / Windows variables all pointed somewhere the test path is not under."""
+    home = tmp_path / "home"
+    monkeypatch.setattr(api.create.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("ProgramFiles", "C:\\Program Files")
+    monkeypatch.setenv("ProgramFiles(x86)", "C:\\Program Files (x86)")
+    monkeypatch.setenv("ProgramW6432", "C:\\Program Files")
+    monkeypatch.setenv("SystemRoot", "C:\\Windows")
+    monkeypatch.delenv("OneDrive", raising=False)
+    return home
+
+
+def test_path_warnings_flags_program_files(monkeypatch, tmp_path):
+    _neutral_location_env(monkeypatch, tmp_path)
+    warnings = api.path_warnings("C:/Program Files/Skyrim")
+    assert any("Program Files" in w and "UAC" in w for w in warnings)
+
+
+def test_path_warnings_flags_program_files_x86(monkeypatch, tmp_path):
+    _neutral_location_env(monkeypatch, tmp_path)
+    warnings = api.path_warnings("C:/Program Files (x86)/GTS")
+    assert any("Program Files" in w for w in warnings)
+
+
+def test_path_warnings_flags_the_windows_folder(monkeypatch, tmp_path):
+    _neutral_location_env(monkeypatch, tmp_path)
+    warnings = api.path_warnings("C:/Windows/GTS")
+    assert any("Windows folder" in w for w in warnings)
+
+
+def test_path_warnings_flags_the_desktop(monkeypatch, tmp_path):
+    home = _neutral_location_env(monkeypatch, tmp_path)
+    warnings = api.path_warnings(home / "Desktop" / "GTS")
+    assert any("Desktop" in w for w in warnings)
+
+
+def test_path_warnings_flags_the_onedrive_desktop(monkeypatch, tmp_path):
+    _neutral_location_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OneDrive", str(tmp_path / "OneDrive"))
+    warnings = api.path_warnings(tmp_path / "OneDrive" / "Desktop" / "GTS")
+    assert any("Desktop" in w for w in warnings)
+
+
+def test_path_warnings_flags_a_steam_library(monkeypatch, tmp_path):
+    _neutral_location_env(monkeypatch, tmp_path)
+    warnings = api.path_warnings("D:/SteamLibrary/steamapps/common/GTS")
+    assert any("Steam library" in w for w in warnings)
+
+
+def test_path_warnings_flags_the_game_folder(monkeypatch, tmp_path):
+    _neutral_location_env(monkeypatch, tmp_path)
+    warnings = api.path_warnings("D:/Skyrim/GTS", "D:/Skyrim")
+    assert any("inside the game folder" in w for w in warnings)
+    # ...and the same path is fine when it is not under the game folder.
+    assert not any("inside the game folder" in w for w in api.path_warnings("D:/GTS", "D:/Skyrim"))
+
+
+def test_path_warnings_stay_quiet_for_a_plain_folder(monkeypatch, tmp_path):
+    _neutral_location_env(monkeypatch, tmp_path)
+    assert api.path_warnings("D:/GTS", "D:/Skyrim") == []
+
+
+# -- game version check ------------------------------------------------------------------
+
+
+def test_game_version_check_delegates_and_reports_a_mismatch(monkeypatch):
+    monkeypatch.setattr(api.game_version, "installed_game_version", lambda p, n: "1.6.640.0")
+    result = api.game_version_check(["1.6.1170.0"], "D:/Skyrim", "skyrimspecialedition")
+    assert result is not None
+    assert result[0] == "mismatch"
+    assert "Skyrim Special Edition 1.6.1170" in result[1]
+
+
+def test_game_version_check_returns_none_without_a_target_version(monkeypatch):
+    monkeypatch.setattr(api.game_version, "installed_game_version", lambda p, n: "1.6.640.0")
+    assert api.game_version_check([], "D:/Skyrim") is None
+
+
+def test_short_game_version():
+    assert api.short_game_version("1.6.1170.0") == "1.6.1170"
+
+
+class _FakeGraphQLClient:
+    """A `NexusClient` stand-in whose `graphql` returns one canned payload."""
+
+    def __init__(self, data):
+        self._data = data
+        self.queries: list[str] = []
+
+    def graphql(self, query, variables=None):
+        self.queries.append(query)
+        return self._data
+
+
+_SUMMARY_PAYLOAD = {
+    "collection": {
+        "name": "Gate to Sovngarde",
+        "summary": "A collection",
+        "game": {"domainName": "skyrimspecialedition"},
+        "user": {"name": "Curator"},
+        "latestPublishedRevision": {"revisionNumber": 118},
+        "revisions": [{"revisionNumber": 117, "status": "published"}],
+    },
+    "collectionRevision": {
+        "revisionNumber": 117,
+        "modCount": 1500,
+        "totalSize": 123,
+        "downloadLink": "/v2/x",
+        "gameVersions": [{"reference": "1.7.104.0"}],
+    },
+}
+
+
+def test_fetch_collection_summary_reads_game_versions(monkeypatch):
+    client = _FakeGraphQLClient(_SUMMARY_PAYLOAD)
+    monkeypatch.setattr(api, "NexusClient", lambda api_key=None: client)
+    summary = api.fetch_collection_summary(
+        "https://www.nexusmods.com/games/skyrimspecialedition/collections/qdurkx"
+    )
+    assert summary.game_versions == ["1.7.104.0"]
+    assert "gameVersions" in client.queries[0]
+
+
+def test_fetch_collection_summary_without_game_versions(monkeypatch):
+    payload = {
+        "collection": _SUMMARY_PAYLOAD["collection"],
+        "collectionRevision": {
+            k: v for k, v in _SUMMARY_PAYLOAD["collectionRevision"].items() if k != "gameVersions"
+        },
+    }
+    monkeypatch.setattr(api, "NexusClient", lambda api_key=None: _FakeGraphQLClient(payload))
+    summary = api.fetch_collection_summary(
+        "https://www.nexusmods.com/games/skyrimspecialedition/collections/qdurkx"
+    )
+    assert summary.game_versions == []
+
+
 def test_default_instance_dir_sanitizes_name():
     result = api.default_instance_dir('Bad<>:"/\\|?*Name')
     assert result.name == "BadName"

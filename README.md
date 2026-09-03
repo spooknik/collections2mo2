@@ -55,7 +55,8 @@ instance to a `.wabbajack` modlist.
   - `c2mo2 wabbajack` will download `wabbajack-cli` itself if it isn't already
     installed.
 - A short install path (e.g. `D:\GTS`, not `C:\Users\...\Documents\My Modding
-  Projects\...`) 
+  Projects\...`) - and not under Program Files, Documents, Desktop, OneDrive or a
+  Steam library. The wizard and `create` warn about all of these.
 
 Running from source with `uv` for now; there's no signed release build yet, so
 Windows SmartScreen may warn on a future packaged `.exe` until code signing is set up.
@@ -136,6 +137,7 @@ Full answers in [`docs/faq.md`](docs/faq.md). Short version:
 - **MO2 shows `SkyrimRuntimeSwapper.exe` when I launch SKSE.** By design on
   collections that need a specific game version - it downgrades at launch and
   reverts on exit.
+- **Which Skyrim version does it need?** Whatever the collection was built against. It never changes your game: with Stock Game it works on a copy, so you can downgrade or patch that copy freely, and Steam's install stays untouched. The wizard and `create` warn when your game's version differs from the collection's.
 - **First MO2 start takes a minute or more.** It's indexing a couple thousand mods.
   Normal.
 - **xEdit/DynDOLOD only see vanilla plugins.** Run `c2mo2 tools refresh` on instances

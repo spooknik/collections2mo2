@@ -100,3 +100,70 @@ def test_install_tools_stage_failure_is_a_failed_stage(monkeypatch, tmp_path: Pa
     assert run.failed
     assert run.stages[0].name == "tools"
     assert any("tools failed" in w for w in rep.warnings)
+
+
+# -- report_game_version: advisory, never a failed stage ---------------------------------
+
+
+def test_report_game_version_logs_a_match(monkeypatch):
+    monkeypatch.setattr(
+        create.game_version, "installed_game_version", lambda path, name: "1.6.1170.0"
+    )
+    rep = _CollectingReporter()
+    manifest = {"info": {"gameVersions": ["1.6.1170.0"]}}
+
+    result = create.report_game_version(manifest, "D:/Skyrim", "SkyrimSE", rep)
+
+    assert result == ("match", "Game version 1.6.1170 matches the collection.")
+    assert rep.logs == ["Game version 1.6.1170 matches the collection."]
+    assert rep.warnings == []
+
+
+def test_report_game_version_warns_on_a_mismatch(monkeypatch):
+    monkeypatch.setattr(
+        create.game_version, "installed_game_version", lambda path, name: "1.6.640.0"
+    )
+    rep = _CollectingReporter()
+    manifest = {"info": {"gameVersions": ["1.6.1170.0"]}}
+
+    status, _message = create.report_game_version(manifest, "D:/Skyrim", "SkyrimSE", rep)
+
+    assert status == "mismatch"
+    assert rep.logs == []
+    assert rep.warnings == [message]
+    assert "Skyrim Special Edition 1.6.1170" in message
+    assert "the game at D:/Skyrim is 1.6.640" in message
+
+
+def test_report_game_version_warns_when_the_version_cannot_be_read(monkeypatch):
+    monkeypatch.setattr(create.game_version, "installed_game_version", lambda path, name: None)
+    rep = _CollectingReporter()
+
+    status, _message = create.report_game_version(
+        {"info": {"gameVersions": ["1.6.1170.0"]}}, "D:/Skyrim", "SkyrimSE", rep
+    )
+
+    assert status == "unknown"
+    assert rep.warnings == [message]
+
+
+def test_report_game_version_is_silent_without_a_manifest_version(monkeypatch):
+    monkeypatch.setattr(
+        create.game_version, "installed_game_version", lambda path, name: "1.6.1170.0"
+    )
+    rep = _CollectingReporter()
+
+    assert create.report_game_version({"info": {}}, "D:/Skyrim", "SkyrimSE", rep) is None
+    assert rep.logs == [] and rep.warnings == []
+
+
+def test_report_game_version_addon_mismatch_is_a_note_not_a_warning(monkeypatch):
+    monkeypatch.setattr(create.game_version, "installed_game_version", lambda *a, **k: "1.7.104.0")
+    manifest = {"info": {"gameVersions": ["1.6.1170.0"]}}
+    rep = _CollectingReporter()
+    status, _message = create.report_game_version(
+        manifest, "D:/Skyrim", "SkyrimSE", rep, is_base=False
+    )
+    assert status == "mismatch"
+    assert rep.warnings == []
+    assert any("add-on collection" in line for line in rep.logs)

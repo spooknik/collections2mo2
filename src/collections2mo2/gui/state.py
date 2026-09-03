@@ -28,6 +28,11 @@ class WizardState:
     instance_dir: Path | None = None
     game_path: Path | None = None
     stock_game: bool = True
+    # The Location page's advisory game-version check: ("match"|"mismatch"|"unknown",
+    # message), or None when the collection records no target version. The Review page
+    # restates it; nothing in the run acts on it.
+    game_version_check: tuple[str, str] | None = None
+    installed_game_version: str | None = None
 
     # -- tools --------------------------------------------------------------
     tool_ids: list[str] = field(default_factory=list)
@@ -59,6 +64,8 @@ class WizardState:
         self.instance_dir = None
         self.game_path = None
         self.stock_game = True
+        self.game_version_check = None
+        self.installed_game_version = None
         self.tool_ids = []
         self.resolution = "keep"
         self.vsync = "keep"

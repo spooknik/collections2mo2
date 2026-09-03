@@ -41,7 +41,7 @@ from typing import Any
 import keyring
 import keyring.errors
 
-from . import build, create, layers, ledger, profile, survey, tools
+from . import build, create, game_version, layers, ledger, profile, survey, tools
 from . import sevenzip as sevenzip_mod
 from . import tools as tools_mod
 from .manifest import fetch_manifest, load_manifest
@@ -70,11 +70,13 @@ __all__ = [
     "export_to_wabbajack",
     "fetch_collection_summary",
     "format_bytes",
+    "game_version_check",
     "get_saved_api_key",
     "has_update_support",
     "has_wabbajack_support",
     "install_more_tools",
     "install_tools",
+    "installed_game_version",
     "instance_exists",
     "launch_mod_organizer",
     "list_revisions",
@@ -86,6 +88,7 @@ __all__ = [
     "remove_collection_layer",
     "run_fomod_survey",
     "save_api_key",
+    "short_game_version",
     "update_collection_layer",
     "validate_api_key",
 ]
@@ -253,6 +256,9 @@ class CollectionSummary:
     revision_number: int
     latest_revision_number: int
     revisions: list[RevisionChoice] = field(default_factory=list)
+    # The game versions the revision was built against ("1.6.1170.0"), same list the
+    # manifest carries as `info.gameVersions`. Empty when the field is missing.
+    game_versions: list[str] = field(default_factory=list)
 
 
 _SUMMARY_QUERY = """
@@ -266,9 +272,21 @@ query($slug: String!, $revision: Int) {
   }
   collectionRevision(slug: $slug, revision: $revision, viewAdultContent: true) {
     revisionNumber modCount totalSize downloadLink
+    gameVersions { reference }
   }
 }
 """
+
+
+def _game_versions(revision: dict[str, Any] | None) -> list[str]:
+    """`gameVersions { reference }` from a `collectionRevision` payload, as strings."""
+    entries = (revision or {}).get("gameVersions") or []
+    out: list[str] = []
+    for entry in entries:
+        reference = entry.get("reference") if isinstance(entry, dict) else entry
+        if reference and str(reference).strip():
+            out.append(str(reference).strip())
+    return out
 
 
 def fetch_collection_summary(
@@ -310,6 +328,7 @@ def fetch_collection_summary(
         revision_number=int(rev["revisionNumber"]),
         latest_revision_number=int(latest) if latest is not None else int(rev["revisionNumber"]),
         revisions=revisions,
+        game_versions=_game_versions(rev),
     )
 
 
@@ -423,32 +442,41 @@ def default_instance_dir(collection_name: str) -> Path:
     return Path("C:/Modding") / safe
 
 
-def path_warnings(path: str | Path) -> list[str]:
-    """Human-readable warnings about `path` as an instance location; empty if it's fine."""
-    text = str(Path(path))
-    warnings: list[str] = []
-    if len(text) > create.PATH_WARN_LEN:
-        warnings.append(
-            f"This path is {len(text)} characters long. Windows caps full paths at 260, and "
-            f"mod files nest deeply inside the instance -- {create.PATH_WARN_LEN} or fewer "
-            "(e.g. D:\\Skyrim) leaves room for the deepest file."
-        )
-    lowered = text.lower()
-    if "onedrive" in lowered:
-        warnings.append(
-            "This path is inside OneDrive. OneDrive can sync or lock files mid-install; pick "
-            "a folder outside it."
-        )
-    try:
-        documents = str(Path.home() / "Documents").lower()
-    except OSError:
-        documents = ""
-    if documents and lowered.startswith(documents):
-        warnings.append(
-            "This path is under Documents. A dedicated folder (e.g. D:\\Skyrim) is usually "
-            "faster and avoids backup/antivirus tools scanning tens of thousands of mod files."
-        )
-    return warnings
+def path_warnings(path: str | Path, game_path: str | Path | None = None) -> list[str]:
+    """Human-readable warnings about `path` as an instance location; empty if it's fine.
+
+    The implementation lives in `create.instance_path_warnings` (this module imports
+    `create`, not the other way round) so `c2mo2 create` prints exactly what the wizard
+    shows. `game_path`, when the caller knows it, adds the "inside the game folder" case.
+    """
+    return create.instance_path_warnings(path, game_path)
+
+
+def game_version_check(
+    collection_versions: list[str],
+    game_path: str | Path | None,
+    game_name: str | None = "skyrimspecialedition",
+) -> tuple[str, str] | None:
+    """`(status, message)` comparing a collection's target game version with the installed
+    one, or None when the collection lists no version. Status: "match"/"mismatch"/"unknown".
+
+    A local file read (the exe's version resource), so the GUI can call it on the UI
+    thread. Never blocks anything: a mismatch is a warning the user can act on later,
+    because a `Stock Game` copy can be downgraded or patched after the build.
+    """
+    return game_version.check_game_version(collection_versions, game_path, game_name)
+
+
+def installed_game_version(
+    game_path: str | Path | None, game_name: str | None = "skyrimspecialedition"
+) -> str | None:
+    """The game's own version as Windows reports it, or None if it can't be read."""
+    return game_version.installed_game_version(game_path, game_name)
+
+
+def short_game_version(version: str) -> str:
+    """`1.6.1170.0` -> `1.6.1170` (the form collections and curators quote)."""
+    return game_version.short_version(version)
 
 
 def _steam_install_path() -> Path | None:

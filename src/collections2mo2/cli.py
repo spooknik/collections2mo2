@@ -64,6 +64,8 @@ def _print_report(path: Path, as_json: bool) -> None:
         print(json.dumps(summary, indent=2))
         return
     print(f"\n== {summary['name']} by {summary['author']} ({summary['game']})")
+    versions = summary.get("game_versions") or []
+    print(f"target game version: {', '.join(versions) if versions else '(not recorded)'}")
     print(f"mods: {summary['mods']}  (optional: {summary['optional']})")
     print(f"sources:        {summary['by_source']}")
     print(f"install modes:  {summary['by_install_mode']}")

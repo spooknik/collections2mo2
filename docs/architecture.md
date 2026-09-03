@@ -87,6 +87,17 @@ gitignored. Never print `.env` contents or the API key.
   `[customExecutables]` entry, and MO2 falls back to 1 when the key is missing. We write the
   script extender first and pin the key (`profile.render_mo2_ini`); an INI MO2 has touched is
   only topped up, never rewritten, so the user's own choice survives re-renders.
+- The game version a collection targets is in the manifest as `info.gameVersions`
+  (`["1.6.1170.0"]`) and on GraphQL as `collectionRevision { gameVersions { reference } }`
+  (verified live, both anonymous-readable). `game_version.py` compares it with the main exe's
+  Windows version resource (`GetFileVersionInfoSizeW`/`VerQueryValueW` on the root block, via
+  `ctypes`), treating the first three numeric components as significant -- Steam and Nexus
+  disagree on the fourth routinely. The check is advisory everywhere: `create` warns and
+  carries on, the wizard never disables Continue, because a `Stock Game` copy can be
+  downgraded or patched after the build.
+- Instance-location warnings live in `create.instance_path_warnings` and `api.path_warnings`
+  delegates to it (api imports create, not the other way round), so `create` and the wizard
+  show the same text.
 - A `--resolution`/`--vsync`/`--window` choice is remembered in the ledger's `display` key and
   re-applied whenever a render is given `keep` for that field (`profile._resolve_effective_display`),
   so `add`/`remove`/`update` -- which never pass these flags -- keep refreshing the generated SSE

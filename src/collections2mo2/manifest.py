@@ -116,6 +116,7 @@ def summarise(manifest: dict[str, Any]) -> dict[str, Any]:
         "name": info.get("name"),
         "author": info.get("author"),
         "game": info.get("domainName"),
+        "game_versions": [str(v) for v in (info.get("gameVersions") or [])],
         "mods": len(mods),
         "optional": optional,
         "by_source": dict(by_source),

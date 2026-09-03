@@ -926,3 +926,78 @@ def test_create_into_action_prefills_the_location_page(qtbot, monkeypatch, _isol
 
     window.pages["review"].on_enter()
     assert "existing folder, downloads reused" in window.pages["review"].summary_label.text()
+
+
+# -- game version check (Location + Review) -------------------------------------------
+
+
+def _summary_with_versions(versions):
+    from collections2mo2 import api
+
+    return api.CollectionSummary(
+        url="https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3",
+        slug="h2uqa3",
+        game_domain="skyrimspecialedition",
+        name="A Collection",
+        summary="",
+        author="Curator",
+        mod_count=10,
+        total_size=1,
+        revision_number=1,
+        latest_revision_number=1,
+        game_versions=versions,
+    )
+
+
+def _location_page_with_version(qtbot, monkeypatch, tmp_path, installed):
+    from collections2mo2 import api
+
+    monkeypatch.setattr(api.game_version, "installed_game_version", lambda p, n: installed)
+    # Setting the game folder would otherwise spin up the real background size-scan
+    # thread, which can outlive the widget past teardown (see test_page_constructs).
+    monkeypatch.setattr(LocationPage, "_start_size_lookup", lambda self, path: None)
+    state = WizardState()
+    state.collection_summary = _summary_with_versions(["1.6.1170.0"])
+    page = LocationPage(state)
+    qtbot.addWidget(page)
+    page.instance_edit.setText("D:/GTS")
+    page.game_edit.setText(str(tmp_path))
+    return page, state
+
+
+def test_location_page_shows_a_version_mismatch(qtbot, monkeypatch, tmp_path):
+    page, state = _location_page_with_version(qtbot, monkeypatch, tmp_path, "1.6.640.0")
+    assert page.game_version_label.isVisibleTo(page)
+    assert "1.6.1170" in page.game_version_label.text()
+    assert state.game_version_check is not None and state.game_version_check[0] == "mismatch"
+    # advisory only: a mismatch must never hold up the wizard
+    assert page.is_ready() is True
+
+
+def test_location_page_confirms_a_matching_version(qtbot, monkeypatch, tmp_path):
+    page, state = _location_page_with_version(qtbot, monkeypatch, tmp_path, "1.6.1170.0")
+    assert page.game_version_label.text() == "Game version 1.6.1170 matches the collection."
+    assert state.game_version_check[0] == "match"
+
+
+def test_location_page_says_nothing_when_the_version_is_unreadable(qtbot, monkeypatch, tmp_path):
+    page, state = _location_page_with_version(qtbot, monkeypatch, tmp_path, None)
+    assert page.game_version_label.text() == ""
+    assert state.game_version_check[0] == "unknown"
+
+
+def test_review_page_states_the_game_version(qtbot):
+    from collections2mo2.gui.pages.review import _game_version_line
+
+    state = WizardState()
+    state.collection_summary = _summary_with_versions(["1.6.1170.0"])
+    assert _game_version_line(state) == ""
+
+    state.game_version_check = ("match", "Game version 1.6.1170 matches the collection.")
+    state.installed_game_version = "1.6.1170.0"
+    assert _game_version_line(state) == (
+        "<b>Game version:</b> 1.6.1170 (collection targets 1.6.1170)"
+    )
+
+    state.game_version_check = ("mismatch", "This collection targets ...")
+    assert _game_version_line(state) == "<b>Game version:</b> This collection targets ..."

@@ -8,6 +8,27 @@ from ... import api
 from .base import WizardPage
 
 
+def _game_version_line(state) -> str:
+    """The one-line restatement of the Location page's advisory version check.
+
+    A match reads as a fact ("Game version: 1.6.1170 (collection targets 1.6.1170)");
+    a mismatch or unreadable version repeats the warning verbatim so it is not possible
+    to reach Start without having seen it. Empty when the collection names no version.
+    """
+    check = state.game_version_check
+    if check is None:
+        return ""
+    status, message = check
+    if status != "match":
+        return f"<b>Game version:</b> {message}"
+    summary = state.collection_summary
+    targets = ", ".join(
+        api.short_game_version(v) for v in (summary.game_versions if summary else [])
+    )
+    installed = api.short_game_version(state.installed_game_version or "")
+    return f"<b>Game version:</b> {installed} (collection targets {targets})"
+
+
 class ReviewPage(WizardPage):
     title = "Review & run"
 
@@ -41,6 +62,9 @@ class ReviewPage(WizardPage):
         reused = " (existing folder, downloads reused)" if s.preset_instance_dir else ""
         lines.append(f"<b>Instance folder:</b> {s.instance_dir}{reused}")
         lines.append(f"<b>Game folder:</b> {s.game_path}")
+        version_line = _game_version_line(s)
+        if version_line:
+            lines.append(version_line)
         lines.append(f"<b>Copy game into instance:</b> {'yes' if s.stock_game else 'no'}")
         lines.append(f"<b>Tools:</b> {', '.join(s.tool_ids) if s.tool_ids else '(none)'}")
         lines.append(

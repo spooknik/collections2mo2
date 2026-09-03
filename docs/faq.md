@@ -55,9 +55,31 @@ archive layouts can bump into it. Mod folder names are already capped and
 deduplicated, but the instance's own path still counts against the budget. Install to
 something short, like `D:\GTS`, not a long nested path under `Documents`.
 
+## Where should I put the instance?
+
+On a drive with room to spare, in a short folder of its own - `D:\GTS`, `C:\Modding\GTS`.
+The wizard and `c2mo2 create` warn (they never refuse) when the folder you picked is one
+of these:
+
+- **Long paths.** Windows caps a full path at 260 characters and mod files nest deeply
+  inside the instance; 40 characters or fewer leaves room for the deepest file.
+- **Program Files / Program Files (x86).** Windows protects those folders, and MO2, its
+  plugins and the mods themselves write there constantly - UAC and file virtualisation
+  break that.
+- **The Windows folder.** Windows' own directory: permission-restricted and serviced by
+  Windows Update. Never put an instance there.
+- **Documents, the Desktop, or OneDrive.** Backup, sync and antivirus tools scan every
+  one of the tens of thousands of files a collection installs, OneDrive can sync or lock
+  a file mid-install, and both start the path a long way from the drive root.
+- **Inside a Steam library (`steamapps`).** Steam verifies and updates the files under
+  its library and can overwrite or delete the instance.
+- **Inside the game folder.** With "Copy the game into the instance" (`--stock-game`)
+  that would copy the game into itself. Keep the instance in its own folder.
+
 ## How does this tool handle different versions of Skyrim?
 
-It never changes your game version, and it does not check it either. What it does:
+It never changes your game version. It does check it, and warns if it does not match what
+the collection expects - a warning only, never a reason to stop. What it does:
 
 - **It works on a copy.** With "Copy the game into the instance" (`--stock-game`), the
   game folder your `--game-path` points at is copied into `<instance>\Stock Game`, and MO2
@@ -78,6 +100,11 @@ It never changes your game version, and it does not check it either. What it doe
   Runtime Swapper that swaps the executable to the required version at launch and
   reverts it on exit (see the entry above). Those still expect the `Stock Game` copy to
   be the version they say.
+- **You get told before you build.** The wizard's "Install location and game" page and
+  `c2mo2 create` read your game executable's version and compare it with the one the
+  collection records. A match is a one-line confirmation; a difference is a warning that
+  names both versions. Neither ever blocks the run - the whole point of the `Stock Game`
+  copy is that you can fix the version afterwards.
 
 `c2mo2 update` follows *collection* revisions, not game updates. If Steam updates the
 game under you, the instance keeps running on its own copy.

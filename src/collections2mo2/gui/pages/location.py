@@ -66,6 +66,13 @@ class LocationPage(WizardPage):
         self.game_status.setWordWrap(True)
         game_layout.addWidget(self.game_status)
 
+        # Version check: advisory only, never a reason to hold up Continue. Styled
+        # amber for a mismatch, muted for the "all good" one-liner, hidden otherwise.
+        self.game_version_label = QLabel("")
+        self.game_version_label.setWordWrap(True)
+        self.game_version_label.setVisible(False)
+        game_layout.addWidget(self.game_version_label)
+
         self.stock_check = QCheckBox("Copy the game into the instance (recommended)")
         self.stock_check.setChecked(True)
         self.stock_check.toggled.connect(self._on_stock_toggled)
@@ -103,6 +110,9 @@ class LocationPage(WizardPage):
             if detected is not None:
                 self.game_edit.setText(str(detected))
         self._update_space()
+        # Re-run even when the game field was already filled in: the collection (and so
+        # the version it targets) is only known once this page is reached.
+        self._update_game_version()
         self._validate()
 
     def _browse_instance(self) -> None:
@@ -119,19 +129,23 @@ class LocationPage(WizardPage):
         if chosen:
             self.game_edit.setText(chosen)
 
+    def _game_path(self) -> Path | None:
+        text = self.game_edit.text().strip()
+        return Path(text) if text else None
+
     def _on_instance_changed(self) -> None:
         text = self.instance_edit.text().strip()
         if not text:
             self.instance_warning.setText("")
             self.set_ready(False)
             return
-        warnings = api.path_warnings(text)
+        warnings = api.path_warnings(text, self._game_path())
         self.instance_warning.setText("\n".join(warnings))
         self._update_space()
         self._validate()
 
     def _on_game_changed(self) -> None:
-        path = Path(self.game_edit.text().strip()) if self.game_edit.text().strip() else None
+        path = self._game_path()
         if path is not None and path.is_dir():
             self.game_status.setText(f"found: {path}")
             self._start_size_lookup(path)
@@ -139,7 +153,43 @@ class LocationPage(WizardPage):
             self.game_status.setText("that folder does not exist")
         else:
             self.game_status.setText("")
+        self._update_game_version()
+        # "inside the game folder" is a property of both paths, so re-run the instance
+        # warnings whenever either side changes.
+        if self.instance_edit.text().strip():
+            self.instance_warning.setText(
+                "\n".join(api.path_warnings(self.instance_edit.text().strip(), path))
+            )
         self._validate()
+
+    def _update_game_version(self) -> None:
+        """Compare the game on disk with the version the collection was built against.
+
+        A local read of the executable's version resource -- fast enough for the UI
+        thread, unlike the folder-size walk next to it. Nothing here can block Continue:
+        the wizard warns and moves on, because with a Stock Game copy the user can
+        downgrade or patch after the build.
+        """
+        self.state.game_version_check = None
+        self.state.installed_game_version = None
+        path = self._game_path()
+        summary = self.state.collection_summary
+        versions = list(summary.game_versions) if summary is not None else []
+        domain = summary.game_domain if summary is not None else None
+        result = None
+        if path is not None and path.is_dir() and versions:
+            self.state.installed_game_version = api.installed_game_version(path, domain)
+            result = api.game_version_check(versions, path, domain)
+        self.state.game_version_check = result
+        if result is None or result[0] == "unknown":
+            self.game_version_label.setVisible(False)
+            self.game_version_label.setText("")
+            return
+        status, message = result
+        style = MUTED_STYLE if status == "match" else warning_style(self.game_version_label)
+        self.game_version_label.setStyleSheet(style)
+        self.game_version_label.setText(message)
+        self.game_version_label.setVisible(True)
 
     def _on_stock_toggled(self, _checked: bool) -> None:
         self._update_space()
