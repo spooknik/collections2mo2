@@ -758,3 +758,13 @@ def test_recents_do_not_migrate_over_existing_entries(_isolated_qsettings):
 
     # The current store already has an entry, so the legacy one is never merged in.
     assert [r.path for r in recents.load_recents()] == [str(current_dir)]
+
+
+def test_app_icon_is_shipped_and_loads(qtbot):
+    from collections2mo2.gui.app import ICON_PATH, WizardWindow, app_icon
+
+    assert ICON_PATH.is_file()
+    assert not app_icon().isNull()
+    window = WizardWindow()
+    qtbot.addWidget(window)
+    assert not window.windowIcon().isNull()

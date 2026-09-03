@@ -498,22 +498,61 @@ def render_loadorder_txt(plugin_order: list[tuple[str, bool]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# Script-extender loaders: the executable a collection's game-root (`dinput`) mod drops
+# next to the game binary, and the MO2 executable title registered for it. Whichever is
+# found goes *first* in `[customExecutables]`, which is what makes it MO2's default
+# (see `render_mo2_ini`).
+SCRIPT_EXTENDER_LOADERS: dict[str, str] = {
+    "skse64_loader.exe": "SKSE",
+    "sksevr_loader.exe": "SKSE VR",
+    "skse_loader.exe": "SKSE",
+    "f4se_loader.exe": "F4SE",
+    "nvse_loader.exe": "NVSE",
+}
+
+
+def _find_script_extender_loader(
+    entries: list[dict[str, Any]], mods_dir: Path | None
+) -> tuple[str, str] | None:
+    """`(loader exe, title)` for the script extender a collection installs, or None.
+
+    Looked up on disk first: a game-root mod lands its loader under `Root/` (Root
+    Builder) or at the mod root. Falls back to the mod's name when there is no mods
+    folder to inspect (standalone `profile` runs against a bare install.json).
+    """
+    if mods_dir is not None:
+        for e in entries:
+            folder = e.get("folder")
+            if not folder:
+                continue
+            for exe, title in SCRIPT_EXTENDER_LOADERS.items():
+                if (mods_dir / folder / "Root" / exe).is_file() or (
+                    mods_dir / folder / exe
+                ).is_file():
+                    return exe, title
+    for e in entries:
+        label = f"{e.get('name') or ''} {e.get('folder') or ''}".lower()
+        if "script extender" in label or (e.get("mod_type") == "dinput" and "skse" in label):
+            return "skse64_loader.exe", "SKSE"
+    return None
+
+
 def build_custom_executables(
-    entries: list[dict[str, Any]], tools: list[dict[str, Any]], game_path: str
+    entries: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    game_path: str,
+    mods_dir: Path | None = None,
 ) -> list[dict[str, str]]:
     gp = _fwd(game_path)
     blocks: list[dict[str, str]] = []
 
-    has_script_extender_mod = any("Script Extender" in (e.get("folder") or "") for e in entries)
-    has_dinput_skse = any(
-        e.get("mod_type") == "dinput" and "SKSE" in (e.get("name") or e.get("folder") or "")
-        for e in entries
-    )
-    if has_script_extender_mod or has_dinput_skse:
-        binary = f"{gp}/skse64_loader.exe" if gp else "skse64_loader.exe"
+    loader = _find_script_extender_loader(entries, mods_dir)
+    if loader is not None:
+        exe, title = loader
+        binary = f"{gp}/{exe}" if gp else exe
         blocks.append(
             {
-                "title": "SKSE",
+                "title": title,
                 "binary": binary,
                 "arguments": "",
                 "workingDirectory": gp,
@@ -587,6 +626,15 @@ def render_mo2_ini(
         lines.append(f"{i}\\ownicon={b['ownicon']}")
         lines.append(f"{i}\\steamAppID={b['steamAppID']}")
         lines.append(f"{i}\\toolbar={b['toolbar']}")
+    if exe_blocks and exe_blocks[0]["title"] in SCRIPT_EXTENDER_LOADERS.values():
+        # MO2's executables dropdown has a hidden "<Edit...>" item at index 0, so index 1
+        # is the first [customExecutables] entry: the script extender. MO2 falls back to
+        # 1 anyway when the key is missing; writing it makes the default explicit rather
+        # than incidental. An INI MO2 has already touched is never rewritten (see
+        # `update_mo2_ini`), so a user's later choice sticks.
+        lines.append("")
+        lines.append("[Widgets]")
+        lines.append("MainWindow_executablesListBox_index=1")
     return "\n".join(lines) + "\n"
 
 
@@ -1975,7 +2023,7 @@ def render_instance(
 
     # -- ModOrganizer.ini -------------------------------------------------------------
     all_tools = [t for layer in layers for t in (layer.manifest.get("tools") or [])]
-    exe_blocks = build_custom_executables(order.entries, all_tools, game_path)
+    exe_blocks = build_custom_executables(order.entries, all_tools, game_path, mods_dir=mods_dir)
     ini_path = instance_dir / "ModOrganizer.ini"
     added = update_mo2_ini(ini_path, game_name, game_path, profile_name, mo2_version, exe_blocks)
     if added:
@@ -2038,7 +2086,8 @@ def render_instance(
     )
     rep.log(
         f"modRules: {order.rules.total} total, {order.rules.applied} applied, "
-        f"{order.rules.ignored} ignored (unresolvable), {order.rules.conflicts} conflicts, "
+        f"{order.rules.ignored} skipped (reference mods not in this collection), "
+        f"{order.rules.conflicts} conflicts, "
         f"{order.rules.unsupported} unsupported-type, {order.cycle_breaks} cycle-break(s), "
         f"{order.layer_crossings} cross-layer placement(s)"
     )
@@ -2144,7 +2193,7 @@ def cmd_profile(args: argparse.Namespace, reporter: Reporter | None = None) -> i
         led.save()
 
     tools = manifest.get("tools") or []
-    exe_blocks = build_custom_executables(entries, tools, game_path)
+    exe_blocks = build_custom_executables(entries, tools, game_path, mods_dir=mo2_dir / "mods")
     ini_path = mo2_dir / "ModOrganizer.ini"
     _write(
         ini_path, render_mo2_ini(game_name, game_path, profile_name, args.mo2_version, exe_blocks)
@@ -2188,7 +2237,8 @@ def cmd_profile(args: argparse.Namespace, reporter: Reporter | None = None) -> i
     )
     rep.log(
         f"modRules: {order_report.rules_total} total, {order_report.rules_applied} applied, "
-        f"{order_report.rules_ignored} ignored (unresolvable), {order_report.rules_conflicts} conflicts, "
+        f"{order_report.rules_ignored} skipped (reference mods not in this collection), "
+        f"{order_report.rules_conflicts} conflicts, "
         f"{order_report.rules_unsupported} unsupported-type, {order_report.cycle_breaks} cycle-break(s)"
     )
     rep.log(f"phase boundary crossings caused by rules: {order_report.phase_crossings}")

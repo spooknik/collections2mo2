@@ -13,6 +13,8 @@ block_cipher = None
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(SPEC), ".."))
 SRC_DIR = os.path.join(REPO_ROOT, "src")
 CATALOG = os.path.join(SRC_DIR, "collections2mo2", "tools_catalog.json")
+ASSETS = os.path.join(SRC_DIR, "collections2mo2", "gui", "assets")
+ICON = os.path.join(ASSETS, "icon.ico")
 
 a = Analysis(
     [os.path.join(REPO_ROOT, "packaging", "run_gui.py")],
@@ -20,6 +22,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (CATALOG, "collections2mo2"),
+        (ASSETS, os.path.join("collections2mo2", "gui", "assets")),
     ],
     hiddenimports=[
         "collections2mo2.gui.pages.signin",
@@ -52,6 +55,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    icon=ICON,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

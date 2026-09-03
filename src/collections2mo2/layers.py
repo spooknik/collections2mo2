@@ -196,7 +196,9 @@ def _layer_executables(
         manifest = load_manifest(manifest_path)
     except (OSError, ValueError):
         return []
-    return profile.build_custom_executables(entries, manifest.get("tools") or [], game_path)
+    return profile.build_custom_executables(
+        entries, manifest.get("tools") or [], game_path, mods_dir=paths.mods
+    )
 
 
 def _exe_key(block: dict[str, str]) -> tuple[str, str]:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -59,6 +61,7 @@ class WizardWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("collections2mo2")
+        self.setWindowIcon(app_icon())
         self.resize(920, 720)
 
         self.state = WizardState()
@@ -282,8 +285,31 @@ class WizardWindow(QMainWindow):
         event.accept()
 
 
+ICON_PATH = Path(__file__).resolve().parent / "assets" / "icon.ico"
+
+
+def app_icon() -> QIcon:
+    """The app icon (`assets/icon.ico`, drawn by `scripts/make_icon.py`)."""
+    return QIcon(str(ICON_PATH))
+
+
+def _claim_taskbar_identity() -> None:
+    """Give the process its own Windows taskbar identity so the taskbar shows our icon
+    instead of the Python interpreter's when running from source."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("spooknik.collections2mo2")
+    except (AttributeError, OSError):
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _claim_taskbar_identity()
     app = QApplication(argv if argv is not None else sys.argv)
+    app.setWindowIcon(app_icon())
     window = WizardWindow()
     window.show()
     return app.exec()

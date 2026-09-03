@@ -4,4 +4,5 @@
 *.7z binary
 *.zip binary
 *.exe binary
+*.ico binary
 *.dll binary

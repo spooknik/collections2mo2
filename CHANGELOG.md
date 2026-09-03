@@ -49,7 +49,16 @@ read as a fallback.
   wizard's Tools page now actually does this (previously the selection was shown on the
   review page but never installed).
 
+- An app icon for the GUI window, taskbar and packaged executable
+  (`scripts/make_icon.py` regenerates it).
+- The script extender (SKSE, SKSE VR, F4SE, NVSE) is found by its loader executable in
+  the installed mod folders, not just by mod name, and is pinned as MO2's default
+  executable in a fresh instance.
+
 ### Changed
+- The profile summary now says "N skipped (reference mods not in this collection)" for
+  curator rules that reference mods outside the collection, instead of "ignored
+  (unresolvable)"; those rules were and are harmless.
 
 - Renamed the project from `collections2wabbajack`/`c2wj` to `collections2mo2`/`c2mo2` -
   see the migration note above.

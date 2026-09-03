@@ -653,3 +653,55 @@ def test_render_mo2_ini_custom_executables_block():
     assert "1\\title=SKSE" in lines
     assert "1\\binary=D:/Games/Skyrim/skse64_loader.exe" in lines
     assert "1\\toolbar=true" in lines
+
+
+# ------------------------------------------------------ script extender executable
+
+
+def _exe_titles(blocks):
+    return [b["title"] for b in blocks]
+
+
+def test_script_extender_found_on_disk_under_root_goes_first(tmp_path: Path):
+    mods = tmp_path / "mods"
+    (mods / "Some Loader Mod" / "Root").mkdir(parents=True)
+    (mods / "Some Loader Mod" / "Root" / "f4se_loader.exe").write_bytes(b"")
+    entries = [{"folder": "Some Loader Mod", "mod_type": "dinput"}]
+    tools = [{"name": "xEdit", "exe": "xEdit64.exe"}]
+
+    blocks = profile.build_custom_executables(entries, tools, "D:/Game", mods_dir=mods)
+
+    assert _exe_titles(blocks) == ["F4SE", "xEdit"]
+    assert blocks[0]["binary"] == "D:/Game/f4se_loader.exe"
+
+
+def test_script_extender_name_fallback_is_case_insensitive():
+    entries = [{"folder": "skse64 2.2.6", "name": "skse64", "mod_type": "dinput"}]
+    blocks = profile.build_custom_executables(entries, [], "D:/Game")
+    assert _exe_titles(blocks) == ["SKSE"]
+    assert blocks[0]["binary"] == "D:/Game/skse64_loader.exe"
+
+
+def test_no_script_extender_means_no_entry():
+    entries = [{"folder": "Rain Splashes SKSE", "mod_type": ""}]
+    assert profile.build_custom_executables(entries, [], "D:/Game") == []
+
+
+def test_render_mo2_ini_pins_dropdown_to_script_extender():
+    blocks = profile.build_custom_executables(
+        [{"folder": "Skyrim Script Extender", "mod_type": "dinput"}],
+        [{"name": "xEdit", "exe": "xEdit64.exe"}],
+        "D:/Game",
+    )
+    ini = profile.render_mo2_ini("SkyrimSE", "D:/Game", "Default", "2.5.2", blocks)
+    assert "[Widgets]" in ini
+    assert "MainWindow_executablesListBox_index=1" in ini
+    assert ini.index("[customExecutables]") < ini.index("[Widgets]")
+
+
+def test_render_mo2_ini_does_not_pin_without_script_extender():
+    blocks = profile.build_custom_executables(
+        [], [{"name": "xEdit", "exe": "xEdit64.exe"}], "D:/Game"
+    )
+    ini = profile.render_mo2_ini("SkyrimSE", "D:/Game", "Default", "2.5.2", blocks)
+    assert "[Widgets]" not in ini

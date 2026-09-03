@@ -82,6 +82,11 @@ gitignored. Never print `.env` contents or the API key.
   a full `--force` run takes ~15 minutes for GTS. Close MO2 on that instance first.
 - 7-Zip is bootstrapped into `tools/` from the official GitHub release assets because py7zr cannot
   decode BCJ2 and the "extra" package lacks the RAR codec (see `sevenzip.py` docstring).
+- MO2's executables dropdown has a hidden `<Edit...>` item at index 0, so
+  `[Widgets] MainWindow_executablesListBox_index=1` in ModOrganizer.ini selects the *first*
+  `[customExecutables]` entry, and MO2 falls back to 1 when the key is missing. We write the
+  script extender first and pin the key (`profile.render_mo2_ini`); an INI MO2 has touched is
+  only topped up, never rewritten, so the user's own choice survives re-renders.
 - A `--resolution`/`--vsync`/`--window` choice is remembered in the ledger's `display` key and
   re-applied whenever a render is given `keep` for that field (`profile._resolve_effective_display`),
   so `add`/`remove`/`update` -- which never pass these flags -- keep refreshing the generated SSE
