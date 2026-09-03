@@ -32,6 +32,7 @@ import argparse
 import os
 import re
 import shutil
+import stat
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -797,6 +798,57 @@ def remove_collection_layer(
         force=force,
     )
     return layers.cmd_remove(ns, reporter=reporter)
+
+
+def _clear_readonly(func, path: str, _exc) -> None:
+    """`shutil.rmtree` hook: clear the read-only bit and retry.
+
+    Same pattern as `installer._clear_readonly` / `layers._clear_readonly` -- MO2 and
+    some mod archives ship read-only files that Windows refuses to unlink. Unlike the
+    installer's version this one does *not* swallow the retry's failure: a genuinely
+    locked file (MO2 still running on the instance) has to reach `delete_instance`,
+    which turns it into a message the user can act on.
+    """
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def delete_instance(instance_dir: str | Path, *, reporter: Reporter | None = None) -> None:
+    """Delete a whole c2mo2 instance folder -- MO2, the Stock Game copy, `mods/`,
+    `downloads/`, installed tools, the lot. There is no undo.
+
+    Refuses anything that is not recognisably one of our instances (no ledger) and any
+    drive root, so a mistyped path can never take out an unrelated folder. The GUI's
+    "Remove instance..." button is the only caller; it also drops the folder from the
+    recent-instances list afterwards (`gui.recents.forget_instance`) -- `api.py` never
+    imports the GUI.
+    """
+    rep = get_reporter(reporter)
+    target = Path(instance_dir).expanduser().resolve()
+
+    if target.parent == target or str(target) == target.anchor:
+        raise ApiError(f"Refusing to delete {target}: that is a drive root, not an instance.")
+    if not (
+        (target / ledger.LEDGER_NAME).is_file() or (target / ledger.LEGACY_LEDGER_NAME).is_file()
+    ):
+        raise ApiError(
+            f"{target} is not a c2mo2 instance ({ledger.LEDGER_NAME} not found), "
+            "so it will not be deleted."
+        )
+
+    rep.stage("delete")
+    rep.log(f"deleting {target}")
+    try:
+        shutil.rmtree(target, onexc=_clear_readonly)
+    except OSError as exc:  # PermissionError (locked file) is an OSError subclass
+        locked = getattr(exc, "filename", None) or str(target)
+        raise ApiError(
+            f"{target} could not be fully removed: {locked} is in use or could not be "
+            "deleted. Close Mod Organizer 2 (and anything else using this folder) and "
+            "try again. Whatever was already deleted has been deleted -- the folder is "
+            "now a partial instance."
+        ) from exc
+    rep.done("delete", f"removed {target}")
 
 
 def install_more_tools(

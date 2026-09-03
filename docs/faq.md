@@ -113,6 +113,17 @@ The game-domain mapping covers Skyrim, Skyrim VR, Fallout 4, Fallout New Vegas,
 Fallout 3, and Oblivion in addition to Skyrim SE, but only Skyrim SE has been verified
 end to end. Other games may work but haven't been tested.
 
+## I removed the base collection from an instance. How do I get it back?
+
+The folder still has MO2, the Stock Game copy, your downloads and any installed tools -
+only the collection is gone. Either open the folder in the GUI's **Manage** tab and use
+**Set up a collection here**, which runs the normal create wizard pinned to that folder,
+or run `c2mo2 create <collection url> --out <folder>` against it. Either way the existing
+`downloads/` are reused, so nothing is re-downloaded.
+
+Note that the GUI no longer lets you remove the base collection in the first place:
+removing it is CLI-only (`c2mo2 remove <slug> --force`).
+
 ## I have an instance built by the old `c2wj` name. Does it still work?
 
 Yes. The first time any `c2mo2` command or the GUI opens it, the `c2wj-instance.json`

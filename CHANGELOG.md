@@ -49,6 +49,14 @@ read as a fallback.
   wizard's Tools page now actually does this (previously the selection was shown on the
   review page but never installed).
 
+- "Remove instance..." on the GUI's Manage tab, which deletes a whole instance folder
+  (MO2, the Stock Game copy, mods, downloads and installed tools) after a confirmation
+  that names the folder and its total size, then forgets it from the recent list.
+- A guard on the Manage tab against removing the base collection - that is CLI-only
+  (`c2mo2 remove --force`) - and a way back for an instance that has no collection left:
+  "Set up a collection here" runs the normal create wizard pinned to that folder, so its
+  existing downloads are reused.
+
 - An app icon for the GUI window, taskbar and packaged executable
   (`scripts/make_icon.py` regenerates it).
 - The script extender (SKSE, SKSE VR, F4SE, NVSE) is found by its loader executable in

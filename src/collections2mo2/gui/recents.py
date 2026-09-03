@@ -132,6 +132,16 @@ def remember_instance(path: str | Path, collection_name: str) -> None:
     save_recents(recents[:MAX_RECENTS])
 
 
+def forget_instance(path: str | Path) -> None:
+    """Drop `path` from the recents list. Called by the Manage page after
+    `api.delete_instance` -- pruning on the next read would get there eventually, but
+    the combo box is refreshed immediately after a delete and must not offer a folder
+    that no longer exists."""
+    path_str = str(Path(path))
+    remaining = [r for r in load_recents(prune=False) if r.path != path_str]
+    save_recents(remaining)
+
+
 def most_recent_valid() -> RecentInstance | None:
     recents = load_recents(prune=True)
     return recents[0] if recents else None

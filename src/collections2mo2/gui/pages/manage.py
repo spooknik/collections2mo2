@@ -66,6 +66,8 @@ class ManagePage(WizardPage):
         self._busy = False
         self._wabbajack_supported = True
         self._update_supported = True
+        self._size_worker: EngineWorker | None = None
+        self._pending_delete: Path | None = None
 
         layout = QVBoxLayout(self)
 
@@ -96,6 +98,23 @@ class ManagePage(WizardPage):
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
+        # Shown when the loaded instance's ledger has no (base) collection left -- the
+        # state you land in after removing the base layer from the CLI. The folder
+        # still holds MO2, the Stock Game copy, downloads and tools, and `create` runs
+        # straight into it, so offer that instead of leaving the user stranded.
+        self.no_layers_box = QGroupBox("No collection in this instance")
+        no_layers_layout = QVBoxLayout(self.no_layers_box)
+        no_layers_label = QLabel(
+            "This instance has no collection. Set one up here to reuse its downloads."
+        )
+        no_layers_label.setWordWrap(True)
+        no_layers_layout.addWidget(no_layers_label)
+        self.setup_collection_btn = QPushButton("Set up a collection here...")
+        self.setup_collection_btn.clicked.connect(self._setup_collection_here)
+        no_layers_layout.addWidget(self.setup_collection_btn)
+        self.no_layers_box.setVisible(False)
+        layout.addWidget(self.no_layers_box)
+
         self.info_box = QGroupBox("Instance")
         info_layout = QVBoxLayout(self.info_box)
         self.info_label = QLabel("")
@@ -123,6 +142,12 @@ class ManagePage(WizardPage):
         self.wabbajack_btn = QPushButton("Export to Wabbajack")
         self.wabbajack_btn.clicked.connect(self._export_wabbajack)
         action_row.addWidget(self.wabbajack_btn)
+        self.remove_instance_btn = QPushButton("Remove instance...")
+        # Nothing is loaded yet; `_apply_enabled_state` re-decides from `self._instance`
+        # on every load, action and busy transition.
+        self.remove_instance_btn.setEnabled(False)
+        self.remove_instance_btn.clicked.connect(self._remove_instance)
+        action_row.addWidget(self.remove_instance_btn)
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._cancel)
@@ -176,6 +201,8 @@ class ManagePage(WizardPage):
         self.update_btn.setEnabled(not busy and self._update_supported)
         self.tools_btn.setEnabled(not busy)
         self.wabbajack_btn.setEnabled(not busy and self._wabbajack_supported)
+        self.remove_instance_btn.setEnabled(not busy and self._instance is not None)
+        self.setup_collection_btn.setEnabled(not busy)
         self.cancel_btn.setEnabled(busy)
         self.busy_label.setVisible(busy)
 
@@ -273,10 +300,14 @@ class ManagePage(WizardPage):
                     item.setData(1000, layer.slug)  # stash the slug for later lookup
                 self.table.setItem(row, col, item)
         self.info_box.setVisible(True)
+        has_base = any(layer.is_base for layer in summary.layers)
+        self.no_layers_box.setVisible(not has_base)
+        self._apply_enabled_state()
 
     def _on_load_failed(self, message: str) -> None:
         self.status_label.setText(message)
         self.info_box.setVisible(False)
+        self.no_layers_box.setVisible(False)
 
     def _append_log(self, text: str, level: str = "info") -> None:
         self.action_progress.log_message(text, level=level)
@@ -350,20 +381,106 @@ class ManagePage(WizardPage):
             return
         slug = self.table.item(row, 0).data(1000)
         is_base = self._summary is not None and self._summary.layers[row].is_base
+        if is_base:
+            # Removing the base leaves MO2, the Stock Game copy, downloads and tools
+            # behind with no collection -- a state the GUI used to offer with no way
+            # out. The CLI still allows it (`c2mo2 remove --force`).
+            QMessageBox.information(
+                self,
+                "Base collection",
+                f"{slug} is the base collection of this instance and cannot be removed "
+                'here.\n\nTo start over, use "Remove instance..." to delete the whole '
+                "instance folder. To make another collection the one you play, add it "
+                'on top first with "Add collection...".',
+            )
+            return
         confirm = QMessageBox.question(
             self,
             "Remove layer",
-            f"Remove layer {slug}? Mod folders it alone owns will be deleted."
-            + (" This is the BASE layer." if is_base else ""),
+            f"Remove layer {slug}? Mod folders it alone owns will be deleted.",
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
         self._run_action(
             "Remove layer",
             api.remove_collection_layer,
-            {"instance_dir": self._instance, "slug": slug, "force": is_base},
+            {"instance_dir": self._instance, "slug": slug, "force": False},
             lambda rc: self._on_action_done("remove", rc),
         )
+
+    # -- remove the whole instance folder -------------------------------------------
+
+    def _setup_collection_here(self) -> None:
+        """ "Set up a collection here": run the normal create wizard, pinned to this
+        instance folder so its `downloads/` are reused (see
+        `WizardWindow._on_custom_action` / `LocationPage.on_enter`)."""
+        if self._busy:
+            self._refuse_busy()
+            return
+        if self._instance is None:
+            self.status_label.setText("Load an instance first.")
+            return
+        self.custom_action.emit(f"create_into:{self._instance}")
+
+    def _remove_instance(self) -> None:
+        """Delete the whole instance folder, after a confirmation that names it and
+        shows how much is about to go. The size walk can take a few seconds on a big
+        instance, so it runs on a worker thread and the dialog only opens once it is
+        back (`_on_instance_size`)."""
+        if self._busy:
+            self._refuse_busy()
+            return
+        if self._instance is None:
+            self.status_label.setText("Load an instance first.")
+            return
+        self._pending_delete = self._instance
+        self.status_label.setText("calculating folder size...")
+        self._size_worker = EngineWorker(api.dir_size_bytes, {"path": self._instance})
+        self._size_worker.succeeded.connect(self._on_instance_size)
+        self._size_worker.failed.connect(lambda _msg: self._on_instance_size(-1))
+        self._size_worker.start()
+
+    def _on_instance_size(self, size: int) -> None:
+        self.status_label.setText("")
+        target = self._pending_delete
+        self._pending_delete = None
+        if target is None:
+            return
+        size_text = api.format_bytes(size) if size >= 0 else "unknown size"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Remove instance")
+        box.setText(f"Delete the entire instance folder?\n\n{target}  ({size_text})")
+        box.setInformativeText(
+            "Everything inside it is deleted: Mod Organizer 2, the Stock Game copy of "
+            "your game, every installed mod, the downloaded archives and any tools "
+            "installed into it.\n\nYour real Steam install is not touched. This cannot "
+            "be undone."
+        )
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        if box.exec() != QMessageBox.StandardButton.Yes:
+            return
+        self._run_action(
+            "Remove instance",
+            api.delete_instance,
+            {"instance_dir": target},
+            lambda _result: self._on_instance_deleted(target),
+        )
+
+    def _on_instance_deleted(self, target: Path) -> None:
+        recents.forget_instance(target)
+        self._append_log(f"instance removed: {target}")
+        self._instance = None
+        self._summary = None
+        self.table.setRowCount(0)
+        self.info_box.setVisible(False)
+        self.no_layers_box.setVisible(False)
+        self.path_edit.clear()
+        self.status_label.setText(f"Deleted {target}.")
+        self._refresh_recent_combo()
+        self._apply_enabled_state()
+        self.custom_action.emit("reset:home")
 
     def _update_layer(self) -> None:
         if self._busy:

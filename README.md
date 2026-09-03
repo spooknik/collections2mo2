@@ -72,7 +72,9 @@ sent anywhere but Nexus) -> paste a collection URL -> pick an install folder and
 game folder (Steam installs are auto-detected) -> pick optional tools -> pick display
 settings -> review -> Start. The **Manage** tab (from the home screen) reopens an
 instance you already built: add or remove a collection layer, update a layer, install
-more tools, or export to Wabbajack.
+more tools, or export to Wabbajack. Removing the *base* collection is CLI-only
+(`c2mo2 remove <slug> --force`); the Manage tab offers "Remove instance...", which
+deletes the whole instance folder, instead.
 
 ## Quick start: CLI
 

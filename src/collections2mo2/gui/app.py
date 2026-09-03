@@ -247,6 +247,15 @@ class WizardWindow(QMainWindow):
             path = action.split(":", 1)[1]
             self.pages["manage"].load_path(path)
             self._navigate_to("manage", push_history=True)
+        elif action.startswith("create_into:"):
+            # Manage: an instance whose collection was removed. Start an ordinary
+            # create run, but pinned to that folder so its downloads are reused --
+            # reset first (fresh linear pages), then set the preset, then jump
+            # straight to the collection URL step.
+            path = action.split(":", 1)[1]
+            self._reset_wizard()
+            self.state.preset_instance_dir = Path(path)
+            self._navigate_to("collection", push_history=True)
 
     def _reset_wizard(self) -> None:
         """ "Back to start": clear the collection/location/tools/display choices and

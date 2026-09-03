@@ -38,7 +38,8 @@ class ReviewPage(WizardPage):
                 f"revision {s.selected_revision} ({summary.mod_count} mods, "
                 f"{api.format_bytes(summary.total_size)})"
             )
-        lines.append(f"<b>Instance folder:</b> {s.instance_dir}")
+        reused = " (existing folder, downloads reused)" if s.preset_instance_dir else ""
+        lines.append(f"<b>Instance folder:</b> {s.instance_dir}{reused}")
         lines.append(f"<b>Game folder:</b> {s.game_path}")
         lines.append(f"<b>Copy game into instance:</b> {'yes' if s.stock_game else 'no'}")
         lines.append(f"<b>Tools:</b> {', '.join(s.tool_ids) if s.tool_ids else '(none)'}")

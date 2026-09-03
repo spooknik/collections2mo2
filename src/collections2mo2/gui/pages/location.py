@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from ... import api
-from ..theme import warning_style
+from ..theme import MUTED_STYLE, warning_style
 from ..worker import EngineWorker
 from .base import WizardPage
 
@@ -45,6 +45,11 @@ class LocationPage(WizardPage):
         self.instance_warning.setWordWrap(True)
         self.instance_warning.setStyleSheet(warning_style(self.instance_warning))
         inst_layout.addWidget(self.instance_warning)
+        self.preset_hint = QLabel("Reusing the existing instance folder and its downloads.")
+        self.preset_hint.setWordWrap(True)
+        self.preset_hint.setStyleSheet(MUTED_STYLE)
+        self.preset_hint.setVisible(False)
+        inst_layout.addWidget(self.preset_hint)
         layout.addWidget(inst_box)
 
         game_box = QGroupBox("Game folder (Skyrim Special Edition)")
@@ -80,7 +85,16 @@ class LocationPage(WizardPage):
         layout.addStretch(1)
 
     def on_enter(self) -> None:
-        if not self._defaulted and self.state.collection_summary is not None:
+        # A preset folder (Manage's "Set up a collection here" for an instance whose
+        # collection was removed) wins over the derived default: the whole point is to
+        # land back in that folder and reuse its downloads. `create` is happy running
+        # into an instance folder whose ledger has no layers.
+        preset = self.state.preset_instance_dir
+        if not self._defaulted and preset is not None:
+            self._defaulted = True
+            self.preset_hint.setVisible(True)
+            self.instance_edit.setText(str(preset))
+        elif not self._defaulted and self.state.collection_summary is not None:
             self._defaulted = True
             default_dir = api.default_instance_dir(self.state.collection_summary.name)
             self.instance_edit.setText(str(default_dir))

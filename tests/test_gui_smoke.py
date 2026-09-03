@@ -768,3 +768,161 @@ def test_app_icon_is_shipped_and_loads(qtbot):
     window = WizardWindow()
     qtbot.addWidget(window)
     assert not window.windowIcon().isNull()
+
+
+# -- removing an instance / recovering a layerless one -----------------------------------
+# (product-owner-reported bug: "Remove selected layer" happily removed the BASE
+# collection, leaving MO2, the Stock Game copy, downloads and tools behind with no
+# collection and no way back to `create` from the GUI.)
+
+
+def test_manage_remove_instance_button_disabled_until_an_instance_loads(qtbot):
+    page = ManagePage(WizardState())
+    qtbot.addWidget(page)
+
+    assert page.remove_instance_btn.isEnabled() is False
+    assert page.no_layers_box.isHidden() is True
+
+
+def _fake_summary(out: Path, layers: list) -> object:
+    from collections2mo2 import api
+
+    return api.InstanceSummary(
+        out=out,
+        game_domain="skyrimspecialedition",
+        game_name="Skyrim Special Edition",
+        mo2_version="2.5.2",
+        layers=layers,
+        user_mod_count=0,
+    )
+
+
+def test_manage_shows_the_set_up_a_collection_notice_for_a_layerless_instance(
+    qtbot, _isolated_qsettings
+):
+    tmp_path = _isolated_qsettings
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    (instance / "c2mo2-instance.json").write_text("{}")
+
+    page = ManagePage(WizardState())
+    qtbot.addWidget(page)
+    page._on_loaded(_fake_summary(instance, []))
+
+    assert page.no_layers_box.isHidden() is False
+    assert page.remove_instance_btn.isEnabled() is True
+
+    actions: list[str] = []
+    page.custom_action.connect(actions.append)
+    page.setup_collection_btn.click()
+    assert actions == [f"create_into:{instance}"]
+
+
+def test_manage_hides_the_notice_when_a_base_layer_is_present(qtbot, _isolated_qsettings):
+    from collections2mo2 import api
+
+    tmp_path = _isolated_qsettings
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    (instance / "c2mo2-instance.json").write_text("{}")
+    layer = api.LayerStatus(
+        slug="h2uqa3",
+        revision=68,
+        name="Gate to Sovngarde",
+        author="Nexus",
+        is_base=True,
+        mod_count=292,
+        latest_revision_number=68,
+        update_available=False,
+    )
+
+    page = ManagePage(WizardState())
+    qtbot.addWidget(page)
+    page._on_loaded(_fake_summary(instance, [layer]))
+
+    assert page.no_layers_box.isHidden() is True
+
+
+def test_manage_refuses_to_remove_the_base_layer(qtbot, monkeypatch, _isolated_qsettings):
+    """The base layer is CLI-only (`c2mo2 remove --force`): the GUI explains and
+    points at "Remove instance..." instead of running the removal."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from collections2mo2 import api
+
+    tmp_path = _isolated_qsettings
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    (instance / "c2mo2-instance.json").write_text("{}")
+    layer = api.LayerStatus(
+        slug="h2uqa3",
+        revision=68,
+        name="Gate to Sovngarde",
+        author="Nexus",
+        is_base=True,
+        mod_count=292,
+        latest_revision_number=68,
+        update_available=False,
+    )
+
+    informed: list[str] = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: informed.append(a[2]))
+    removed: list[dict] = []
+    monkeypatch.setattr(
+        api, "remove_collection_layer", lambda **kwargs: removed.append(kwargs) or 0
+    )
+
+    page = ManagePage(WizardState())
+    qtbot.addWidget(page)
+    page._on_loaded(_fake_summary(instance, [layer]))
+    page.table.setCurrentCell(0, 0)
+    page._remove_layer()
+
+    assert removed == []  # nothing ran
+    assert len(informed) == 1
+    assert "Remove instance" in informed[0]
+
+
+def test_wizard_state_preset_instance_dir_is_kept_only_when_asked():
+    state = WizardState()
+    assert state.preset_instance_dir is None
+
+    state.preset_instance_dir = Path("D:/Skyrim")
+    state.reset_for_new_run(keep_preset=True)
+    assert state.preset_instance_dir == Path("D:/Skyrim")
+
+    state.reset_for_new_run()
+    assert state.preset_instance_dir is None
+
+
+def test_create_into_action_prefills_the_location_page(qtbot, monkeypatch, _isolated_qsettings):
+    from collections2mo2 import api
+    from collections2mo2.gui.app import WizardWindow
+
+    monkeypatch.setattr(api, "detect_skyrim_se_path", lambda: None)
+    # Typing a game folder normally kicks off a background disk-size scan; a real
+    # QThread has no place in a widget-wiring test (and can outlive teardown).
+    monkeypatch.setattr(LocationPage, "_start_size_lookup", lambda self, path: None)
+
+    tmp_path = _isolated_qsettings
+    instance = tmp_path / "instance"
+    instance.mkdir()
+
+    window = WizardWindow()
+    qtbot.addWidget(window)
+    window._on_custom_action(f"create_into:{instance}")
+
+    assert window.state.preset_instance_dir == instance
+    assert window._current == "collection"
+
+    location = window.pages["location"]
+    location.on_enter()
+    assert location.instance_edit.text() == str(instance)
+    assert location.preset_hint.isHidden() is False
+    # An existing, non-empty instance folder is no reason to block Next: only a blank
+    # path or a missing game folder is.
+    location.game_edit.setText(str(tmp_path))
+    assert location.is_ready() is True
+
+    window.pages["review"].on_enter()
+    assert "existing folder, downloads reused" in window.pages["review"].summary_label.text()

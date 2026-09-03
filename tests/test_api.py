@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import stat
 
 import pytest
 
@@ -388,3 +389,54 @@ def test_saved_api_key_falls_back_to_the_legacy_keyring_service(monkeypatch):
     api.clear_api_key()
     assert api.get_saved_api_key() is None
     assert fake.store == {}
+
+
+# -- delete_instance ---------------------------------------------------------------------
+
+
+def test_delete_instance_refuses_a_folder_without_a_ledger(tmp_path):
+    """The only guard between a mistyped path and `shutil.rmtree`: no ledger, no delete."""
+    folder = tmp_path / "not-an-instance"
+    (folder / "important").mkdir(parents=True)
+    (folder / "important" / "data.txt").write_text("keep me")
+
+    with pytest.raises(api.ApiError) as excinfo:
+        api.delete_instance(folder)
+
+    assert "not a c2mo2 instance" in str(excinfo.value)
+    assert (folder / "important" / "data.txt").is_file()
+
+
+def test_delete_instance_removes_the_folder_including_read_only_files(tmp_path):
+    instance = tmp_path / "instance"
+    (instance / "mods" / "Some Mod").mkdir(parents=True)
+    (instance / "c2mo2-instance.json").write_text("{}")
+    read_only = instance / "mods" / "Some Mod" / "meta.ini"
+    read_only.write_text("[General]")
+    os.chmod(read_only, stat.S_IREAD)
+
+    api.delete_instance(instance, reporter=NullReporter())
+
+    assert not instance.exists()
+
+
+def test_delete_instance_locked_file_message_names_mo2(tmp_path, monkeypatch):
+    """MO2 still open on the instance: say which file, and what to do about it."""
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    (instance / "c2mo2-instance.json").write_text("{}")
+    locked = instance / "ModOrganizer.exe"
+    locked.write_text("x")
+
+    def fake_rmtree(path, **kwargs):
+        raise PermissionError(13, "The process cannot access the file", str(locked))
+
+    monkeypatch.setattr(api.shutil, "rmtree", fake_rmtree)
+
+    with pytest.raises(api.ApiError) as excinfo:
+        api.delete_instance(instance)
+
+    message = str(excinfo.value)
+    assert "Mod Organizer 2" in message
+    assert "ModOrganizer.exe" in message
+    assert "could not be fully removed" in message
