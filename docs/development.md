@@ -111,10 +111,13 @@ catch that before it reaches a commit.
 ## GUI packaging
 
 ```
-uv run pyinstaller packaging/c2mo2-gui.spec
+bash packaging/build-nuitka.sh                # release build (Nuitka, needs MSVC)
+uv run pyinstaller packaging/c2mo2-gui.spec   # PyInstaller build, local use only
 ```
 
-Builds a standalone `dist/c2mo2-gui/c2mo2-gui.exe`. See `packaging/README.md` for the
-`C2MO2_DATA_DIR` override (where a frozen build caches 7-Zip and MO2/Root Builder
-downloads) and known PyInstaller hook gaps for this project's dependencies
-(py7zr's compiled codecs, keyring's backend discovery).
+The Nuitka script produces `dist-nuitka/run_gui.dist/c2mo2-gui.exe` and is what the
+release workflow ships; the PyInstaller spec builds `dist/c2mo2-gui/c2mo2-gui.exe` and
+stays around as a fallback. See `packaging/README.md` for the `C2MO2_DATA_DIR` override
+(where a packaged build caches 7-Zip and MO2/Root Builder downloads), why the release
+moved to Nuitka (Windows Defender), and known PyInstaller hook gaps for this project's
+dependencies (py7zr's compiled codecs, keyring's backend discovery).

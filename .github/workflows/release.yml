@@ -11,59 +11,9 @@ permissions:
   # with GITHUB_TOKEN.
   actions: read
 
-env:
-  # Build PyInstaller from its sdist and force a fresh bootloader compile (MSVC is on the
-  # runner). The prebuilt bootloader that ships in the wheel *and* the sdist is flagged by
-  # Windows Defender because malware authors ship the identical stub; a locally compiled
-  # one has a hash no AV vendor has seen. See packaging/README.md, "Antivirus".
-  UV_NO_BINARY_PACKAGE: pyinstaller
-  PYINSTALLER_COMPILE_BOOTLOADER: "1"
-
 jobs:
-  # Experimental second build of the GUI with Nuitka (packaging/README.md, "Nuitka build"),
-  # published next to the PyInstaller zip so the two can be compared as downloads: Windows
-  # Defender's cloud classifier only ever sees a file once it comes from the internet.
-  nuitka:
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-          python-version: "3.12"
-
-      - name: Sync dependencies
-        shell: bash
-        run: uv sync --frozen
-
-      - name: Build GUI executable with Nuitka
-        shell: bash
-        run: bash packaging/build-nuitka.sh
-
-      - name: Show exe version resource
-        shell: pwsh
-        run: (Get-Item dist-nuitka/run_gui.dist/c2mo2-gui.exe).VersionInfo | Format-List ProductName, ProductVersion, FileVersion, CompanyName, FileDescription
-
-      - name: Zip Nuitka build
-        shell: pwsh
-        run: |
-          $tag = "${{ github.ref_name }}"
-          Rename-Item dist-nuitka/run_gui.dist c2mo2-gui
-          Compress-Archive -Path "dist-nuitka/c2mo2-gui" -DestinationPath "c2mo2-gui-$tag-windows-x64-nuitka.zip"
-
-      - name: Upload Nuitka zip
-        uses: actions/upload-artifact@v7
-        with:
-          name: nuitka-zip
-          path: c2mo2-gui-*-windows-x64-nuitka.zip
-          if-no-files-found: error
-
   release:
     runs-on: windows-latest
-    needs: nuitka
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -74,22 +24,9 @@ jobs:
           enable-cache: true
           python-version: "3.12"
 
-      - name: Drop any cached PyInstaller build
-        # A wheel built from the sdist on an earlier run (before the compile was forced)
-        # would be reused from the uv cache; the env var is not part of the cache key.
-        shell: bash
-        run: uv cache clean pyinstaller
-
       - name: Sync dependencies
         shell: bash
         run: uv sync --frozen
-
-      - name: Show bootloader fingerprint
-        shell: bash
-        run: |
-          for f in .venv/Lib/site-packages/PyInstaller/bootloader/Windows-64bit-intel/*.exe; do
-            sha256sum "$f"
-          done
 
       - name: Lint (ruff check)
         shell: bash
@@ -113,9 +50,15 @@ jobs:
         shell: bash
         run: uv build
 
-      - name: Build GUI executable
+      # The GUI is compiled with Nuitka (packaging/README.md, "Nuitka build"): no PyInstaller
+      # bootloader for Windows Defender's classifier to recognise. The 0.1.3-rc1 prerelease
+      # shipped both builds side by side and only the PyInstaller one was flagged.
+      - name: Build GUI executable with Nuitka
         shell: bash
-        run: uv run pyinstaller packaging/c2mo2-gui.spec
+        run: |
+          bash packaging/build-nuitka.sh
+          mkdir -p dist
+          mv dist-nuitka/run_gui.dist dist/c2mo2-gui
 
       - name: Show exe version resource
         shell: pwsh
@@ -185,12 +128,6 @@ jobs:
             echo "value=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Fetch Nuitka zip
-        uses: actions/download-artifact@v7
-        with:
-          name: nuitka-zip
-          path: nuitka-zip
-
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -198,6 +135,5 @@ jobs:
           generate_release_notes: true
           files: |
             ${{ env.ZIP_PATH }}
-            nuitka-zip/*.zip
             dist/*.whl
             dist/*.tar.gz

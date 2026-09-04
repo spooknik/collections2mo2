@@ -7,12 +7,13 @@ usually under a generic, machine-learning name such as `Trojan:Win32/Wacatac`,
 `Program:Win32/Wacapew.C!ml` or `Trojan:Win32/Bearfoos.A!ml`. It is a false positive, and a
 well-known one:
 
-- **It's a PyInstaller build.** Every PyInstaller program starts with the same small
-  "bootloader" stub, and because malware authors use the same free tool, antivirus vendors
-  have learned to distrust that stub on sight. Since 0.1.1 the release workflow compiles its
-  own bootloader instead of shipping the shared prebuilt one, which clears most of these
-  detections, and the exe carries a proper version resource (publisher, product, version),
-  which Defender's heuristics also weigh.
+- **It's a packaged Python program.** Releases before 0.1.3 were built with PyInstaller,
+  and every PyInstaller program starts with the same small "bootloader" stub; because
+  malware authors use the same free tool, antivirus vendors have learned to distrust that
+  stub on sight. Since 0.1.3 the exe is compiled with Nuitka instead, which has no such
+  shared stub and has not been flagged so far, and it carries a proper version resource
+  (publisher, product, version), which Defender's heuristics also weigh. Pick the newest
+  release if an older one is being quarantined.
 - **It isn't code-signed** and has no download history with Microsoft, so it gets no
   "reputation" credit. Signing is being looked into.
 - **What it does looks suspicious** to a behaviour scanner: it downloads 7-Zip and Mod

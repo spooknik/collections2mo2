@@ -24,13 +24,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The GUI shows its version in the window title (the CLI already had `--version`).
   Packaged builds now bundle the package metadata, so they report the real version
   instead of `0.0.0+unknown`, in the title and in the Nexus User-Agent.
-- Every release now also ships `c2mo2-gui-<tag>-windows-x64-nuitka.zip`, the same GUI
-  compiled with Nuitka instead of PyInstaller (`packaging/build-nuitka.sh`). It is an
-  experiment to see which build Windows Defender's cloud classifier objects to; the two
-  are functionally identical.
 
 ### Changed
 
+- `c2mo2-gui-<tag>-windows-x64.zip` is now the Nuitka build, and the only GUI download.
+  The 0.1.3-rc1 prerelease shipped both builds side by side and Defender's cloud classifier
+  flagged only the PyInstaller one, so the PyInstaller build is no longer released
+  (the spec remains in `packaging/` for local builds).
 - The release workflow can sign `c2mo2-gui.exe` through SignPath.io once the project is
   accepted into the SignPath Foundation programme (see packaging/README.md); until the
   repository variable that enables it exists, releases build exactly as before.

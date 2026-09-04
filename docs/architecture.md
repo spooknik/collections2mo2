@@ -98,11 +98,13 @@ gitignored. Never print `.env` contents or the API key.
 - Instance-location warnings live in `create.instance_path_warnings` and `api.path_warnings`
   delegates to it (api imports create, not the other way round), so `create` and the wizard
   show the same text.
-- PyInstaller's prebuilt bootloader stub is what Windows Defender flags (generic
-  `Wacatac`/`Wacapew` names). It ships in the sdist too, so `--no-binary` alone changes nothing;
-  `PYINSTALLER_COMPILE_BOOTLOADER=1` forces a `waf` compile with MSVC (~20 s). `release.yml` sets
-  that plus `UV_NO_BINARY_PACKAGE=pyinstaller` and cleans uv's pyinstaller cache first; the spec
-  also stamps a `VSVersionInfo` resource from the pyproject version. See packaging/README.md.
+- Releases ship the Nuitka build only (`packaging/build-nuitka.sh`; `release.yml` moves
+  `dist-nuitka/run_gui.dist/` to `dist/c2mo2-gui/` and zips it as `c2mo2-gui-<tag>-windows-x64.zip`,
+  since 0.1.3). PyInstaller's prebuilt bootloader stub is what Windows Defender flags (generic
+  `Wacatac`/`Wacapew` names); compiling the bootloader ourselves (`PYINSTALLER_COMPILE_BOOTLOADER=1`,
+  releases 0.1.1 to 0.1.3-rc1) reduced but did not stop the cloud detections, while the Nuitka zip
+  shipped next to it in 0.1.3-rc1 was never flagged. The spec stays for local builds. See
+  packaging/README.md.
 - `sevenzip.ensure_7za` is called from parallel workers; its bootstrap is serialised with a
   module lock and `cmd_inspect` calls it once before its pool (the first frozen GTS run lost the
   first 18 archives to four concurrent bootstraps). All child processes pass

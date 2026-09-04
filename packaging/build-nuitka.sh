@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Experimental alternative to the PyInstaller build: compile the GUI with Nuitka.
+# Release build of the GUI: compile it with Nuitka. release.yml runs this and moves the
+# output folder to dist/c2mo2-gui/ before zipping (and, when enabled, signing) it.
 #
 # Produces dist-nuitka/run_gui.dist/c2mo2-gui.exe (a folder build, like PyInstaller's).
 # Needs the MSVC C++ toolchain (Visual Studio 2022 or the Build Tools); Nuitka finds it
