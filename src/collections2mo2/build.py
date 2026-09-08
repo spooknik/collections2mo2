@@ -46,6 +46,7 @@ from pathlib import Path
 import requests
 
 from . import downloader as downloader_mod
+from . import ledger as ledger_mod
 from .reporter import Reporter, get_reporter
 from .sevenzip import NO_WINDOW, extract, list_archive
 
@@ -229,8 +230,10 @@ def _archive_top_level_names(archive: Path) -> list[str]:
 def _ensure_release_download(
     mo2_dir: Path, archive: Path, url: str, mod_name: str, version: str
 ) -> Path:
-    """Copy `archive` into `<mo2_dir>/downloads/` with a `directURL` `.meta`, if not there yet."""
-    downloads_dir = mo2_dir / "downloads"
+    """Copy `archive` into the instance's downloads folder with a `directURL` `.meta`,
+    if not there yet. The folder is `<mo2_dir>/downloads` unless the ledger says
+    otherwise (`create --downloads-dir`)."""
+    downloads_dir = ledger_mod.downloads_dir(mo2_dir)
     downloads_dir.mkdir(parents=True, exist_ok=True)
     dest = downloads_dir / archive.name
     if not dest.exists():

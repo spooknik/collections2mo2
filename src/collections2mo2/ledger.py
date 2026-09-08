@@ -9,7 +9,9 @@ ledger next to `ModOrganizer.exe`:
     created     / updated: ISO 8601 UTC timestamps
     game        {domain, mo2_name, source_path, stock_game_dir|null}
     mo2         {version, rootbuilder_version}
-    layers      one entry per collection revision applied, in application order
+    layers      one entry per collection revision applied, in application order; each
+                may carry `skipped`, the mods the run went on without (see
+                `create.SkippedMod`)
     mods        folder name -> {owner, owners, tag, md5, install_mode, strategy, plugins}
     tools       tool id -> record (written by the `tools` command)
     ini_keys    owner -> {ini file -> {section -> {key -> {value, previous}}}}
@@ -17,6 +19,11 @@ ledger next to `ModOrganizer.exe`:
                 --vsync/--window the user asked for, re-applied on every render that is
                 given 'keep' for a field (see `profile.render_instance`); 'keep' never
                 clears it, only `profile-instance --forget-display` does
+    downloads_dir  absolute path of the archive store when `create --downloads-dir` put it
+                somewhere other than `<instance>/downloads`, else null. Every later
+                command (`add`, `update`, `tools`, `build`, the Wabbajack compile) reads
+                it back through `Ledger.downloads_dir` / `downloads_dir()`, so the
+                instance never has to guess where its archives went.
 
 `owner` is `"collection:<slug>@<rev>"`, `"tool:<id>"` or `"user"`. A folder in
 `mods/` that the ledger has never heard of is a user mod (`owners_of` says so),
@@ -62,6 +69,41 @@ LEGACY_LEDGER_NAME = "c2wj-instance.json"
 VERSION = 2
 
 USER_OWNER = "user"
+DEFAULT_DOWNLOADS_NAME = "downloads"
+
+
+def resolve_downloads_dir(instance_dir: Path | str, value: str | None) -> Path:
+    """The archive store for `instance_dir` given the ledger's `downloads_dir` value."""
+    instance_dir = Path(instance_dir)
+    if not value:
+        return instance_dir / DEFAULT_DOWNLOADS_NAME
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else instance_dir / path
+
+
+def downloads_dir(instance_dir: Path | str) -> Path:
+    """Where `instance_dir` keeps its archives, without needing a `Ledger` in hand.
+
+    Reads the ledger if there is one; a folder without a ledger (or a ledger written
+    before the key existed) uses `<instance>/downloads`, exactly as every command did
+    before the location became configurable. This is the one place the
+    `"downloads"` name is joined onto an instance path -- `build`, `tools`, `profile`
+    and the Wabbajack compile all go through here or `Ledger.downloads_dir`.
+    """
+    instance_dir = Path(instance_dir)
+    value: str | None = None
+    for name in (LEDGER_NAME, LEGACY_LEDGER_NAME):
+        path = instance_dir / name
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            break
+        if isinstance(data, dict):
+            value = data.get("downloads_dir") or None
+        break
+    return resolve_downloads_dir(instance_dir, value)
 
 
 def now_iso() -> str:
@@ -89,6 +131,7 @@ def _empty(now: str) -> dict[str, Any]:
         "tools": {},
         "ini_keys": {},
         "display": {"resolution": None, "vsync": None, "window": None, "updated": None},
+        "downloads_dir": None,
     }
 
 
@@ -160,6 +203,22 @@ class Ledger:
             game["source_path"] = source_path
         # None is meaningful here (no stock game copy), so always write it.
         game["stock_game_dir"] = stock_game_dir
+
+    @property
+    def downloads_dir(self) -> Path:
+        """Where this instance keeps its archives: `<instance>/downloads` unless `create
+        --downloads-dir` put them elsewhere (people split mods and downloads across drives)."""
+        return resolve_downloads_dir(self.instance_dir, self.data.get("downloads_dir"))
+
+    def set_downloads_dir(self, path: Path | str | None) -> None:
+        """Record a custom archive store; the default location is stored as null so an
+        instance that never asked for one reads the same as before this key existed."""
+        if path is None:
+            self.data["downloads_dir"] = None
+            return
+        resolved = Path(path).expanduser().resolve()
+        default = (self.instance_dir / DEFAULT_DOWNLOADS_NAME).resolve()
+        self.data["downloads_dir"] = None if resolved == default else str(resolved)
 
     def set_mo2(self, version: str | None = None, rootbuilder_version: str | None = None) -> None:
         if version is not None:
@@ -248,6 +307,19 @@ class Ledger:
         if files:
             layer["files"] = dict(files)
         return layer
+
+    def set_layer_skipped(
+        self, slug: str, revision: int | str, skipped: list[dict[str, str]]
+    ) -> None:
+        """Record the mods a layer went in without (`{name, stage, reason}` each), so
+        `status` and the GUI can list them after the run's log is gone. Always written,
+        so a clean re-run clears an earlier run's list."""
+        record = self.layer(slug, revision)
+        if record is not None:
+            record["skipped"] = list(skipped)
+
+    def layer_skipped(self, layer: dict[str, Any]) -> list[dict[str, str]]:
+        return [dict(s) for s in layer.get("skipped") or [] if isinstance(s, dict)]
 
     def layer(self, slug: str, revision: int | str) -> dict[str, Any] | None:
         for existing in self.data["layers"]:

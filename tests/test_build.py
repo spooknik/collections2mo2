@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from collections2mo2 import ledger as ledger_mod
 from collections2mo2.build import (
     _archive_top_level_names,
     _ensure_release_download,
@@ -228,6 +229,28 @@ def test_ensure_release_download_is_idempotent(tmp_path: Path):
         mo2_dir, archive, "https://example.test/rb.zip", "Root Builder", "5.1.1"
     )
     assert dest.read_bytes() == b"v1"
+
+
+def test_ensure_release_download_honours_a_custom_downloads_dir(tmp_path: Path):
+    # `create --downloads-dir` records the store in the ledger; build must copy the MO2
+    # / Root Builder release archives there, or the Wabbajack compile cannot see them.
+    mo2_dir = tmp_path / "inst"
+    mo2_dir.mkdir()
+    custom = tmp_path / "archives"
+    led = ledger_mod.Ledger(mo2_dir)
+    led.set_downloads_dir(custom)
+    led.save()
+    archive = tmp_path / "Mod.Organizer-2.5.2.7z"
+    archive.write_bytes(b"fake mo2 archive")
+
+    dest = _ensure_release_download(
+        mo2_dir, archive, "https://example.test/mo2.7z", "Mod Organizer 2", "2.5.2"
+    )
+
+    assert dest == custom.resolve() / "Mod.Organizer-2.5.2.7z"
+    assert dest.read_bytes() == b"fake mo2 archive"
+    assert dest.with_name(dest.name + ".meta").is_file()
+    assert not (mo2_dir / "downloads").exists()
 
 
 @pytest.mark.local

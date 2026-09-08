@@ -1,5 +1,6 @@
 """Tests for sevenzip.ensure_7za's bootstrap serialisation, the hidden-console flag on child
-processes, and the inspect stage's handling of archives that fail to list.
+processes, extract's tolerance of reparse-point errors, and the inspect stage's handling of
+archives that fail to list.
 
 None of these touch the network or need tools/7za.exe: the bootstrap and the listing are
 replaced with fakes.
@@ -150,3 +151,79 @@ def test_cmd_inspect_reports_bootstrap_failure_once(tmp_path: Path, monkeypatch)
     assert rc == 1
     assert rep.warnings == ["inspect: could not set up 7-Zip: download of 7zr.exe failed"]
     assert not (tmp_path / "inspect.json").exists()
+
+
+def _fake_extract_env(monkeypatch, tmp_path: Path, *, returncode: int, output: str, entries):
+    """Replace 7za with a fake that writes `entries` ({path: size}) into dest and exits as told."""
+    monkeypatch.setattr(sevenzip, "ensure_7za", lambda: Path("7za.exe"))
+
+    def fake_run(exe, args):
+        dest = Path(next(a for a in args if a.startswith("-o"))[2:])
+        for rel, size in entries.items():
+            out = dest / rel
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"x" * size)
+        return subprocess.CompletedProcess([str(exe), *args], returncode, stdout=output, stderr="")
+
+    monkeypatch.setattr(sevenzip, "_run_7z", fake_run)
+    monkeypatch.setattr(
+        sevenzip,
+        "list_archive",
+        lambda path: [
+            sevenzip.ArchiveEntry(path="Mod", size=0, is_dir=True),
+            *(sevenzip.ArchiveEntry(path=p, size=n, is_dir=False) for p, n in entries.items()),
+        ],
+    )
+
+
+REPARSE_OUTPUT = (
+    "ERROR: Incorrect reparse stream : Unspecified error : Mod\\HowToMakeItWork.txt\n"
+    "\nSub items Errors: 1\n"
+)
+
+
+def test_extract_tolerates_reparse_point_errors_when_files_are_complete(tmp_path, monkeypatch):
+    """A zip made from a OneDrive folder carries reparse attributes on plain files; 7-Zip writes
+    the bytes, fails to reapply the attribute and exits 2. That is a warning, not a failure."""
+    files = {"Mod/HowToMakeItWork.txt": 161, "Mod/textures/readme.txt": 592}
+    _fake_extract_env(monkeypatch, tmp_path, returncode=2, output=REPARSE_OUTPUT, entries=files)
+
+    warnings = sevenzip.extract("mod.zip", tmp_path / "out")
+
+    assert warnings == [
+        (
+            "7za x reported (exit 2): ERROR: Incorrect reparse stream : Unspecified error : "
+            "Mod\\HowToMakeItWork.txt"
+        )
+    ]
+    assert (tmp_path / "out" / "Mod" / "HowToMakeItWork.txt").stat().st_size == 161
+
+
+def test_extract_clean_run_returns_no_warnings(tmp_path, monkeypatch):
+    _fake_extract_env(monkeypatch, tmp_path, returncode=0, output="", entries={"Mod/a.esp": 3})
+    assert sevenzip.extract("mod.zip", tmp_path / "out") == []
+
+
+def test_extract_still_fails_when_a_file_is_missing_or_short(tmp_path, monkeypatch):
+    files = {"Mod/HowToMakeItWork.txt": 161}
+    _fake_extract_env(monkeypatch, tmp_path, returncode=2, output=REPARSE_OUTPUT, entries=files)
+    # The listing promises a second file the fake never wrote.
+    monkeypatch.setattr(
+        sevenzip,
+        "list_archive",
+        lambda path: [
+            sevenzip.ArchiveEntry(path="Mod/HowToMakeItWork.txt", size=161, is_dir=False),
+            sevenzip.ArchiveEntry(path="Mod/big.bsa", size=10, is_dir=False),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="7za x failed"):
+        sevenzip.extract("mod.zip", tmp_path / "out")
+
+
+def test_extract_still_fails_on_data_errors(tmp_path, monkeypatch):
+    """A CRC failure also leaves a full-size file behind; only link/reparse errors are benign."""
+    files = {"Mod/a.esp": 5}
+    output = "ERROR: CRC Failed : Mod\\a.esp\n\nSub items Errors: 1\n"
+    _fake_extract_env(monkeypatch, tmp_path, returncode=2, output=output, entries=files)
+    with pytest.raises(RuntimeError, match="CRC Failed"):
+        sevenzip.extract("mod.zip", tmp_path / "out")

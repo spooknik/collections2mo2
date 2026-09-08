@@ -35,6 +35,7 @@ c2mo2 create <url> --out OUT --game-path GAME_PATH [options]
 | `--revision REVISION` | revision number (default: latest) |
 | `--stock-game` | copy the game into the instance and point MO2 at the copy (Wabbajack's "Stock Game" convention), so nothing ever patches the real install |
 | `--reuse-downloads REUSE_DOWNLOADS` | an existing download store to hardlink/copy archives + `.meta` from first |
+| `--downloads-dir DOWNLOADS_DIR` | keep archives in this folder instead of `<out>/downloads` (e.g. a separate drive); recorded in the instance ledger, so `add`, `update`, `remove`, `tools install`, `build` and `wabbajack` all read it back and take no flag of their own. Re-running `create` on an existing instance without this flag keeps the recorded folder; a different value switches it (with a warning) and re-fetches whatever the new folder is missing. Deleting the instance (GUI "Remove instance...") only removes the instance folder, so a `--downloads-dir` kept elsewhere survives and can be pointed at again with the same flag on a fresh `create` - archives already there are skipped by MD5 |
 | `--jobs JOBS` | parallel workers per stage (default: 4) |
 | `--resolution RESOLUTION` | profile display resolution: `auto`, `keep`, or `WxH` (default: `keep`) |
 | `--vsync {on,off,keep}` | profile display vsync (default: `keep`) |
@@ -42,6 +43,7 @@ c2mo2 create <url> --out OUT --game-path GAME_PATH [options]
 | `--choices-overrides CHOICES_OVERRIDES` | JSON file of `{"<tag>": <Vortex choices object>}` for fresh-mode FOMODs |
 | `--skip-survey` | skip the Nexus content-preview survey (it costs hourly API budget) |
 | `--allow-missing` | carry on when Nexus no longer serves a file the collection pinned (the author deleted it); those mods are left out and listed in the summary. An md5 mismatch still stops the run. |
+| `--skip-errors` | carry on past any mod that cannot be downloaded, listed or installed (implies `--allow-missing`): the layer goes in without those mods, which are listed at the end and remembered in the ledger for `status` |
 | `--mo2-version MO2_VERSION` | Mod Organizer 2 release to install (default: `2.5.2`) |
 | `--rootbuilder-version ROOTBUILDER_VERSION` | Root Builder release to install (default: `5.1.1`) |
 | `--tools ID [ID ...]` | catalogue tools to install once the instance is built (ids from `c2mo2 tools list`); the same thing the GUI's Tools page does |
@@ -70,6 +72,7 @@ c2mo2 add <url> --instance INSTANCE [options]
 | `--choices-overrides CHOICES_OVERRIDES` | JSON file of FOMOD choice overrides for fresh-mode FOMODs |
 | `--skip-survey` | skip the Nexus content-preview survey |
 | `--allow-missing` | carry on when Nexus no longer serves a pinned file |
+| `--skip-errors` | carry on past any mod that cannot be downloaded, listed or installed (implies `--allow-missing`): the layer goes in without those mods, which are listed at the end and remembered in the ledger for `status` |
 | `--reuse-downloads REUSE_DOWNLOADS` | an existing download store to hardlink/copy archives + `.meta` from first |
 
 ### `c2mo2 remove`
@@ -107,6 +110,7 @@ c2mo2 update --instance INSTANCE [options]
 | `--yes`, `-y` | apply the plan without asking (required when there is no terminal) |
 | `--jobs JOBS` | parallel workers per stage (default: 4) |
 | `--allow-missing` | carry on when Nexus no longer serves a file the new revision pins |
+| `--skip-errors` | carry on past any mod that cannot be downloaded, listed or installed (implies `--allow-missing`); the previous revision's copy is kept on disk for a mod whose new file failed, and every skipped mod is listed at the end and remembered in the ledger for `status` |
 | `--purge-old` | delete the old revision's manifest folder too (kept by default, for diffing and for going back) |
 | `--choices-overrides CHOICES_OVERRIDES` | JSON file of FOMOD choice overrides for fresh-mode FOMODs |
 
@@ -125,7 +129,9 @@ c2mo2 status --instance INSTANCE [--offline]
 
 Lists each layer with its installed revision against the newest published one, how
 many `mods/` folders belong to a collection, a tool, or you, the tools installed, and
-whether the rendered profile still matches the ledger.
+whether the rendered profile still matches the ledger. A layer a `--skip-errors` run
+left mods out of shows a `NOT installed (skipped by the last run): N` line; retry those
+mods with `create`/`add`/`update` again or `c2mo2 install --only <mod> --force`.
 
 ### `c2mo2 profile-instance`
 
@@ -281,7 +287,10 @@ c2mo2 download <manifest> [options]
 | `--include-optional` | include optional mods (default) |
 | `--no-optional` | skip mods marked optional |
 
-Verifies MD5s against the manifest and writes MO2 `.meta` sidecars.
+Verifies MD5s against the manifest and writes MO2 `.meta` sidecars. Mods the curator
+bundled into the collection itself need no download: their content is taken from the
+unpacked collection archive and packed into the downloads folder as
+`Bundled - <name>.zip` (a bundled file is copied as-is).
 
 ### `c2mo2 inspect`
 
@@ -313,6 +322,7 @@ c2mo2 install <inspect_json> [options]
 | `--out OUT` | where to write `install.json` (default: `<mods-dir>/../install.json`) |
 | `--owner OWNER` | who these mods belong to, e.g. `collection:<slug>@<rev>`; stamped into each mod's `meta.ini` for the instance ledger |
 | `--choices-overrides CHOICES_OVERRIDES` | JSON file of FOMOD choice overrides for fresh-mode FOMODs |
+| `--categories CATEGORIES_JSON` | `<slug>-<rev>.categories.json` from `categories.prepare_layer`; adds `category`/`nexusCategory` to each mod's `meta.ini` |
 
 Fresh-mode FOMODs (no recorded choices) take the installer's own defaults unless you
 pass `--choices-overrides`.

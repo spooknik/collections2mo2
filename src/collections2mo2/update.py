@@ -53,7 +53,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from . import archive_inspect, build, create, installer, ledger, profile
+from . import archive_inspect, build, categories, create, installer, ledger, profile
 from .downloader import run_download
 from .manifest import fetch_manifest, load_manifest
 from .naming import assign_folder_names
@@ -590,7 +590,7 @@ def _downloaded_md5s(paths: create.Paths, led: ledger.Ledger) -> set[str]:
 def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
     rep = get_reporter(reporter)
     started = time.monotonic()
-    paths = create.Paths(Path(args.instance).expanduser().resolve())
+    paths = create.Paths.for_instance(args.instance)
     create.migrate_legacy_instance(paths, rep)
     if not (paths.out / ledger.LEDGER_NAME).exists():
         rep.warn(f"{paths.out} is not a c2mo2 instance ({ledger.LEDGER_NAME} not found)")
@@ -666,6 +666,21 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
 
     lp_old = create.LayerPaths(paths, slug, old_revision)
     lp_new = create.LayerPaths(paths, slug, new_revision)
+    if not lp_new.categories_json.exists():
+        # Cosmetic and never fatal: the Nexus category of every mod in the new revision,
+        # for meta.ini (see `create.add_layer`).
+        categories.prepare_layer(
+            client,
+            domain=(new_manifest.get("info") or {}).get("domainName")
+            or (led.data.get("game") or {}).get("domain")
+            or "",
+            slug=slug,
+            revision=new_revision,
+            manifest=new_manifest,
+            out_json=lp_new.categories_json,
+            instance_dir=paths.out,
+            rep=rep,
+        )
     old_install = _read_json(lp_old.install_json)
     old_downloads = _read_json(lp_old.downloads_json)
     old_inspect = _read_json(lp_old.inspect_json)
@@ -762,6 +777,9 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         if str(_src(mod).get("tag") or "") in install_tags
     ]
     missing_names: list[str] = []
+    skipped: list[create.SkippedMod] = []
+    skip = create.skip_errors_requested(args)
+    install_failed_names: set[str] = set()
     fresh_downloads: dict[str, dict[str, Any]] = {}
     fresh_inspect: dict[str, dict[str, Any]] = {}
     fresh_install: dict[str, dict[str, Any]] = {}
@@ -791,15 +809,21 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
             return 1
         if rc != 0:
             unavailable, mismatched = create._download_failures(tmp_downloads)
-            if not args.allow_missing or mismatched or not unavailable:
+            allow = skip or args.allow_missing
+            # Same rules as `create.add_layer`: --allow-missing forgives a file Nexus no
+            # longer serves, only --skip-errors also forgives an md5 mismatch.
+            if not allow or (mismatched and not skip) or not (unavailable or mismatched):
                 rep.warn("one or more archives failed to download; nothing was changed")
                 return 1
-            rep.warn(
-                f"{len(unavailable)} archive(s) are not available from Nexus (--allow-missing):"
-            )
+            flag = "--skip-errors" if skip else "--allow-missing"
+            rep.warn(f"{len(unavailable) + len(mismatched)} archive(s) skipped ({flag}):")
             for name, error in unavailable:
                 rep.warn(f"  {name}: {error}")
-            missing_names = [name for name, _ in unavailable]
+                skipped.append(create.SkippedMod(name, "download", error))
+            for name in mismatched:
+                rep.warn(f"  {name}: {create.MD5_MISMATCH_REASON}")
+                skipped.append(create.SkippedMod(name, "download", create.MD5_MISMATCH_REASON))
+            missing_names = [s.name for s in skipped]
 
         rep.stage("inspect")
         rc = archive_inspect.cmd_inspect(
@@ -809,8 +833,15 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
             reporter=rep,
         )
         if rc != 0:
-            rep.warn("one or more archives could not be listed; nothing was changed")
-            return 1
+            failures = create._inspect_failures(tmp_inspect)
+            if not skip or not failures:
+                rep.warn("one or more archives could not be listed; nothing was changed")
+                return 1
+            rep.warn(f"{len(failures)} archive(s) could not be listed; skipped (--skip-errors):")
+            for name, error in failures:
+                rep.warn(f"  {name}: {error}")
+                skipped.append(create.SkippedMod(name, "inspect", error))
+                missing_names.append(name)
         fresh_downloads = _entries_by_tag(_read_json(tmp_downloads))
         fresh_inspect = {
             str(e.get("tag") or ""): e for e in _read_json(tmp_inspect).get("entries") or []
@@ -833,16 +864,31 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
                 owner=new_owner,
                 taken_folders=taken,
                 folder_suffix="" if is_base else slug,
+                categories_json=str(lp_new.categories_json),
             ),
             reporter=rep,
         )
         if rc != 0:
-            rep.warn(
-                f"one or more mods failed to install (see {tmp_install.name}); the ledger and "
-                "the profile were left as they were"
-            )
-            return 1
-        fresh_install = _entries_by_tag(_read_json(tmp_install))
+            failures = create._install_failures(tmp_install)
+            if not skip or not failures:
+                rep.warn(
+                    f"one or more mods failed to install (see {tmp_install.name}); the ledger "
+                    "and the profile were left as they were"
+                )
+                return 1
+            rep.warn(f"{len(failures)} mod(s) failed to install; skipped (--skip-errors):")
+            for name, error in failures:
+                rep.warn(f"  {name}: {error}")
+                skipped.append(create.SkippedMod(name, "install", error))
+                install_failed_names.add(name)
+            missing_names.extend(name for name, _ in failures)
+        fresh_install = {
+            tag: entry
+            for tag, entry in _entries_by_tag(_read_json(tmp_install)).items()
+            # A failed entry must not replace the old row below: the folder on disk is
+            # still whatever the previous revision installed (or nothing, for a new mod).
+            if entry.get("strategy") != "failed"
+        }
 
     # -- folder renames and deletions: only now that every install has succeeded --------
     renamed: list[str] = []
@@ -922,10 +968,16 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
             stale = bool(delta and delta.needs_install)
             row = _refresh_entry(old_by_old_tag[old_tag], mod, folder, file_identity=not stale)
             if stale:
-                note = (
-                    f"revision {new_revision} re-pinned this mod to a file Nexus would not "
-                    f"serve; the revision {old_revision} archive is still installed"
-                )
+                if (mod.get("name") or "") in install_failed_names:
+                    note = (
+                        f"revision {new_revision}'s file failed to install (--skip-errors); "
+                        f"mods/{folder} is whatever revision {old_revision} left there"
+                    )
+                else:
+                    note = (
+                        f"revision {new_revision} re-pinned this mod to a file Nexus would not "
+                        f"serve; the revision {old_revision} archive is still installed"
+                    )
                 row["warnings"] = [*(row.get("warnings") or []), note]
             install_out.append(row)
 
@@ -997,6 +1049,7 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         manifest=manifest_rel,
         files=lp_new.ledger_files(),
     )
+    led.set_layer_skipped(slug, new_revision, [s.as_dict() for s in skipped])
     led.normalise_owner_order()
     led.save()
 
@@ -1067,10 +1120,10 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     rep.log(f"  folders kept:       {len(kept):>4}")
     for folder in kept[:MAX_LISTED]:
         rep.log(f"    {folder} {keep_notes.get(folder, '')}")
-    if missing_names:
-        rep.log(f"  NOT installed (unavailable on Nexus): {len(missing_names)}")
-        for name in missing_names:
-            rep.log(f"    {name}")
+    if skipped:
+        rep.log(f"  NOT installed (skipped): {len(skipped)}")
+        for item in skipped:
+            rep.log(f"    {item.name}  [{item.stage}] {item.reason}")
     rep.log(f"  stage files removed:{len(stale):>4} ({', '.join(stale) or 'none'})")
     if purged:
         rep.log(f"  old manifest purged: {purged}")
@@ -1079,6 +1132,13 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     rep.log(f"  modlist entries:    {len(report.get('mod_order') or [])}")
     rep.log(f"  user mods kept:     {len(report.get('user_mods') or [])}")
     rep.log(f"  elapsed: {time.monotonic() - started:.1f}s")
+    if skipped:
+        rep.warn(
+            f"{len(skipped)} mod(s) are NOT in the instance (--skip-errors / --allow-missing); "
+            "install them by hand or run `c2mo2 update` again once Nexus serves them:"
+        )
+        for item in skipped:
+            rep.warn(f"  {item.name}  [{item.stage}] {item.reason}")
     rep.done("update", f"{slug} is now at revision {new_revision}")
     return 0
 
@@ -1089,7 +1149,7 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
 def cmd_status(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
     """Read-only: what this instance is made of and whether a newer revision exists."""
     rep = get_reporter(reporter)
-    paths = create.Paths(Path(args.instance).expanduser().resolve())
+    paths = create.Paths.for_instance(args.instance)
     # The only thing `status` ever writes: renaming a pre-rename instance's own files.
     create.migrate_legacy_instance(paths, rep)
     if not (paths.out / ledger.LEDGER_NAME).exists():
@@ -1147,6 +1207,11 @@ def cmd_status(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         )
         if layer.get("updated"):
             rep.log(f"     updated: {layer['updated']}")
+        layer_skipped = led.layer_skipped(layer)
+        if layer_skipped:
+            rep.log(f"     NOT installed (skipped by the last run): {len(layer_skipped)}")
+            for item in layer_skipped:
+                rep.log(f"       {item.get('name')}  [{item.get('stage')}] {item.get('reason')}")
 
     separators = led.separator_folders() & set(owners)
     user_mods = [f for f, o in owners.items() if o == [ledger.USER_OWNER]]
@@ -1220,6 +1285,15 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         default=False,
         help="carry on when Nexus no longer serves a file the new revision pins",
+    )
+    u.add_argument(
+        "--skip-errors",
+        action="store_true",
+        default=False,
+        help="carry on past any mod that cannot be downloaded, listed or installed (implies "
+        "--allow-missing): the previous revision's copy stays on disk for a mod that "
+        "failed, the rest of the update goes ahead, and the skipped mods are listed at "
+        "the end and remembered in the ledger for `status`",
     )
     u.add_argument(
         "--purge-old",

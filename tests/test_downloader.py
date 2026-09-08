@@ -169,7 +169,7 @@ def test_run_download_sums_manifest_file_sizes_for_bytes_total(tmp_path, monkeyp
     monkeypatch.setattr(
         downloader,
         "_download_mod",
-        lambda clients, sessions, mod, out_dir, domain, game_name, tracker=None: (
+        lambda clients, sessions, mod, out_dir, domain, game_name, tracker=None, bundle_dir=None: (
             downloader._unsupported_entry(mod)
         ),
     )
@@ -187,3 +187,186 @@ def test_run_download_sums_manifest_file_sizes_for_bytes_total(tmp_path, monkeyp
     )
     assert rep.calls, "expected at least one progress() call"
     assert all(call[4] == 3_000_000 for call in rep.calls)  # bytes_total on every call
+
+
+# -- bundle sources: mods the curator packed into the collection archive ---------------
+
+
+def _bundle_manifest(tmp_path: Path, expression: str, logical: str = "my patch.7z") -> Path:
+    import json
+
+    manifest = {
+        "info": {"domainName": "skyrimspecialedition"},
+        "mods": [
+            {
+                "name": logical,
+                "version": "",
+                "source": {
+                    "type": "bundle",
+                    "fileSize": 3,
+                    "logicalFilename": logical,
+                    "updatePolicy": "exact",
+                    "tag": "bundletag1",
+                    "fileExpression": expression,
+                },
+                "details": {"category": "", "type": ""},
+                "phase": 0,
+            }
+        ],
+    }
+    archive_dir = tmp_path / "archive"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = archive_dir / "collection.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return manifest_path
+
+
+def _bundled_tree(manifest_path: Path, expression: str) -> Path:
+    root = manifest_path.parent / "bundled" / expression
+    for rel, data in (
+        ("textures/actors/character/khajiitfemale/head.dds", b"a"),
+        ("textures/actors/character/khajiitfemale/head_msn.dds", b"bb"),
+        ("textures/actors/character/KhajiitMale/head_msn.dds", b"ccc"),
+    ):
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    return root
+
+
+def _bundle_mod(manifest_path: Path):
+    import json
+
+    return json.loads(manifest_path.read_text(encoding="utf-8"))["mods"][0]
+
+
+def test_download_bundle_folder_is_zipped_without_a_wrapper_folder(tmp_path: Path):
+    import zipfile
+
+    expression = "Bundled - my patch.7z (v)"
+    manifest_path = _bundle_manifest(tmp_path, expression)
+    _bundled_tree(manifest_path, expression)
+    out_dir = tmp_path / "downloads"
+
+    entry = downloader._download_bundle(
+        _bundle_mod(manifest_path),
+        out_dir,
+        "SkyrimSE",
+        manifest_path.parent / "bundled",
+    )
+
+    assert entry.status == "ok"
+    assert entry.source_type == "bundle"
+    assert entry.file_name == "Bundled - my patch.zip"
+    assert entry.mod_id is None and entry.file_id is None and entry.url is None
+    dest = out_dir / "Bundled - my patch.zip"
+    assert Path(entry.path) == dest.resolve()
+    assert entry.size == dest.stat().st_size
+    assert entry.md5 == downloader._md5_of_file(dest)
+
+    with zipfile.ZipFile(dest) as zf:
+        names = sorted(zf.namelist())
+    assert names == [
+        "textures/actors/character/KhajiitMale/head_msn.dds",
+        "textures/actors/character/khajiitfemale/head.dds",
+        "textures/actors/character/khajiitfemale/head_msn.dds",
+    ]
+
+    meta = _read_meta(dest.with_name(dest.name + ".meta"))["General"]
+    assert meta["repository"] == ""
+    assert meta["modID"] == "0" and meta["fileID"] == "0"
+    assert "directURL" not in meta
+
+
+def test_download_bundle_falls_back_to_logical_filename_then_stem(tmp_path: Path):
+    # The folder is named neither after fileExpression nor logicalFilename, but
+    # contains the logical name's stem -- the case-insensitive last resort.
+    manifest_path = _bundle_manifest(tmp_path, "Bundled - not-this-name.7z (v)")
+    _bundled_tree(manifest_path, "MY PATCH (bundled)")
+
+    entry = downloader._download_bundle(
+        _bundle_mod(manifest_path),
+        tmp_path / "downloads",
+        "SkyrimSE",
+        manifest_path.parent / "bundled",
+    )
+    assert entry.status == "ok"
+    assert entry.file_name == "Bundled - my patch.zip"
+
+
+def test_download_bundle_file_entry_is_copied_under_its_own_name(tmp_path: Path):
+    expression = "Bundled - my patch.7z (v)"
+    manifest_path = _bundle_manifest(tmp_path, expression)
+    bundled = manifest_path.parent / "bundled"
+    bundled.mkdir(parents=True, exist_ok=True)
+    (bundled / expression).write_bytes(b"7z-ish payload")
+
+    out_dir = tmp_path / "downloads"
+    entry = downloader._download_bundle(_bundle_mod(manifest_path), out_dir, "SkyrimSE", bundled)
+
+    assert entry.status == "ok"
+    assert entry.file_name == expression
+    dest = out_dir / expression
+    assert dest.read_bytes() == b"7z-ish payload"
+    assert entry.size == len(b"7z-ish payload")
+    assert dest.with_name(dest.name + ".meta").exists()
+
+
+def test_download_bundle_missing_content_is_unsupported_with_a_clear_error(tmp_path: Path):
+    manifest_path = _bundle_manifest(tmp_path, "Bundled - gone.7z (v)")
+    (manifest_path.parent / "bundled").mkdir(parents=True, exist_ok=True)
+
+    entry = downloader._download_bundle(
+        _bundle_mod(manifest_path),
+        tmp_path / "downloads",
+        "SkyrimSE",
+        manifest_path.parent / "bundled",
+    )
+    assert entry.status == "unsupported"
+    assert entry.error == "bundled file not found in collection archive: Bundled - gone.7z (v)"
+    assert entry.path is None
+
+
+def test_download_bundle_rerun_keeps_the_existing_zip(tmp_path: Path):
+    expression = "Bundled - my patch.7z (v)"
+    manifest_path = _bundle_manifest(tmp_path, expression)
+    _bundled_tree(manifest_path, expression)
+    out_dir = tmp_path / "downloads"
+    mod = _bundle_mod(manifest_path)
+
+    first = downloader._download_bundle(mod, out_dir, "SkyrimSE", manifest_path.parent / "bundled")
+    dest = Path(first.path)
+    stamp = dest.stat().st_mtime_ns
+    payload = dest.read_bytes()
+
+    second = downloader._download_bundle(mod, out_dir, "SkyrimSE", manifest_path.parent / "bundled")
+    assert second.status == "skipped"
+    assert second.md5 == first.md5
+    assert dest.stat().st_mtime_ns == stamp
+    assert dest.read_bytes() == payload
+
+
+def test_run_download_packs_bundle_mods_without_a_network_client(tmp_path: Path):
+    import json
+
+    expression = "Bundled - my patch.7z (v)"
+    manifest_path = _bundle_manifest(tmp_path, expression)
+    _bundled_tree(manifest_path, expression)
+    out_dir = tmp_path / "downloads"
+    json_path = tmp_path / "downloads.json"
+
+    rc = downloader.run_download(
+        manifest_path=manifest_path,
+        out_dir=out_dir,
+        jobs=1,
+        limit=None,
+        include_optional=True,
+        api_key=None,
+        json_path=json_path,
+        reporter=_RecordingReporter(),
+    )
+    assert rc == 0
+    entries = json.loads(json_path.read_text(encoding="utf-8"))["entries"]
+    assert [e["status"] for e in entries] == ["ok"]
+    assert entries[0]["source_type"] == "bundle"
+    assert Path(entries[0]["path"]).exists()

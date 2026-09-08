@@ -637,3 +637,69 @@ def _args(instance: Path, **overrides: object):
     }
     values.update(overrides)
     return argparse.Namespace(**values)
+
+
+# -- a custom archive store (`create --downloads-dir`) --------------------------------
+
+
+def _move_downloads(instance: Path, led: ledger_mod.Ledger) -> Path:
+    """Relocate the fixture's archives the way `create --downloads-dir` would have."""
+    import shutil
+
+    custom = instance.parent / "archives"
+    shutil.move(str(instance / "downloads"), str(custom))
+    led.set_downloads_dir(custom)
+    led.save()
+    return custom.resolve()
+
+
+def test_settings_downloads_follows_the_ledger(instance: Path, led: ledger_mod.Ledger) -> None:
+    custom = _move_downloads(instance, led)
+    s = wabbajack.build_settings(instance, led)
+    assert s["Downloads"] == str(custom).replace("/", "\\")
+    # The source root is still the instance itself; only the archives moved.
+    assert s["Source"] == str(instance).replace("/", "\\")
+
+
+def test_checklist_reads_the_archives_from_a_custom_downloads_dir(
+    instance: Path, led: ledger_mod.Ledger
+) -> None:
+    _move_downloads(instance, led)
+    checklist = wabbajack.precompile_checklist(instance, led)
+
+    names = {a.name: a.source for a in checklist.archives}
+    assert names == {
+        "good.7z": "nexus",
+        "direct.zip": "direct",
+        "empty-meta.zip": "unrecognised",
+        "orphan.rar": "missing",
+    }
+    assert any("no usable .meta" in w for w in checklist.warnings)
+
+
+def test_traced_folders_are_found_in_a_custom_downloads_dir(
+    instance: Path, led: ledger_mod.Ledger
+) -> None:
+    led.data["tools"]["xedit"] = {
+        "name": "xEdit (SSEEdit)",
+        "version": "xedit-4.1.5f",
+        "source": {"type": "github", "repo": "TES5Edit/TES5Edit", "tag": "latest"},
+        "dir": str(instance / "Tools" / "xedit"),
+        "executables": [],
+    }
+    custom = _move_downloads(instance, led)
+    (custom / "xEdit.4.1.5f.7z").write_bytes(b"x" * 10)
+    (custom / "xEdit.4.1.5f.7z.meta").write_text(
+        _meta(
+            gameName="",
+            modID="",
+            fileID="",
+            modName="xEdit (SSEEdit)",
+            directURL="https://example.test/xEdit.4.1.5f.7z",
+        ),
+        encoding="utf-8",
+    )
+
+    traced = {e.path: e.archive for e in wabbajack.check_traced(instance, led)}
+    assert traced["Tools\\xedit"] == "xEdit.4.1.5f.7z"
+    assert "Tools\\xedit" not in {e.path for e in wabbajack.check_inlined(instance, led)}

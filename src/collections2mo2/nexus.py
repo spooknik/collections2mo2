@@ -253,6 +253,19 @@ class NexusClient:
             resp.raise_for_status()
             return resp.json()
 
+    def game_info(self, domain: str) -> dict[str, Any]:
+        """Fetch a game's v1 record. We use it for `categories` only.
+
+        Observed shape (2026-09): {"id", "name", "domain_name", ...,
+        "categories": [{"category_id", "name", "parent_category": <id>|false}, ...]};
+        skyrimspecialedition reports 49 categories, which is exactly what MO2's
+        "import Nexus categories" turns into `categories.dat`/`nexuscatmap.dat`.
+        """
+        body = self._get_v1_json(f"/v1/games/{domain}.json")
+        if not isinstance(body, dict):
+            raise NexusError(f"unexpected game info response: {str(body)[:300]}")
+        return body
+
     def mod_file_info(self, domain: str, mod_id: int, file_id: int) -> dict[str, Any]:
         """Fetch file details for a specific mod file.
 

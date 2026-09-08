@@ -26,6 +26,10 @@ class WizardState:
     # `LocationPage.on_enter`). None for an ordinary new-instance run.
     preset_instance_dir: Path | None = None
     instance_dir: Path | None = None
+    # A custom archive store for the run (`create --downloads-dir`), set by the Location
+    # page. None means the default `<instance>/downloads`, which is also what an instance
+    # that never asked for another folder records in its ledger.
+    downloads_dir: Path | None = None
     game_path: Path | None = None
     stock_game: bool = True
     # The Location page's advisory game-version check: ("match"|"mismatch"|"unknown",
@@ -43,6 +47,9 @@ class WizardState:
     window: str = "keep"
 
     jobs: int = 4
+    # Review page: carry the run past mods that will not download or install
+    # (`create --skip-errors`); the Progress page lists whatever it dropped.
+    skip_errors: bool = False
 
     # -- run result -------------------------------------------------------------
     run_succeeded: bool | None = None
@@ -62,6 +69,7 @@ class WizardState:
         self.collection_summary = None
         self.selected_revision = None
         self.instance_dir = None
+        self.downloads_dir = None
         self.game_path = None
         self.stock_game = True
         self.game_version_check = None
@@ -71,4 +79,5 @@ class WizardState:
         self.vsync = "keep"
         self.window = "keep"
         self.jobs = 4
+        self.skip_errors = False
         self.run_succeeded = None

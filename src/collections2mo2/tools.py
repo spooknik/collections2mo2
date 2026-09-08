@@ -891,7 +891,7 @@ def _install_companion_mods(
     owner = ledger_mod.tool_owner(tool_id)
     mods_dir = mo2_dir / "mods"
     mods_dir.mkdir(parents=True, exist_ok=True)
-    downloads_dir = mo2_dir / "downloads"
+    downloads_dir = led.downloads_dir
     downloads_dir.mkdir(parents=True, exist_ok=True)
     tmp_root = mo2_dir / ".c2mo2-tools-tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
@@ -1089,7 +1089,7 @@ def _install_one(
         if missing:
             print(f"[{tool_id}] warning: executable(s) not found after install: {missing}")
 
-        downloads_dir = mo2_dir / "downloads"
+        downloads_dir = led.downloads_dir
         downloads_dir.mkdir(parents=True, exist_ok=True)
         dl_dest = downloads_dir / resolved.filename
         if not dl_dest.exists():

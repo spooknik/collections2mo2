@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from ... import api, ledger
 from .. import recents
 from ..progress_widget import ProgressWidget
 from ..reporter_bridge import QtReporter
+from ..theme import warning_style
 from ..worker import EngineWorker
 from .base import WizardPage
 
@@ -16,6 +17,10 @@ from .base import WizardPage
 # is usable, which for a large collection can take well over a minute; without this the
 # window just looks hung. Matches `create.py`'s CLI summary hint.
 MO2_FIRST_START_SECONDS = 60
+
+# A long tail of skipped mods would push the buttons off the bottom of the window, and
+# the full list is on the layer's ledger record anyway (`c2mo2 status` prints it all).
+MAX_SKIPPED_LINES = 25
 
 
 class ProgressPage(WizardPage):
@@ -29,6 +34,21 @@ class ProgressPage(WizardPage):
         layout = QVBoxLayout(self)
         self.panel = ProgressWidget()
         layout.addWidget(self.panel, 1)
+
+        # Filled in by `_on_finished` when a `--skip-errors` run left mods out; the
+        # run itself succeeded, so this is a warning next to working Launch/Open
+        # buttons rather than a failure message.
+        self.skipped_label = QLabel("")
+        self.skipped_label.setWordWrap(True)
+        self.skipped_label.setStyleSheet(warning_style(self.skipped_label))
+        self.skipped_label.setVisible(False)
+        layout.addWidget(self.skipped_label)
+        self.skipped_note = QLabel(
+            "They are not in the instance. Install them by hand, or re-run once Nexus serves them."
+        )
+        self.skipped_note.setWordWrap(True)
+        self.skipped_note.setVisible(False)
+        layout.addWidget(self.skipped_note)
 
         btn_row = QHBoxLayout()
         self.cancel_btn = QPushButton("Cancel")
@@ -57,6 +77,8 @@ class ProgressPage(WizardPage):
         self.launch_btn.setVisible(False)
         self.open_folder_btn.setVisible(False)
         self.back_btn.setVisible(False)
+        self.skipped_label.setVisible(False)
+        self.skipped_note.setVisible(False)
         self.busy_changed.emit(True)
 
         reporter = QtReporter()
@@ -68,12 +90,14 @@ class ProgressPage(WizardPage):
             "game_path": s.game_path,
             "revision": s.selected_revision,
             "stock_game": s.stock_game,
+            "downloads_dir": s.downloads_dir,
             "jobs": s.jobs,
             "resolution": s.resolution,
             "vsync": s.vsync,
             "window": s.window,
             "skip_survey": True,
             "allow_missing": False,
+            "skip_errors": s.skip_errors,
             "tool_ids": list(s.tool_ids),
         }
         self._worker = EngineWorker(api.create_instance, kwargs, reporter=reporter)
@@ -99,10 +123,10 @@ class ProgressPage(WizardPage):
         self.panel.progress_bar.setRange(0, 1)
         if rc == 0:
             self.panel.progress_bar.setValue(1)
-            self.panel.stage_label.setText("Done.")
             self.state.run_succeeded = True
             self.launch_btn.setVisible(True)
             self.open_folder_btn.setVisible(True)
+            self._show_skipped()
             self._remember_instance()
         else:
             self.panel.progress_bar.setValue(0)
@@ -110,6 +134,36 @@ class ProgressPage(WizardPage):
             self.state.run_succeeded = False
         self.back_btn.setVisible(True)
         self.busy_changed.emit(False)
+
+    def _show_skipped(self) -> None:
+        """Report what a `--skip-errors` run left out, reading it back off the ledger.
+
+        The run finished, so this never disables Launch or Open folder -- the instance
+        is usable, just short of these mods.
+        """
+        skipped = []
+        if self.state.instance_dir is not None:
+            try:
+                skipped = api.skipped_mods(self.state.instance_dir)
+            except Exception:  # noqa: BLE001 - a cosmetic epilogue, never worth failing over
+                skipped = []
+        if not skipped:
+            self.panel.stage_label.setText("Done.")
+            self.skipped_label.setVisible(False)
+            self.skipped_note.setVisible(False)
+            return
+        self.panel.stage_label.setText(
+            f"Done, but {len(skipped)} mod(s) were skipped -- see below."
+        )
+        lines = [
+            f"{item.get('name', '?')} -- {item.get('stage', '?')}: {item.get('reason', '')}"
+            for item in skipped[:MAX_SKIPPED_LINES]
+        ]
+        if len(skipped) > MAX_SKIPPED_LINES:
+            lines.append(f"... +{len(skipped) - MAX_SKIPPED_LINES} more")
+        self.skipped_label.setText("Skipped mods:\n" + "\n".join(lines))
+        self.skipped_label.setVisible(True)
+        self.skipped_note.setVisible(True)
 
     def _remember_instance(self) -> None:
         if self.state.instance_dir is None:

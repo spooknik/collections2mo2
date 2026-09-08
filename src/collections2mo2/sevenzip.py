@@ -48,6 +48,7 @@ window for a fraction of a second and steals focus.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -217,8 +218,46 @@ def list_archive(path: Path | str) -> list[ArchiveEntry]:
     return entries
 
 
-def extract(path: Path | str, dest: Path | str, members: list[str] | None = None) -> None:
-    """Extract an archive (or specific members of it) into `dest` via `7za x`."""
+# 7-Zip error messages that concern what happens to an entry *after* its bytes are on disk:
+# reapplying a reparse point / symbolic link recorded in the archive's NTFS attributes. Mod
+# authors zip their work from OneDrive/Dropbox folders, where a cloud placeholder is a plain
+# file carrying FILE_ATTRIBUTE_REPARSE_POINT, and 7-Zip then reports "Incorrect reparse
+# stream" (exit 2) for a text file it has in fact written out in full.
+_BENIGN_EXTRACT_ERROR = re.compile(r"reparse|symbolic link|link path", re.IGNORECASE)
+
+
+def _error_lines(result: subprocess.CompletedProcess[str]) -> list[str]:
+    lines = (result.stderr + "\n" + result.stdout).splitlines()
+    return [ln.strip() for ln in lines if ln.strip().startswith("ERROR:")]
+
+
+def _missing_after_extract(path: Path | str, dest: Path, members: list[str] | None) -> list[str]:
+    """Names of the archive's files (or of `members`) that are absent or the wrong size in `dest`."""
+    wanted = [m.replace("\\", "/").rstrip("/") for m in members or []]
+    missing: list[str] = []
+    for entry in list_archive(path):
+        if entry.is_dir:
+            continue
+        if wanted and not any(entry.path == w or entry.path.startswith(w + "/") for w in wanted):
+            continue
+        out = dest / entry.path
+        try:
+            if out.is_file() and out.stat().st_size == entry.size:
+                continue
+        except OSError:
+            pass
+        missing.append(entry.path)
+    return missing
+
+
+def extract(path: Path | str, dest: Path | str, members: list[str] | None = None) -> list[str]:
+    """Extract an archive (or specific members of it) into `dest` via `7za x`.
+
+    Returns the warnings worth recording: empty on a clean run. A non-zero exit is tolerated
+    only when every error 7-Zip printed is about reapplying a reparse point or symbolic link
+    (see `_BENIGN_EXTRACT_ERROR`) *and* every file the archive lists is present in `dest` at
+    its recorded size; the error lines are then returned as warnings. Anything else raises.
+    """
     exe = ensure_7za()
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
@@ -226,8 +265,14 @@ def extract(path: Path | str, dest: Path | str, members: list[str] | None = None
     if members:
         args.extend(members)
     result = _run_7z(exe, args)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"7za x failed for {path} (exit {result.returncode}): "
-            f"{result.stderr.strip() or result.stdout.strip()}"
-        )
+    if result.returncode == 0:
+        return []
+    errors = _error_lines(result)
+    if errors and all(_BENIGN_EXTRACT_ERROR.search(e) for e in errors):
+        missing = _missing_after_extract(path, dest, members)
+        if not missing:
+            return [f"7za x reported (exit {result.returncode}): {e}" for e in errors]
+    raise RuntimeError(
+        f"7za x failed for {path} (exit {result.returncode}): "
+        f"{result.stderr.strip() or result.stdout.strip()}"
+    )

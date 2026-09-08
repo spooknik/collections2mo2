@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import os
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -77,6 +78,60 @@ def test_create_instance_passes_tool_ids_through(monkeypatch):
     )
     assert rc == 0
     assert captured["ns"].tools == ["xedit", "loot"]
+
+
+def test_create_instance_forwards_a_custom_downloads_dir(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        api.create, "cmd_create", lambda ns, reporter=None: captured.setdefault("ns", ns) and 0
+    )
+    api.create_instance(
+        url="https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3",
+        out="D:/Skyrim",
+        game_path="E:/Games/Skyrim Special Edition",
+        downloads_dir=Path("E:/NexusDownloads"),
+    )
+    assert captured["ns"].downloads_dir == str(Path("E:/NexusDownloads"))
+
+
+def test_create_instance_leaves_downloads_dir_unset_by_default(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        api.create, "cmd_create", lambda ns, reporter=None: captured.setdefault("ns", ns) and 0
+    )
+    api.create_instance(
+        url="https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3",
+        out="D:/Skyrim",
+        game_path="E:/Games/Skyrim Special Edition",
+    )
+    assert captured["ns"].downloads_dir is None
+
+
+def test_create_instance_forwards_skip_errors(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        api.create, "cmd_create", lambda ns, reporter=None: captured.setdefault("ns", ns) and 0
+    )
+    api.create_instance(
+        url="https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3",
+        out="D:/Skyrim",
+        game_path="E:/Games/Skyrim Special Edition",
+        skip_errors=True,
+    )
+    assert captured["ns"].skip_errors is True
+
+
+def test_create_instance_does_not_skip_errors_by_default(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        api.create, "cmd_create", lambda ns, reporter=None: captured.setdefault("ns", ns) and 0
+    )
+    api.create_instance(
+        url="https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3",
+        out="D:/Skyrim",
+        game_path="E:/Games/Skyrim Special Edition",
+    )
+    assert captured["ns"].skip_errors is False
 
 
 def test_create_instance_validates_resolution(monkeypatch):
@@ -241,6 +296,98 @@ def test_path_warnings_flags_the_game_folder(monkeypatch, tmp_path):
 def test_path_warnings_stay_quiet_for_a_plain_folder(monkeypatch, tmp_path):
     _neutral_location_env(monkeypatch, tmp_path)
     assert api.path_warnings("D:/GTS", "D:/Skyrim") == []
+
+
+# -- downloads folder ----------------------------------------------------------------------
+
+
+def test_downloads_path_warnings_delegates_to_create(monkeypatch, tmp_path):
+    _neutral_location_env(monkeypatch, tmp_path)
+    seen = {}
+
+    def fake(downloads, instance=None, game_path=None):
+        seen["args"] = (str(downloads), str(instance), str(game_path))
+        return ["nope"]
+
+    monkeypatch.setattr(api.create, "downloads_path_warnings", fake)
+    assert api.downloads_path_warnings("E:/Archives", "D:/GTS", "D:/Skyrim") == ["nope"]
+    assert seen["args"] == ("E:/Archives", "D:/GTS", "D:/Skyrim")
+
+
+def test_downloads_path_warnings_flags_a_store_inside_the_instance(monkeypatch, tmp_path):
+    _neutral_location_env(monkeypatch, tmp_path)
+    warnings = api.downloads_path_warnings("D:/GTS/mods/archives", "D:/GTS")
+    assert any("mods/" in w for w in warnings)
+
+
+def test_downloads_path_warnings_quiet_for_a_folder_on_another_drive(monkeypatch, tmp_path):
+    _neutral_location_env(monkeypatch, tmp_path)
+    assert api.downloads_path_warnings("E:/NexusDownloads", "D:/GTS", "D:/Skyrim") == []
+
+
+def test_instance_downloads_dir_is_none_for_the_default_location(tmp_path):
+    led = api.ledger.Ledger(tmp_path)
+    led.save()
+    assert api.instance_downloads_dir(tmp_path) is None
+
+
+def test_instance_downloads_dir_reads_a_custom_location(tmp_path):
+    store = tmp_path / "elsewhere" / "archives"
+    led = api.ledger.Ledger(tmp_path)
+    led.set_downloads_dir(store)
+    led.save()
+    assert api.instance_downloads_dir(tmp_path) == store.resolve()
+
+
+def test_instance_downloads_dir_is_none_without_a_ledger(tmp_path):
+    assert api.instance_downloads_dir(tmp_path / "not-an-instance") is None
+
+
+def test_skipped_mods_is_empty_without_a_ledger(tmp_path):
+    assert api.skipped_mods(tmp_path / "not-an-instance") == []
+
+
+def test_skipped_mods_flattens_every_layer_and_names_it(tmp_path):
+    led = api.ledger.Ledger(tmp_path)
+    led.register_layer("h2uqa3", 68, name="Gate to Sovngarde")
+    led.register_layer("extras", 3, name="Extras")
+    led.set_layer_skipped(
+        "h2uqa3",
+        68,
+        [
+            {"name": "Some Mod", "stage": "download", "reason": "404 from Nexus"},
+            {"name": "Other Mod", "stage": "install", "reason": "fomod failed"},
+        ],
+    )
+    led.set_layer_skipped("extras", 3, [{"name": "Third", "stage": "inspect", "reason": "bad 7z"}])
+    led.save()
+
+    skipped = api.skipped_mods(tmp_path)
+    assert [s["name"] for s in skipped] == ["Some Mod", "Other Mod", "Third"]
+    assert [s["layer"] for s in skipped] == ["h2uqa3", "h2uqa3", "extras"]
+    assert skipped[0]["stage"] == "download"
+    assert skipped[2]["reason"] == "bad 7z"
+
+
+def test_load_instance_reports_a_layers_skipped_mods(tmp_path, monkeypatch):
+    """`LayerStatus.skipped` comes straight off the ledger, so the Manage tab can show
+    it without another disk read (the Nexus lookup beside it is faked away here)."""
+    led = api.ledger.Ledger(tmp_path)
+    led.register_layer("h2uqa3", 68, name="Gate to Sovngarde")
+    led.set_layer_skipped(
+        "h2uqa3", 68, [{"name": "Some Mod", "stage": "download", "reason": "404"}]
+    )
+    led.save()
+
+    def _no_network(self, ref, revision):
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(api.NexusClient, "revision_info", _no_network)
+
+    summary = api.load_instance(tmp_path)
+    assert len(summary.layers) == 1
+    expected = {"name": "Some Mod", "stage": "download", "reason": "404"}
+    assert summary.layers[0].skipped == [expected]
 
 
 # -- game version check ------------------------------------------------------------------

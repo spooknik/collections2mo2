@@ -794,6 +794,7 @@ def _fake_summary(out: Path, layers: list) -> object:
         mo2_version="2.5.2",
         layers=layers,
         user_mod_count=0,
+        downloads_dir=out / "downloads",
     )
 
 
@@ -928,6 +929,88 @@ def test_create_into_action_prefills_the_location_page(qtbot, monkeypatch, _isol
     assert "existing folder, downloads reused" in window.pages["review"].summary_label.text()
 
 
+# -- downloads folder (Location + Review) ----------------------------------------------
+
+
+def _location_page(qtbot, monkeypatch):
+    from collections2mo2 import api
+
+    monkeypatch.setattr(api, "detect_skyrim_se_path", lambda: None)
+    # A real background size-scan thread has no place in a widget-wiring test.
+    monkeypatch.setattr(LocationPage, "_start_size_lookup", lambda self, path: None)
+    state = WizardState()
+    page = LocationPage(state)
+    qtbot.addWidget(page)
+    return page, state
+
+
+def test_location_page_leaves_downloads_dir_unset_when_the_field_is_blank(
+    qtbot, monkeypatch, tmp_path
+):
+    page, state = _location_page(qtbot, monkeypatch)
+    page.instance_edit.setText("D:/GTS")
+    page.game_edit.setText(str(tmp_path))
+
+    assert page.downloads_edit.text() == ""
+    assert page.on_leave() is True
+    assert state.downloads_dir is None
+
+
+def test_location_page_stores_a_custom_downloads_folder(qtbot, monkeypatch, tmp_path):
+    page, state = _location_page(qtbot, monkeypatch)
+    page.instance_edit.setText("D:/GTS")
+    page.game_edit.setText(str(tmp_path))
+    page.downloads_edit.setText("E:/NexusDownloads")
+
+    assert page.on_leave() is True
+    assert state.downloads_dir == Path("E:/NexusDownloads")
+    # Advisory only: a downloads folder never gates Continue.
+    assert page.is_ready() is True
+
+
+def test_location_page_warns_about_a_downloads_folder_inside_the_instance(
+    qtbot, monkeypatch, tmp_path
+):
+    page, _state = _location_page(qtbot, monkeypatch)
+    page.instance_edit.setText("D:/GTS")
+    page.downloads_edit.setText("D:/GTS/mods/archives")
+    assert "mods/" in page.downloads_warning.text()
+
+
+def test_location_page_locks_the_field_for_an_instance_with_its_own_store(
+    qtbot, monkeypatch, tmp_path
+):
+    from collections2mo2 import api
+
+    store = tmp_path / "archives"
+    monkeypatch.setattr(api, "instance_downloads_dir", lambda path: store)
+    page, state = _location_page(qtbot, monkeypatch)
+    state.preset_instance_dir = tmp_path / "instance"
+    page.on_enter()
+
+    assert page.downloads_edit.text() == str(store)
+    assert page.downloads_edit.isEnabled() is False
+    assert str(store) in page.downloads_note.text()
+
+
+def test_review_page_names_the_downloads_folder(qtbot):
+    from collections2mo2.gui.pages.review import ReviewPage
+
+    state = WizardState()
+    state.instance_dir = Path("D:/GTS")
+    state.game_path = Path("D:/Skyrim")
+    page = ReviewPage(state)
+    qtbot.addWidget(page)
+
+    page.on_enter()
+    assert "(inside the instance)" in page.summary_label.text()
+
+    state.downloads_dir = Path("E:/NexusDownloads")
+    page.on_enter()
+    assert "NexusDownloads" in page.summary_label.text()
+    assert "(inside the instance)" not in page.summary_label.text()
+
+
 # -- game version check (Location + Review) -------------------------------------------
 
 
@@ -1014,3 +1097,135 @@ def test_wizard_window_title_carries_the_version(qtbot):
     qtbot.addWidget(window)
     assert __version__ in window.windowTitle()
     assert window.pages[window._current].title in window.windowTitle()
+
+
+# -- skip-errors: the Review checkbox and the Progress epilogue -----------------------
+
+
+def test_review_page_skip_errors_defaults_off(qtbot):
+    state = WizardState()
+    state.instance_dir = Path("D:/GTS")
+    state.game_path = Path("D:/Skyrim")
+    page = ReviewPage(state)
+    qtbot.addWidget(page)
+
+    page.on_enter()
+    assert page.skip_errors_box.isChecked() is False
+    page.on_leave()
+    assert state.skip_errors is False
+
+
+def test_review_page_skip_errors_checkbox_sets_the_state(qtbot):
+    state = WizardState()
+    state.instance_dir = Path("D:/GTS")
+    state.game_path = Path("D:/Skyrim")
+    page = ReviewPage(state)
+    qtbot.addWidget(page)
+
+    page.on_enter()
+    page.skip_errors_box.setChecked(True)
+    page.on_leave()
+    assert state.skip_errors is True
+
+
+def test_progress_page_lists_skipped_mods_after_a_successful_run(qtbot, monkeypatch, tmp_path):
+    from collections2mo2 import api
+
+    monkeypatch.setattr(
+        api,
+        "skipped_mods",
+        lambda instance: [
+            {"name": "Some Mod", "stage": "download", "reason": "404 from Nexus", "layer": "a"},
+            {"name": "Other Mod", "stage": "install", "reason": "fomod failed", "layer": "a"},
+        ],
+    )
+    monkeypatch.setattr("collections2mo2.gui.recents.remember_instance", lambda path, name: None)
+
+    state = WizardState()
+    state.instance_dir = tmp_path
+    page = ProgressPage(state)
+    qtbot.addWidget(page)
+    page._on_finished(0)
+
+    assert page.skipped_label.isVisibleTo(page)
+    assert page.skipped_note.isVisibleTo(page)
+    assert "Some Mod -- download: 404 from Nexus" in page.skipped_label.text()
+    assert "Other Mod -- install: fomod failed" in page.skipped_label.text()
+    assert "2 mod(s) were skipped" in page.panel.stage_label.text()
+    # The instance is usable, so neither button is taken away.
+    assert page.launch_btn.isVisibleTo(page)
+    assert page.open_folder_btn.isVisibleTo(page)
+
+
+def test_progress_page_hides_the_skipped_label_for_a_clean_run(qtbot, monkeypatch, tmp_path):
+    from collections2mo2 import api
+
+    monkeypatch.setattr(api, "skipped_mods", lambda instance: [])
+    monkeypatch.setattr("collections2mo2.gui.recents.remember_instance", lambda path, name: None)
+
+    state = WizardState()
+    state.instance_dir = tmp_path
+    page = ProgressPage(state)
+    qtbot.addWidget(page)
+    page._on_finished(0)
+
+    assert page.skipped_label.isVisibleTo(page) is False
+    assert page.skipped_note.isVisibleTo(page) is False
+    assert page.panel.stage_label.text() == "Done."
+
+
+def test_progress_page_passes_skip_errors_into_the_run(qtbot, monkeypatch, tmp_path):
+    captured = {}
+
+    class _FakeWorker:
+        def __init__(self, fn, kwargs, reporter=None):
+            captured["kwargs"] = kwargs
+            self.succeeded = _Signal()
+            self.failed = _Signal()
+            self.cancelled = _Signal()
+            self.reporter = reporter
+
+        def start(self):
+            pass
+
+    class _Signal:
+        def connect(self, slot):
+            pass
+
+    monkeypatch.setattr("collections2mo2.gui.pages.progress.EngineWorker", _FakeWorker)
+
+    state = WizardState()
+    state.instance_dir = tmp_path
+    state.game_path = tmp_path
+    state.skip_errors = True
+    page = ProgressPage(state)
+    qtbot.addWidget(page)
+    page.start()
+
+    assert captured["kwargs"]["skip_errors"] is True
+
+
+def test_manage_page_reports_a_layers_skipped_mods(qtbot, _isolated_qsettings):
+    from collections2mo2 import api
+
+    tmp_path = _isolated_qsettings
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    (instance / "c2mo2-instance.json").write_text("{}")
+    layer = api.LayerStatus(
+        slug="h2uqa3",
+        revision=68,
+        name="Gate to Sovngarde",
+        author="Nexus",
+        is_base=True,
+        mod_count=292,
+        latest_revision_number=68,
+        update_available=False,
+        skipped=[{"name": "Some Mod", "stage": "download", "reason": "404"}],
+    )
+
+    page = ManagePage(WizardState())
+    qtbot.addWidget(page)
+    page._on_loaded(_fake_summary(instance, [layer]))
+
+    assert "1 mod(s) skipped by the last run" in page.info_label.text()

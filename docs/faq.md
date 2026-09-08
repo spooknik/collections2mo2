@@ -53,6 +53,43 @@ Manage tab); on the CLI, repeat the `c2mo2 create` command. To start a second in
 of the same collection without downloading twice, pass `--reuse-downloads` pointing at
 the first instance's `downloads` folder.
 
+## Can I keep downloads on another drive?
+
+Yes. Pass `--downloads-dir <folder>` to `c2mo2 create` (or fill in the "Downloads folder"
+field on the wizard's install location page) and archives go there instead of
+`<out>/downloads` - useful when mods live on a fast drive and archives sit on a bigger,
+slower one. The choice is recorded in the instance ledger, so `add`, `update`, `remove`,
+`tools install`, `build`, and the Wabbajack compile all read it back automatically; none
+of them take the flag. Re-running `create` on the same instance without `--downloads-dir`
+keeps the folder you picked originally; passing a different one switches to it (with a
+warning) and re-fetches whatever archives the new folder doesn't already have. There's no
+command to move an existing instance's downloads folder after the fact - pick it at
+create time.
+
+Deleting an instance ("Remove instance..." in the GUI) only removes the instance folder
+itself, so a `--downloads-dir` kept outside it survives the deletion. Point a new
+`c2mo2 create` at that same `--downloads-dir` and it reuses whatever archives are still
+there (matched by MD5), so building the same collection again doesn't re-download it.
+
+## I deleted my downloads folder (or some archives). Does update still work?
+
+Mostly, yes. `c2mo2 update` diffs the old and new manifests and only re-downloads,
+re-inspects, and reinstalls the mods whose file, FOMOD choices, or replicate hashes
+actually changed - for those it re-fetches whatever archive is missing (one already
+present with a matching MD5 is left alone). Archives belonging to mods that didn't
+change are never touched by `update`, so deleting them doesn't break it. The same goes
+for `add` (only downloads what the new layer needs), `remove` (never needs archives),
+and `tools install` (only cares whether the tool's own folder exists).
+
+What *does* need the archives: `c2mo2 install --force` reinstalls straight from them, and
+a missing one fails just that mod while the run carries on with the rest. The Wabbajack
+compile (`c2mo2 wabbajack`, or the checklist it prints) can only reference a mod against
+an archive it can trace; a mod whose archive is gone gets inlined into the `.wabbajack`
+file instead, which is usually not what you want for a large mod. To get missing
+archives back without reinstalling anything, run `c2mo2 create` again with the same URL
+and `--out` - it re-downloads whatever is missing from the recorded downloads folder and
+leaves already-installed mods alone.
+
 ## My resolution/vsync/window setting was ignored
 
 Some collections ship **SSE Display Tweaks**, which overrides `SkyrimPrefs.ini`'s
@@ -122,6 +159,23 @@ c2mo2 tools refresh --mo2-dir <instance-dir>
 
 This only rewrites the `[customExecutables]` arguments for tools already installed -
 no re-download, no re-extraction, and every other executable entry is left alone.
+
+## Why do my mods have no categories in MO2?
+
+They do now. Every installed mod's `meta.ini` carries its real Nexus category, so MO2's
+category list and filter show the same categories Nexus does instead of "None" for
+everything. Categories come from two requests per collection revision (the game's
+category list, and every mod's category from the collection manifest), not a per-mod
+lookup, so it doesn't cost extra API budget.
+
+An instance built before this feature gets categorised on its next profile render -
+`add`, `remove`, `update`, or `c2mo2 profile-instance` - which tops up each mod's
+`meta.ini` without touching anything else; the log line is
+`categories: N meta.ini updated`. If you already recategorised mods by hand in MO2
+("import Nexus categories" or your own edits), that numbering is read back from
+`nexuscatmap.dat` and kept - `c2mo2` never overwrites an existing category mapping. The
+whole thing is cosmetic and never fails a run: if the category fetch errors, it's one
+warning and mods are simply left uncategorised.
 
 ## "Path too long" / file system errors during install or build
 
@@ -227,6 +281,27 @@ means something about the mod list changed underneath the curator. Pass
 `--allow-missing` to carry on without it - those mods are listed in the summary
 instead. An MD5 mismatch (the file exists but isn't the one the collection expects)
 still stops the run either way; that's a different, more serious kind of problem.
+
+## A mod in the collection can't be downloaded or installed - can I build the rest?
+
+Yes. Pass `--skip-errors` to `create`, `add`, or `update` (the wizard's Review page has
+it as a "Continue when a mod cannot be downloaded or installed" checkbox) and the run
+carries on past any mod that can't be downloaded (Nexus no longer serves the file, a
+network error, an md5 mismatch), listed by 7-Zip, or installed, instead of stopping
+there. It implies `--allow-missing`, which only ever forgives a file Nexus no longer
+serves and still stops on an md5 mismatch.
+
+The instance is built without those mods - a mismatched download is quarantined and
+never installed - and the run exits 0 with the affected stage shown as `warned`. Every
+skipped mod is printed at the end as `<name>  [download|inspect|install] <reason>`, and
+the list is saved on the layer so `c2mo2 status` shows
+`NOT installed (skipped by the last run): N` and the GUI's Progress and Manage pages
+show it too. On `update`, a mod whose new file failed keeps the previous revision's
+copy on disk; a new mod that failed is simply absent.
+
+To retry: run `create`/`add`/`update` again later (Nexus may be serving the file again,
+or the network blip is gone), or reinstall just that mod with
+`c2mo2 install --only <mod name> --force`.
 
 ## Does `c2mo2` support Vortex "replicate" mode patches?
 

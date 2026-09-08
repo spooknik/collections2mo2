@@ -1300,3 +1300,181 @@ def test_display_override_is_recognised_under_its_legacy_name(tmp_path: Path):
     create.migrate_legacy_instance(create.Paths(inst), NullReporter())
     led = ledger.load(inst)
     assert profile._active_override_name(inst / "mods", led) == profile.DISPLAY_OVERRIDE_MOD_NAME
+
+
+# ------------------------------------------------- a custom archive store, instance-wide
+
+
+def test_instance_paths_follow_the_ledgers_custom_downloads_dir(tmp_path: Path):
+    inst, led = make_instance(
+        tmp_path,
+        [
+            {
+                "slug": "base",
+                "revision": 1,
+                "name": "Base List",
+                "manifest": {"mods": [_mod("A", "md5a")], "modRules": []},
+                "entries": [_entry("A", "md5a")],
+            }
+        ],
+    )
+    custom = tmp_path / "archives"
+    led.set_downloads_dir(custom)
+    led.save()
+
+    paths = layers._instance_paths(str(inst))
+    assert paths.out == inst.resolve()
+    assert paths.downloads == custom.resolve()
+    assert paths.mods == inst.resolve() / "mods"
+
+
+def test_render_instance_points_mo2_at_a_custom_downloads_dir(tmp_path: Path):
+    inst, led = make_instance(
+        tmp_path,
+        [
+            {
+                "slug": "base",
+                "revision": 1,
+                "name": "Base List",
+                "manifest": {"mods": [_mod("A", "md5a")], "modRules": []},
+                "entries": [_entry("A", "md5a")],
+            }
+        ],
+    )
+    custom = tmp_path / "archives"
+    led.set_downloads_dir(custom)
+
+    profile.render_instance(
+        inst, led=led, reporter=NullReporter(), profile_name="TestProfile", keep_inis=True
+    )
+
+    ini = (inst / "ModOrganizer.ini").read_text(encoding="utf-8")
+    assert f"download_directory={custom.resolve().as_posix()}" in ini.splitlines()
+    assert custom.is_dir()
+
+
+def test_render_instance_writes_no_download_directory_for_the_default_store(tmp_path: Path):
+    inst, led = make_instance(
+        tmp_path,
+        [
+            {
+                "slug": "base",
+                "revision": 1,
+                "name": "Base List",
+                "manifest": {"mods": [_mod("A", "md5a")], "modRules": []},
+                "entries": [_entry("A", "md5a")],
+            }
+        ],
+    )
+
+    profile.render_instance(
+        inst, led=led, reporter=NullReporter(), profile_name="TestProfile", keep_inis=True
+    )
+
+    assert "download_directory" not in (inst / "ModOrganizer.ini").read_text(encoding="utf-8")
+    assert (inst / "downloads").is_dir()
+
+
+# ------------------------------------------- `add` and the mods it went in without
+
+
+def _base_instance(tmp_path: Path) -> Path:
+    inst, _ = make_instance(
+        tmp_path,
+        [
+            {
+                "slug": "base",
+                "revision": 1,
+                "name": "Base List",
+                "manifest": {"mods": [_mod("A", "md5a")], "info": {}},
+                "entries": [_entry("A", "md5a")],
+            }
+        ],
+    )
+    return inst
+
+
+def _add_args(inst: Path, **kwargs) -> argparse.Namespace:
+    args = argparse.Namespace(
+        url="https://www.nexusmods.com/games/skyrimspecialedition/collections/addon",
+        instance=str(inst),
+        revision=None,
+        jobs=1,
+        game_path=None,
+        choices_overrides=None,
+        skip_survey=True,
+        allow_missing=False,
+        skip_errors=False,
+        reuse_downloads=None,
+    )
+    for key, value in kwargs.items():
+        setattr(args, key, value)
+    return args
+
+
+def _stub_add_layer(monkeypatch, inst: Path, skipped: list) -> None:
+    """Stand in for the network stages: `add_layer` returns a ready-made layer."""
+    paths = create.Paths.for_instance(inst)
+    ctx = create.LayerContext(
+        slug="addon",
+        revision=2,
+        owner=ledger.collection_owner("addon", 2),
+        name="Add On",
+        author="",
+        domain="skyrimspecialedition",
+        game_name="SkyrimSE",
+        manifest_path=inst / "c2mo2" / "addon.json",
+        layer_paths=create.LayerPaths(paths, "addon", 2),
+        installed=1,
+        skipped=list(skipped),
+        is_base=False,
+    )
+    monkeypatch.setattr(create, "add_layer", lambda *a, **kw: ctx)
+    monkeypatch.setattr(
+        create,
+        "render_profile",
+        lambda *a, **kw: {"layers": [{"slug": "addon", "separators": []}], "user_mods": []},
+    )
+    monkeypatch.setattr(layers, "load_dotenv", lambda *a, **kw: None)
+    monkeypatch.setenv("NEXUS_API_KEY", "test-key")
+
+
+def test_add_lists_the_mods_the_layer_went_in_without(monkeypatch, tmp_path: Path):
+    inst = _base_instance(tmp_path)
+    _stub_add_layer(
+        monkeypatch,
+        inst,
+        [
+            create.SkippedMod("Gone Mod", "download", "404 Not Found"),
+            create.SkippedMod("Bad Mod", "install", "install failed: nothing extracted"),
+        ],
+    )
+    rep = _CollectingReporter()
+
+    rc = layers.cmd_add(_add_args(inst, skip_errors=True), rep)
+
+    assert rc == 0
+    assert "  NOT installed (skipped): 2" in rep.logs
+    assert "    Gone Mod  [download] 404 Not Found" in rep.logs
+    assert "    Bad Mod  [install] install failed: nothing extracted" in rep.logs
+
+
+def test_add_says_nothing_about_skips_for_a_clean_layer(monkeypatch, tmp_path: Path):
+    inst = _base_instance(tmp_path)
+    _stub_add_layer(monkeypatch, inst, [])
+    rep = _CollectingReporter()
+
+    assert layers.cmd_add(_add_args(inst), rep) == 0
+    assert not any("NOT installed (skipped)" in line for line in rep.logs)
+
+
+def test_add_parser_accepts_skip_errors_and_allow_missing():
+    parser = argparse.ArgumentParser()
+    layers.add_parser(parser.add_subparsers(dest="command"))
+    base = ["add", "url", "--instance", "D:/GTS"]
+
+    args = parser.parse_args([*base, "--skip-errors"])
+    assert args.skip_errors is True and args.allow_missing is False
+    assert parser.parse_args([*base, "--allow-missing"]).allow_missing is True
+    plain = parser.parse_args(base)
+    assert plain.skip_errors is False and plain.allow_missing is False

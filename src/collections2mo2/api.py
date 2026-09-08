@@ -67,6 +67,7 @@ __all__ = [
     "detect_skyrim_se_path",
     "dir_size_bytes",
     "disk_free_bytes",
+    "downloads_path_warnings",
     "export_to_wabbajack",
     "fetch_collection_summary",
     "format_bytes",
@@ -77,6 +78,7 @@ __all__ = [
     "install_more_tools",
     "install_tools",
     "installed_game_version",
+    "instance_downloads_dir",
     "instance_exists",
     "launch_mod_organizer",
     "list_revisions",
@@ -89,6 +91,7 @@ __all__ = [
     "run_fomod_survey",
     "save_api_key",
     "short_game_version",
+    "skipped_mods",
     "update_collection_layer",
     "validate_api_key",
 ]
@@ -459,6 +462,33 @@ def path_warnings(path: str | Path, game_path: str | Path | None = None) -> list
     return create.instance_path_warnings(path, game_path)
 
 
+def downloads_path_warnings(
+    downloads: str | Path,
+    instance: str | Path | None = None,
+    game_path: str | Path | None = None,
+) -> list[str]:
+    """Human-readable warnings about `downloads` as a custom archive store; empty if fine.
+
+    Delegates to `create.downloads_path_warnings` for the same reason `path_warnings`
+    delegates: `c2mo2 create --downloads-dir` prints exactly what the wizard shows.
+    `instance`, when known, adds the "inside the instance's mods/overwrite" cases.
+    """
+    return create.downloads_path_warnings(downloads, instance, game_path)
+
+
+def instance_downloads_dir(instance_dir: str | Path) -> Path | None:
+    """The custom archive store an existing instance records, or None for the default.
+
+    An offline, ledger-only read (unlike `load_instance`, which also asks Nexus for each
+    layer's latest revision), so the wizard can call it on the UI thread when it prefills
+    the Location page for a folder the user is reusing.
+    """
+    base = Path(instance_dir)
+    downloads = ledger.downloads_dir(base)
+    default = base / ledger.DEFAULT_DOWNLOADS_NAME
+    return None if downloads == default else downloads
+
+
 def game_version_check(
     collection_versions: list[str],
     game_path: str | Path | None,
@@ -660,6 +690,7 @@ def create_instance(
     game_path: str | Path,
     revision: int | None = None,
     stock_game: bool = False,
+    downloads_dir: str | Path | None = None,
     reuse_downloads: str | None = None,
     jobs: int = 4,
     resolution: str = "keep",
@@ -668,6 +699,7 @@ def create_instance(
     choices_overrides: str | None = None,
     skip_survey: bool = True,
     allow_missing: bool = False,
+    skip_errors: bool = False,
     mo2_version: str = build.DEFAULT_MO2_VERSION,
     rootbuilder_version: str = build.DEFAULT_ROOTBUILDER_VERSION,
     tool_ids: list[str] | None = None,
@@ -678,6 +710,11 @@ def create_instance(
     `resolution` is validated the same way the CLI does (`'auto'`, `'keep'`, or `WxH`).
     `tool_ids` are catalogue tools to install into the new instance once it is built
     (the wizard's Tools page; `--tools` on the CLI).
+    `downloads_dir` puts the archive store somewhere other than `<out>/downloads`
+    (`--downloads-dir`); None keeps the default, which is what the ledger records.
+    `skip_errors` (`--skip-errors`) carries the run past any mod that cannot be
+    downloaded, listed or installed instead of failing; the ones it dropped are on the
+    layer's ledger record afterwards, which is what `skipped_mods` reads back.
     """
     resolution = profile._parse_resolution_arg(resolution)
     ns = argparse.Namespace(
@@ -686,6 +723,7 @@ def create_instance(
         game_path=str(game_path),
         revision=revision,
         stock_game=stock_game,
+        downloads_dir=str(downloads_dir) if downloads_dir else None,
         reuse_downloads=reuse_downloads,
         jobs=jobs,
         resolution=resolution,
@@ -694,6 +732,7 @@ def create_instance(
         choices_overrides=choices_overrides,
         skip_survey=skip_survey,
         allow_missing=allow_missing,
+        skip_errors=skip_errors,
         mo2_version=mo2_version,
         rootbuilder_version=rootbuilder_version,
         tools=list(tool_ids or []),
@@ -714,6 +753,9 @@ class LayerStatus:
     mod_count: int
     latest_revision_number: int | None
     update_available: bool
+    # Mods the last run on this layer went in without (`--skip-errors`), each a
+    # `{name, stage, reason}` dict straight off the ledger; empty for a clean run.
+    skipped: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -724,6 +766,9 @@ class InstanceSummary:
     mo2_version: str
     layers: list[LayerStatus]
     user_mod_count: int
+    # The archive store this instance actually uses: `<out>/downloads` unless the ledger
+    # records a custom one (`create --downloads-dir`).
+    downloads_dir: Path
 
 
 def instance_exists(instance_dir: str | Path) -> bool:
@@ -742,7 +787,7 @@ def load_instance(instance_dir: str | Path) -> InstanceSummary:
     """Read an existing instance's ledger and (network permitting) each layer's latest
     revision on Nexus, for the Manage tab. Does not require an API key -- collection
     metadata is anonymous GraphQL -- but a key gets more reliable results."""
-    paths = create.Paths(Path(instance_dir).expanduser().resolve())
+    paths = create.Paths.for_instance(instance_dir)
     create.migrate_legacy_instance(paths, NullReporter())
     if not (paths.out / ledger.LEDGER_NAME).exists():
         raise ApiError(f"{paths.out} is not a c2mo2 instance ({ledger.LEDGER_NAME} not found).")
@@ -775,6 +820,7 @@ def load_instance(instance_dir: str | Path) -> InstanceSummary:
                 mod_count=mod_count,
                 latest_revision_number=latest,
                 update_available=bool(latest and latest > revision),
+                skipped=led.layer_skipped(layer),
             )
         )
 
@@ -786,7 +832,28 @@ def load_instance(instance_dir: str | Path) -> InstanceSummary:
         mo2_version=(led.data.get("mo2") or {}).get("version") or "",
         layers=layer_statuses,
         user_mod_count=len(user_mods),
+        downloads_dir=led.downloads_dir,
     )
+
+
+def skipped_mods(instance_dir: str | Path) -> list[dict[str, str]]:
+    """Every mod an instance's layers were built without (`--skip-errors`), flattened.
+
+    Each item is the ledger's `{name, stage, reason}` plus a `"layer"` key naming the
+    layer's slug. Offline and ledger-only -- unlike `load_instance` it asks Nexus
+    nothing -- so the wizard can call it on the UI thread the moment a run finishes.
+    Empty when the folder holds no ledger at all.
+    """
+    try:
+        led = ledger.load(instance_dir)
+    except (OSError, ValueError):
+        return []
+    out: list[dict[str, str]] = []
+    for layer in led.data.get("layers") or []:
+        slug = layer.get("slug") or ""
+        for item in led.layer_skipped(layer):
+            out.append({**item, "layer": slug})
+    return out
 
 
 def add_collection_layer(
@@ -799,10 +866,15 @@ def add_collection_layer(
     choices_overrides: str | None = None,
     skip_survey: bool = True,
     allow_missing: bool = False,
+    skip_errors: bool = False,
     reuse_downloads: str | None = None,
     reporter: Reporter | None = None,
 ) -> int:
-    """`c2mo2 add`: layer another collection on top of an existing instance."""
+    """`c2mo2 add`: layer another collection on top of an existing instance.
+
+    `skip_errors` (`--skip-errors`) is the same "carry on past a mod that will not
+    download or install" switch `create_instance` takes; see `skipped_mods`.
+    """
     ns = argparse.Namespace(
         url=url,
         instance=str(instance_dir),
@@ -812,6 +884,7 @@ def add_collection_layer(
         choices_overrides=choices_overrides,
         skip_survey=skip_survey,
         allow_missing=allow_missing,
+        skip_errors=skip_errors,
         reuse_downloads=reuse_downloads,
     )
     return layers.cmd_add(ns, reporter=reporter)
@@ -851,6 +924,10 @@ def _clear_readonly(func, path: str, _exc) -> None:
 def delete_instance(instance_dir: str | Path, *, reporter: Reporter | None = None) -> None:
     """Delete a whole c2mo2 instance folder -- MO2, the Stock Game copy, `mods/`,
     `downloads/`, installed tools, the lot. There is no undo.
+
+    Only the instance folder goes: an archive store the ledger points somewhere else
+    (`create --downloads-dir`) is outside that tree and is left untouched, so the
+    downloads survive to seed the next instance.
 
     Refuses anything that is not recognisably one of our instances (no ledger) and any
     drive root, so a mistyped path can never take out an unrelated folder. The GUI's
@@ -933,6 +1010,7 @@ def update_collection_layer(
     dry_run: bool = False,
     jobs: int = 4,
     allow_missing: bool = False,
+    skip_errors: bool = False,
     purge_old: bool = False,
     choices_overrides: str | None = None,
     reporter: Reporter | None = None,
@@ -941,7 +1019,8 @@ def update_collection_layer(
 
     `--yes` is always passed -- `update.cmd_update` otherwise prompts on a terminal
     the GUI does not have (`_confirm` in `update.py`), which would hang the worker
-    thread forever.
+    thread forever. `skip_errors` (`--skip-errors`) lets the delta apply past a mod
+    the new revision cannot fetch or install; see `skipped_mods`.
     """
     module = _try_import("update")
     if module is None:
@@ -954,6 +1033,7 @@ def update_collection_layer(
         yes=True,
         jobs=jobs,
         allow_missing=allow_missing,
+        skip_errors=skip_errors,
         purge_old=purge_old,
         choices_overrides=choices_overrides,
     )

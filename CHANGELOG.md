@@ -6,8 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+
+- Mods a curator packed into the collection itself (Vortex's `bundle` sources) are now
+  installed like any other mod instead of being skipped as an unsupported source type.
+  The content already comes down inside the collection archive, so nothing extra is
+  downloaded: a bundled folder is zipped into the downloads folder as
+  `Bundled - <name>.zip` and a bundled file is copied there, and the rest of the pipeline
+  treats it as a normal archive. Bundled mods have no Nexus ids and no manifest MD5, so
+  their `modRules` are now matched by the manifest's mod tag as well.
+
+- `c2mo2 create --downloads-dir PATH` keeps an instance's archives in a folder of your
+  choosing instead of `<out>/downloads` - useful for keeping mods on a fast drive and
+  archives on a bigger one. The choice is recorded in the instance ledger, so `add`,
+  `update`, `remove`, `tools install`, `build`, and the Wabbajack compile all read it back
+  automatically and take no flag of their own; `ModOrganizer.ini` gets `download_directory`
+  set so MO2's own Downloads tab shows the archives too. The GUI wizard's install location
+  page has the same option as a "Downloads folder" field.
+- Installed mods now carry their real Nexus category (`category`/`nexusCategory` in
+  `meta.ini`, and `categories.dat`/`nexuscatmap.dat` written into the instance) instead of
+  the hardcoded `category=0`, so MO2 shows the same categories Nexus does. An instance
+  built before this gets its mods categorised on the next profile render (`add`, `remove`,
+  `update`, `profile-instance`); categories you already changed by hand in MO2 are left
+  alone.
+- `--skip-errors` on `create`, `add` and `update` (the GUI wizard's Review page has it as
+  a "Continue when a mod cannot be downloaded or installed" checkbox) carries the run past
+  any mod that can't be downloaded, listed by 7-Zip, or installed - the instance is built
+  without those mods, the run exits 0, and every skipped mod is listed at the end and
+  remembered in the ledger for `c2mo2 status` and the GUI's Manage page. Implies the
+  narrower `--allow-missing` (which only ever forgives a file Nexus no longer serves).
+
 ### Fixed
 
+- A mod archive zipped from a OneDrive or Dropbox folder no longer fails to install. Such
+  zips mark ordinary files as cloud placeholders (a reparse-point attribute); 7-Zip writes
+  the file in full, then cannot reapply the attribute and exits with "Incorrect reparse
+  stream". `c2mo2` now checks that every file in the archive was extracted at its listed
+  size and records the 7-Zip message as a warning on the mod instead of marking the
+  install failed (seen on Race-Based Textures in a Skyrim collection).
 - A `c2mo2-gui.exe` built with PyInstaller from a Git Bash shell on Python 3.13 could ship
   Git's OpenSSL instead of Python's and then fail every HTTPS request ("the SSL module is
   not available"), landing on the Sign-in page with that error. The spec now always

@@ -27,8 +27,9 @@ so nothing a collection does can ever touch your real Steam install.
    using your Nexus Premium key.
 3. **Inspect** - open each archive to find FOMOD installers and work out its layout.
 4. **Install** - build every mod's folder: replay the curator's recorded FOMOD
-   answers, apply exact file lists for "replicate"-mode mods, and route game-root
-   files (SKSE, DLL shims, engine patches) through Root Builder.
+   answers, apply exact file lists for "replicate"-mode mods, route game-root
+   files (SKSE, DLL shims, engine patches) through Root Builder, and set each mod's
+   Nexus category so MO2 shows it instead of "None".
 5. **Profile** - order mods by phase and the curator's rules, write
    `modlist.txt`/`plugins.txt`/`loadorder.txt`, and merge in the collection's INI
    tweaks plus your resolution/vsync/window choice.
@@ -47,6 +48,17 @@ on the same folder: in the GUI pick the same instance folder, on the CLI repeat 
 command. A 60 GB collection that got as far as inspecting picks up at inspect without
 downloading a single archive again. `--reuse-downloads <folder>` seeds a new instance from
 another instance's download store the same way, by hardlinking the archives that match.
+`--downloads-dir <folder>` is different: it keeps the instance's archives in that folder
+permanently instead of `<out>/downloads` (handy for keeping mods on a fast drive and
+archives on a big one), and every later command reads the choice back from the instance
+ledger rather than taking the flag again. The GUI wizard has the same option as a
+"Downloads folder" field on the install location page.
+
+`--skip-errors` on `create`/`add`/`update` (the wizard's Review page has it as a
+checkbox) carries the run past any mod that can't be downloaded, listed or installed,
+instead of stopping there: the instance is built without those mods, and every one is
+listed at the end and remembered in the ledger for `c2mo2 status`. Re-running
+`create`/`add`/`update` later, or `c2mo2 install --only <mod> --force`, retries them.
 
 ## Requirements
 

@@ -7,11 +7,14 @@ command itself is verified against the real h2uqa3 collection (see README).
 
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import time
 from pathlib import Path
 
-from collections2mo2 import ledger, update
+from collections2mo2 import create, ledger, update
+from collections2mo2.reporter import NullReporter
 
 
 def _mod(
@@ -374,3 +377,390 @@ def test_a_missing_old_folder_falls_back_to_a_fresh_install(tmp_path: Path):
     update.plan_folder_actions(diff, tmp_path, {"Old Name"})
     assert diff.changed[0].folder_action == "release-old"
     assert diff.changed[0].needs_install
+
+
+# -- a custom archive store (`create --downloads-dir`) ---------------------------------
+
+
+def test_downloaded_md5s_finds_archives_in_a_custom_downloads_dir(tmp_path: Path):
+    inst = tmp_path / "inst"
+    (inst / "c2mo2").mkdir(parents=True)
+    custom = tmp_path / "archives"
+    custom.mkdir()
+    (custom / "a.7z").write_bytes(b"a")
+
+    led = ledger.Ledger(inst)
+    led.set_downloads_dir(custom)
+    led.register_layer("base", 1, files={"downloads": "c2mo2/base-1.downloads.json"})
+    led.save()
+    (inst / "c2mo2" / "base-1.downloads.json").write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {"md5": "AABBCC", "path": str(custom / "a.7z")},
+                    {"md5": "ddeeff", "path": str(custom / "gone.7z")},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    paths = create.Paths.for_instance(inst)
+    assert paths.downloads == custom.resolve()
+    # Only the archive that is actually on disk counts, and md5s compare lowercased.
+    assert update._downloaded_md5s(paths, led) == {"aabbcc"}
+
+
+# ------------------------------------------ the whole command, with a failing stage
+
+
+class _CollectingReporter(NullReporter):
+    """A `NullReporter` that remembers the summary lines and the warnings."""
+
+    def __init__(self):
+        self.logs: list[str] = []
+        self.warnings: list[str] = []
+
+    def log(self, msg: str) -> None:
+        self.logs.append(msg)
+
+    def warn(self, msg: str) -> None:
+        self.warnings.append(msg)
+
+
+class _Info:
+    revision_number = 2
+    name = "Test List"
+    game = "skyrimspecialedition"
+
+
+class _FakeClient:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def revision_info(self, ref, revision=None):
+        return _Info()
+
+    def latest_revision(self, ref):
+        return 2
+
+    def collection_changelog(self, ref, revision):
+        return None
+
+
+_OLD_MANIFEST = _manifest(
+    [
+        _mod("A", tag="a1", mod_id=1, file_id=1, md5="m1"),
+        _mod("B", tag="a2", mod_id=2, file_id=2, md5="m2"),
+    ]
+)
+_NEW_MANIFEST = _manifest(
+    [
+        _mod("A", tag="b1", mod_id=1, file_id=1, md5="m1"),
+        _mod("B", tag="b2", mod_id=2, file_id=3, md5="m3"),
+    ]
+)
+
+
+def _install_row(name: str, tag: str, md5: str, mod_id: int, file_id: int) -> dict:
+    return {
+        "name": name,
+        "folder": name,
+        "tag": tag,
+        "md5": md5,
+        "mod_id": mod_id,
+        "file_id": file_id,
+        "phase": 0,
+        "optional": False,
+        "install_mode": "fresh",
+        "strategy": "data",
+        "plugins": [],
+        "file_count": 1,
+    }
+
+
+def _updatable_instance(tmp_path: Path) -> Path:
+    """An instance with one layer at revision 1, two installed mods, no profile."""
+    inst = tmp_path / "inst"
+    (inst / "mods" / "A").mkdir(parents=True)
+    (inst / "mods" / "B").mkdir(parents=True)
+    (inst / "c2mo2").mkdir(parents=True)
+
+    rel_manifest = "c2mo2/collections/base/1/archive/collection.json"
+    manifest_path = inst / rel_manifest
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(json.dumps(_OLD_MANIFEST), encoding="utf-8")
+
+    (inst / "c2mo2" / "base-1.install.json").write_text(
+        json.dumps(
+            {
+                "manifest": str(manifest_path),
+                "mods_dir": str(inst / "mods"),
+                "game_name": "SkyrimSE",
+                "entries": [
+                    _install_row("A", "a1", "m1", 1, 1),
+                    _install_row("B", "a2", "m2", 2, 2),
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (inst / "c2mo2" / "base-1.downloads.json").write_text(
+        json.dumps({"entries": [{"tag": "a1", "md5": "m1"}, {"tag": "a2", "md5": "m2"}]}),
+        encoding="utf-8",
+    )
+    (inst / "c2mo2" / "base-1.inspect.json").write_text(
+        json.dumps({"entries": [{"tag": "a1"}, {"tag": "a2"}]}), encoding="utf-8"
+    )
+
+    led = ledger.Ledger(inst)
+    led.set_game(domain="skyrimspecialedition", mo2_name="SkyrimSE", source_path=str(tmp_path))
+    led.set_mo2(version="2.5.2")
+    led.register_layer(
+        "base",
+        1,
+        name="Test List",
+        manifest=rel_manifest,
+        files={
+            "install": "c2mo2/base-1.install.json",
+            "downloads": "c2mo2/base-1.downloads.json",
+            "inspect": "c2mo2/base-1.inspect.json",
+            "survey": "c2mo2/base-1.survey.json",
+        },
+    )
+    for folder, md5 in (("A", "m1"), ("B", "m2")):
+        led.set_mod_owner(folder, ledger.collection_owner("base", 1), md5=md5)
+    led.save()
+    return inst
+
+
+def _stub_update(
+    monkeypatch,
+    *,
+    downloads=None,
+    download_rc=0,
+    inspect=None,
+    inspect_rc=0,
+    install=None,
+    install_rc=0,
+):
+    """Stub everything `cmd_update` reaches the network (or an archive) for."""
+
+    def fake_fetch_manifest(client, ref, revision, collections_dir, info=None):
+        path = Path(collections_dir) / "base" / "2" / "archive" / "collection.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(_NEW_MANIFEST), encoding="utf-8")
+        return info or _Info(), path
+
+    def write(path: Path, data: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    def fake_download(**kwargs):
+        write(Path(kwargs["json_path"]), downloads or {"entries": [{"tag": "b2", "md5": "m3"}]})
+        return download_rc
+
+    def fake_inspect(ns, reporter=None):
+        write(Path(ns.out), inspect or {"entries": [{"tag": "b2"}]})
+        return inspect_rc
+
+    def fake_install(ns, reporter=None):
+        write(Path(ns.out), install or {"entries": []})
+        return install_rc
+
+    monkeypatch.setattr(update, "NexusClient", _FakeClient)
+    monkeypatch.setattr(update, "fetch_manifest", fake_fetch_manifest)
+    # Cosmetic Nexus-categories fetch; it has nothing to do with the failure gates.
+    monkeypatch.setattr(update.categories, "prepare_layer", lambda *a, **kw: None)
+    monkeypatch.setattr(update, "run_download", fake_download)
+    monkeypatch.setattr(update.archive_inspect, "cmd_inspect", fake_inspect)
+    monkeypatch.setattr(update.installer, "cmd_install", fake_install)
+    monkeypatch.setattr(
+        create, "render_profile", lambda *a, **kw: {"mod_order": ["A", "B"], "user_mods": []}
+    )
+    monkeypatch.setattr(update, "load_dotenv", lambda *a, **kw: None)
+    monkeypatch.setenv("NEXUS_API_KEY", "test-key")
+
+
+def _update_args(inst: Path, **kwargs) -> argparse.Namespace:
+    args = argparse.Namespace(
+        instance=str(inst),
+        layer=None,
+        to=None,
+        dry_run=False,
+        yes=True,
+        jobs=1,
+        allow_missing=False,
+        skip_errors=False,
+        purge_old=False,
+        choices_overrides=None,
+    )
+    for key, value in kwargs.items():
+        setattr(args, key, value)
+    return args
+
+
+_DOWNLOAD_FAILED = {"entries": [{"tag": "b2", "name": "B", "status": "error", "error": "404"}]}
+_INSTALL_FAILED = {
+    "entries": [
+        {
+            "name": "B",
+            "folder": "B",
+            "tag": "b2",
+            "md5": "m3",
+            "strategy": "failed",
+            "warnings": ["install failed: nothing extracted"],
+        }
+    ]
+}
+
+
+def _rows_by_name(inst: Path, revision: int) -> dict[str, dict]:
+    data = json.loads(
+        (inst / "c2mo2" / f"base-{revision}.install.json").read_text(encoding="utf-8")
+    )
+    return {row["name"]: row for row in data["entries"]}
+
+
+def test_update_without_skip_errors_stops_on_a_failed_download(monkeypatch, tmp_path: Path):
+    inst = _updatable_instance(tmp_path)
+    _stub_update(monkeypatch, downloads=_DOWNLOAD_FAILED, download_rc=1)
+    rep = _CollectingReporter()
+
+    assert update.cmd_update(_update_args(inst), rep) == 1
+
+    after = ledger.load(inst)
+    assert after.data["layers"][0]["revision"] == 1
+    assert not (inst / "c2mo2" / "base-2.install.json").exists()
+    assert after.owners_of("B") == ["collection:base@1"]
+    assert any("nothing was changed" in w for w in rep.warnings)
+
+
+def test_update_with_skip_errors_keeps_the_old_row_for_an_undownloadable_mod(
+    monkeypatch, tmp_path: Path
+):
+    inst = _updatable_instance(tmp_path)
+    _stub_update(monkeypatch, downloads=_DOWNLOAD_FAILED, download_rc=1)
+    rep = _CollectingReporter()
+
+    assert update.cmd_update(_update_args(inst, skip_errors=True), rep) == 0
+
+    rows = _rows_by_name(inst, 2)
+    # B's new file never arrived, so the row still describes the revision-1 archive
+    # that is actually unpacked in mods/B.
+    assert rows["B"]["md5"] == "m2" and rows["B"]["file_id"] == 2
+    assert rows["B"]["folder"] == "B"
+    assert any("revision 1 archive is still installed" in w for w in rows["B"]["warnings"])
+    assert rows["A"]["md5"] == "m1"
+
+    after = ledger.load(inst)
+    layer = after.data["layers"][0]
+    assert layer["revision"] == 2
+    assert after.layer_skipped(layer) == [{"name": "B", "stage": "download", "reason": "404"}]
+    assert "  NOT installed (skipped): 1" in rep.logs
+    assert "    B  [download] 404" in rep.logs
+    assert any("are NOT in the instance" in w for w in rep.warnings)
+
+
+def test_update_with_allow_missing_alone_also_carries_on_but_records_nothing_extra(
+    monkeypatch, tmp_path: Path
+):
+    # --allow-missing forgives a file Nexus no longer serves, exactly like --skip-errors
+    # does for this case; the mod is still listed as skipped.
+    inst = _updatable_instance(tmp_path)
+    _stub_update(monkeypatch, downloads=_DOWNLOAD_FAILED, download_rc=1)
+    rep = _CollectingReporter()
+
+    assert update.cmd_update(_update_args(inst, allow_missing=True), rep) == 0
+    assert any("--allow-missing" in w for w in rep.warnings)
+    assert ledger.load(inst).data["layers"][0]["revision"] == 2
+
+
+def test_update_without_skip_errors_stops_on_a_failed_install(monkeypatch, tmp_path: Path):
+    inst = _updatable_instance(tmp_path)
+    _stub_update(monkeypatch, install=_INSTALL_FAILED, install_rc=1)
+    rep = _CollectingReporter()
+
+    assert update.cmd_update(_update_args(inst), rep) == 1
+    assert ledger.load(inst).data["layers"][0]["revision"] == 1
+    assert any("failed to install" in w for w in rep.warnings)
+
+
+def test_update_with_skip_errors_keeps_the_old_row_for_a_failed_install(
+    monkeypatch, tmp_path: Path
+):
+    inst = _updatable_instance(tmp_path)
+    _stub_update(monkeypatch, install=_INSTALL_FAILED, install_rc=1)
+    rep = _CollectingReporter()
+
+    assert update.cmd_update(_update_args(inst, skip_errors=True), rep) == 0
+
+    rows = _rows_by_name(inst, 2)
+    assert rows["B"]["md5"] == "m2"  # the failed entry never replaces the old row
+    assert any(
+        "revision 2's file failed to install (--skip-errors)" in w
+        and "mods/B is whatever revision 1 left there" in w
+        for w in rows["B"]["warnings"]
+    )
+    after = ledger.load(inst)
+    assert after.layer_skipped(after.data["layers"][0]) == [
+        {"name": "B", "stage": "install", "reason": "install failed: nothing extracted"}
+    ]
+    assert "  NOT installed (skipped): 1" in rep.logs
+
+
+def test_a_clean_update_records_no_skipped_mods(monkeypatch, tmp_path: Path):
+    inst = _updatable_instance(tmp_path)
+    _stub_update(
+        monkeypatch,
+        install={"entries": [_install_row("B", "b2", "m3", 2, 3)]},
+    )
+    rep = _CollectingReporter()
+
+    assert update.cmd_update(_update_args(inst, skip_errors=True), rep) == 0
+    rows = _rows_by_name(inst, 2)
+    assert rows["B"]["md5"] == "m3"  # the new file did install
+    after = ledger.load(inst)
+    assert after.layer_skipped(after.data["layers"][0]) == []
+    assert not any("NOT installed (skipped)" in line for line in rep.logs)
+
+
+# ------------------------------------------------- `status` reads the skipped list
+
+
+def test_status_lists_the_mods_the_last_run_skipped(monkeypatch, tmp_path: Path):
+    inst = _updatable_instance(tmp_path)
+    led = ledger.load(inst)
+    led.set_layer_skipped(
+        "base", 1, [{"name": "Gone Mod", "stage": "download", "reason": "404 Not Found"}]
+    )
+    led.save()
+    monkeypatch.setattr(update, "load_dotenv", lambda *a, **kw: None)
+    rep = _CollectingReporter()
+
+    rc = update.cmd_status(argparse.Namespace(instance=str(inst), offline=True), rep)
+
+    assert rc == 0
+    assert "     NOT installed (skipped by the last run): 1" in rep.logs
+    assert "       Gone Mod  [download] 404 Not Found" in rep.logs
+
+
+def test_status_says_nothing_about_skips_for_a_clean_layer(monkeypatch, tmp_path: Path):
+    inst = _updatable_instance(tmp_path)
+    monkeypatch.setattr(update, "load_dotenv", lambda *a, **kw: None)
+    rep = _CollectingReporter()
+
+    assert update.cmd_status(argparse.Namespace(instance=str(inst), offline=True), rep) == 0
+    assert not any("skipped by the last run" in line for line in rep.logs)
+
+
+def test_update_parser_accepts_skip_errors_and_allow_missing():
+    parser = argparse.ArgumentParser()
+    update.add_parser(parser.add_subparsers(dest="command"))
+    base = ["update", "--instance", "D:/GTS"]
+
+    args = parser.parse_args([*base, "--skip-errors"])
+    assert args.skip_errors is True and args.allow_missing is False
+    assert parser.parse_args([*base, "--allow-missing"]).allow_missing is True
+    plain = parser.parse_args(base)
+    assert plain.skip_errors is False and plain.allow_missing is False

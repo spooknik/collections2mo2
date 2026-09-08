@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QCheckBox, QLabel, QPushButton, QVBoxLayout
 
 from ... import api
 from .base import WizardPage
@@ -39,6 +39,18 @@ class ReviewPage(WizardPage):
         self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
 
+        # Off by default: a failed download is normally worth stopping for, and a
+        # half-installed collection is not what most people came for. `toggled` writes
+        # straight into the state because Start bypasses `on_leave` -- the run is
+        # launched from `custom_action`, not from the window's Next button.
+        self.skip_errors_box = QCheckBox(
+            "Continue when a mod cannot be downloaded or installed "
+            "(skipped mods are listed at the end)"
+        )
+        self.skip_errors_box.setChecked(False)
+        self.skip_errors_box.toggled.connect(self._on_skip_errors_toggled)
+        layout.addWidget(self.skip_errors_box)
+
         self.start_btn = QPushButton("Start")
         self.start_btn.setMinimumHeight(40)
         self.start_btn.clicked.connect(lambda: self.custom_action.emit("start_run"))
@@ -61,6 +73,10 @@ class ReviewPage(WizardPage):
             )
         reused = " (existing folder, downloads reused)" if s.preset_instance_dir else ""
         lines.append(f"<b>Instance folder:</b> {s.instance_dir}{reused}")
+        if s.downloads_dir:
+            lines.append(f"<b>Downloads folder:</b> {s.downloads_dir}")
+        else:
+            lines.append("<b>Downloads folder:</b> (inside the instance)")
         lines.append(f"<b>Game folder:</b> {s.game_path}")
         version_line = _game_version_line(s)
         if version_line:
@@ -71,6 +87,11 @@ class ReviewPage(WizardPage):
             f"<b>Display:</b> resolution={s.resolution}, vsync={s.vsync}, window={s.window}"
         )
         self.summary_label.setText("<br>".join(lines))
+        self.skip_errors_box.setChecked(s.skip_errors)
+
+    def _on_skip_errors_toggled(self, checked: bool) -> None:
+        self.state.skip_errors = bool(checked)
 
     def on_leave(self) -> bool:
+        self.state.skip_errors = self.skip_errors_box.isChecked()
         return False

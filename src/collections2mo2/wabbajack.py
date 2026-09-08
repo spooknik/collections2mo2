@@ -527,7 +527,7 @@ def build_settings(
     settings: dict[str, Any] = {
         "ModlistIsNSFW": False,
         "Source": _win(instance),
-        "Downloads": _win(instance / "downloads"),
+        "Downloads": _win(led.downloads_dir),
         "Game": defaults.game,
         "OutputFile": _win(out_file),
         "ModListImage": _win(image) if image else "",
@@ -883,7 +883,7 @@ def check_inlined(instance: Path, led: ledger_mod.Ledger) -> list[InlineEntry]:
     installed by hand, tool output, `Tools/` binaries with nothing behind them -- has to
     be stored in the modlist file itself.
     """
-    archives = check_downloads(instance / "downloads")
+    archives = check_downloads(led.downloads_dir)
     inlined, _traced = _classify_mod_and_tool_folders(instance, led, archives)
     inlined.extend(check_program_files(instance, led))
     return inlined
@@ -891,7 +891,7 @@ def check_inlined(instance: Path, led: ledger_mod.Ledger) -> list[InlineEntry]:
 
 def check_traced(instance: Path, led: ledger_mod.Ledger) -> list[TracedEntry]:
     """`mods/`/`Tools/` folders a `downloads/` archive can reproduce -- not inlined."""
-    archives = check_downloads(instance / "downloads")
+    archives = check_downloads(led.downloads_dir)
     _inlined, traced = _classify_mod_and_tool_folders(instance, led, archives)
     return traced
 
@@ -924,7 +924,7 @@ def _release_archives_covered(instance: Path, build_meta: dict[str, Any]) -> set
     if not version or not top_level:
         return set()
     archive_name = f"Mod.Organizer-{version}.7z"
-    archive_path = instance / "downloads" / archive_name
+    archive_path = ledger_mod.downloads_dir(instance) / archive_name
     meta_path = archive_path.with_name(archive_path.name + ".meta")
     if not archive_path.is_file() or not meta_path.is_file():
         return set()
@@ -1013,7 +1013,7 @@ def no_match_include(checklist: Checklist) -> list[str]:
 
 def precompile_checklist(instance: Path, led: ledger_mod.Ledger) -> Checklist:
     instance = Path(instance)
-    archives = check_downloads(instance / "downloads")
+    archives = check_downloads(led.downloads_dir)
     inlined, traced = _classify_mod_and_tool_folders(instance, led, archives)
     inlined.extend(check_program_files(instance, led))
     checklist = Checklist(

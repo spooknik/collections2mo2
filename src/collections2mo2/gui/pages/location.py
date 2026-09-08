@@ -52,6 +52,32 @@ class LocationPage(WizardPage):
         inst_layout.addWidget(self.preset_hint)
         layout.addWidget(inst_box)
 
+        # Optional: archives somewhere other than `<instance>/downloads` (people keep
+        # mods on a fast drive and the archives on a big one). Advisory throughout --
+        # a blank field is the normal case and nothing here can block Continue.
+        dl_box = QGroupBox("Downloads folder (optional)")
+        dl_layout = QVBoxLayout(dl_box)
+        dl_row = QHBoxLayout()
+        self.downloads_edit = QLineEdit()
+        self.downloads_edit.textChanged.connect(self._on_downloads_changed)
+        dl_row.addWidget(self.downloads_edit)
+        self.downloads_browse_btn = QPushButton("Browse...")
+        self.downloads_browse_btn.clicked.connect(self._browse_downloads)
+        dl_row.addWidget(self.downloads_browse_btn)
+        dl_layout.addLayout(dl_row)
+        self.downloads_note = QLabel(
+            "Leave empty to keep archives in <instance>\\downloads. Pick another drive if "
+            "mods and downloads should not share one."
+        )
+        self.downloads_note.setWordWrap(True)
+        self.downloads_note.setStyleSheet(MUTED_STYLE)
+        dl_layout.addWidget(self.downloads_note)
+        self.downloads_warning = QLabel("")
+        self.downloads_warning.setWordWrap(True)
+        self.downloads_warning.setStyleSheet(warning_style(self.downloads_warning))
+        dl_layout.addWidget(self.downloads_warning)
+        layout.addWidget(dl_box)
+
         game_box = QGroupBox("Game folder (Skyrim Special Edition)")
         game_layout = QVBoxLayout(game_box)
         row2 = QHBoxLayout()
@@ -101,6 +127,17 @@ class LocationPage(WizardPage):
             self._defaulted = True
             self.preset_hint.setVisible(True)
             self.instance_edit.setText(str(preset))
+            # An instance that already keeps its archives elsewhere is not something the
+            # user gets to change here: the run reuses that store, so show it and lock
+            # the field rather than pretending the default applies.
+            existing = api.instance_downloads_dir(preset)
+            if existing is not None:
+                self.downloads_edit.setText(str(existing))
+                self.downloads_edit.setEnabled(False)
+                self.downloads_browse_btn.setEnabled(False)
+                self.downloads_note.setText(
+                    f"This instance already keeps its downloads in {existing}"
+                )
         elif not self._defaulted and self.state.collection_summary is not None:
             self._defaulted = True
             default_dir = api.default_instance_dir(self.state.collection_summary.name)
@@ -121,6 +158,12 @@ class LocationPage(WizardPage):
         if chosen:
             self.instance_edit.setText(chosen)
 
+    def _browse_downloads(self) -> None:
+        start = self.downloads_edit.text() or self.instance_edit.text() or str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(self, "Choose downloads folder", start)
+        if chosen:
+            self.downloads_edit.setText(chosen)
+
     def _browse_game(self) -> None:
         start = self.game_edit.text() or str(Path.home())
         chosen = QFileDialog.getExistingDirectory(
@@ -137,12 +180,32 @@ class LocationPage(WizardPage):
         text = self.instance_edit.text().strip()
         if not text:
             self.instance_warning.setText("")
+            self._update_downloads_warning()
             self.set_ready(False)
             return
         warnings = api.path_warnings(text, self._game_path())
         self.instance_warning.setText("\n".join(warnings))
+        # "inside the instance's mods/overwrite" depends on the instance folder too.
+        self._update_downloads_warning()
         self._update_space()
         self._validate()
+
+    def _on_downloads_changed(self) -> None:
+        self._update_downloads_warning()
+
+    def _update_downloads_warning(self) -> None:
+        """Live warnings about the custom archive store, or nothing when it is blank.
+
+        Advisory like the instance ones: a bad choice is worth flagging (Program Files,
+        a folder inside the instance's own `mods/`), never worth refusing.
+        """
+        text = self.downloads_edit.text().strip()
+        if not text:
+            self.downloads_warning.setText("")
+            return
+        instance = self.instance_edit.text().strip() or None
+        warnings = api.downloads_path_warnings(text, instance, self._game_path())
+        self.downloads_warning.setText("\n".join(warnings))
 
     def _on_game_changed(self) -> None:
         path = self._game_path()
@@ -160,6 +223,7 @@ class LocationPage(WizardPage):
             self.instance_warning.setText(
                 "\n".join(api.path_warnings(self.instance_edit.text().strip(), path))
             )
+        self._update_downloads_warning()
         self._validate()
 
     def _update_game_version(self) -> None:
@@ -231,6 +295,8 @@ class LocationPage(WizardPage):
         if not self.is_ready():
             return False
         self.state.instance_dir = Path(self.instance_edit.text().strip())
+        downloads = self.downloads_edit.text().strip()
+        self.state.downloads_dir = Path(downloads) if downloads else None
         self.state.game_path = Path(self.game_edit.text().strip())
         self.state.stock_game = self.stock_check.isChecked()
         return True

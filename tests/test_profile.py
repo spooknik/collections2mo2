@@ -705,3 +705,167 @@ def test_render_mo2_ini_does_not_pin_without_script_extender():
     )
     ini = profile.render_mo2_ini("SkyrimSE", "D:/Game", "Default", "2.5.2", blocks)
     assert "[Widgets]" not in ini
+
+
+# ------------------------------------------- download_directory: a custom archive store
+
+
+def test_render_mo2_ini_omits_download_directory_by_default():
+    ini = profile.render_mo2_ini("SkyrimSE", "D:/Game", "Default", "2.5.2", [])
+    assert "download_directory" not in ini
+
+
+def test_render_mo2_ini_writes_download_directory_under_settings():
+    ini = profile.render_mo2_ini(
+        "SkyrimSE", "D:/Game", "Default", "2.5.2", [], download_directory="E:/NexusDownloads"
+    )
+    lines = ini.splitlines()
+    assert "download_directory=E:/NexusDownloads" in lines
+    assert lines.index("[Settings]") < lines.index("download_directory=E:/NexusDownloads")
+    assert lines.index("download_directory=E:/NexusDownloads") < lines.index("[customExecutables]")
+
+
+def test_mo2_download_directory_is_none_for_the_default_store(tmp_path: Path):
+    inst = tmp_path / "inst"
+    inst.mkdir()
+    assert profile.mo2_download_directory(inst, ledger.Ledger(inst)) is None
+
+
+def test_mo2_download_directory_is_a_forward_slash_path_for_a_custom_store(tmp_path: Path):
+    inst = tmp_path / "inst"
+    inst.mkdir()
+    custom = tmp_path / "archives"
+    led = ledger.Ledger(inst)
+    led.set_downloads_dir(custom)
+
+    value = profile.mo2_download_directory(inst, led)
+    assert value == custom.resolve().as_posix()
+    assert "\\" not in value
+
+
+# ------------------------------------------------------------------------ ensure_ini_key
+
+
+def _ini(tmp_path: Path, text: str, *, newline: str = "\n") -> Path:
+    path = tmp_path / "ModOrganizer.ini"
+    path.write_text(text, encoding="utf-8", newline=newline)
+    return path
+
+
+def test_ensure_ini_key_adds_the_key_under_an_existing_section(tmp_path: Path):
+    path = _ini(tmp_path, "[General]\ngameName=Skyrim Special Edition\n\n[Settings]\nstyle=\n")
+
+    assert profile.ensure_ini_key(path, "Settings", "download_directory", "E:/Downloads") is True
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert lines[lines.index("[Settings]") + 1] == "download_directory=E:/Downloads"
+    # Every other line survives byte for byte.
+    assert "gameName=Skyrim Special Edition" in lines
+    assert "style=" in lines
+
+
+def test_ensure_ini_key_leaves_an_existing_key_alone(tmp_path: Path):
+    # The user may have pointed MO2 somewhere else in its own settings dialog.
+    text = "[Settings]\ndownload_directory=F:/Mine\nstyle=\n"
+    path = _ini(tmp_path, text)
+
+    assert profile.ensure_ini_key(path, "Settings", "download_directory", "E:/Downloads") is False
+    assert path.read_text(encoding="utf-8") == text
+
+
+def test_ensure_ini_key_ignores_the_same_key_in_another_section(tmp_path: Path):
+    path = _ini(tmp_path, "[General]\ndownload_directory=F:/Wrong\n\n[Settings]\nstyle=\n")
+
+    assert profile.ensure_ini_key(path, "Settings", "download_directory", "E:/Downloads") is True
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert lines.index("download_directory=F:/Wrong") < lines.index("[Settings]")
+    assert lines[lines.index("[Settings]") + 1] == "download_directory=E:/Downloads"
+
+
+def test_ensure_ini_key_appends_a_missing_section(tmp_path: Path):
+    path = _ini(tmp_path, "[General]\ngameName=Skyrim Special Edition\n")
+
+    assert profile.ensure_ini_key(path, "Settings", "download_directory", "E:/Downloads") is True
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "[General]"
+    assert lines[-2:] == ["[Settings]", "download_directory=E:/Downloads"]
+
+
+# ------------------------------------------------------------------------ update_mo2_ini
+
+
+def test_update_mo2_ini_writes_a_new_ini_with_the_download_directory(tmp_path: Path):
+    path = tmp_path / "ModOrganizer.ini"
+
+    added = profile.update_mo2_ini(
+        path, "SkyrimSE", "D:/Game", "Default", "2.5.2", [], download_directory="E:/Downloads"
+    )
+
+    assert added == []
+    assert "download_directory=E:/Downloads" in path.read_text(encoding="utf-8").splitlines()
+
+
+def test_update_mo2_ini_tops_up_an_existing_crlf_ini_and_keeps_crlf(tmp_path: Path):
+    # MO2 rewrites its own ini with CRLF; adding the key must not reformat the file.
+    path = _ini(
+        tmp_path,
+        "[General]\ngameName=Skyrim Special Edition\n\n[Settings]\nstyle=\n",
+        newline="\r\n",
+    )
+    before = path.read_bytes()
+    assert b"\r\n" in before
+
+    profile.update_mo2_ini(
+        path, "SkyrimSE", "D:/Game", "Default", "2.5.2", [], download_directory="E:/Downloads"
+    )
+
+    data = path.read_bytes()
+    assert b"download_directory=E:/Downloads" in data
+    assert b"\r\n" in data and data.replace(b"\r\n", b"\n").count(b"\n") == data.count(b"\r\n")
+    # gamePath and everything else MO2 owns are left exactly as they were.
+    assert b"gameName=Skyrim Special Edition" in data
+
+
+def test_update_mo2_ini_does_not_touch_an_existing_ini_without_a_custom_store(tmp_path: Path):
+    path = _ini(tmp_path, "[General]\ngameName=Skyrim Special Edition\n\n[Settings]\nstyle=\n")
+    before = path.read_bytes()
+
+    assert profile.update_mo2_ini(path, "SkyrimSE", "D:/Game", "Default", "2.5.2", []) == []
+    assert path.read_bytes() == before
+
+
+def test_compute_order_rule_on_a_bundle_mod_resolves_by_tag():
+    """A `bundle` mod has no md5 and no Nexus ids, only a tag -- its modRules must
+    still order it (the endpoint names it by `logicalFileName`)."""
+    manifest = {
+        "mods": [
+            {"name": "Base", "source": {"md5": "md5base", "logicalFilename": "Base.7z"}},
+            {
+                "name": "patch.7z",
+                "source": {
+                    "type": "bundle",
+                    "tag": "598ITR5f_maz",
+                    "logicalFilename": "patch.7z",
+                    "fileExpression": "Bundled - patch.7z (v)",
+                },
+            },
+        ],
+        "modRules": [
+            {
+                "type": "after",
+                "source": {"logicalFileName": "patch.7z", "tag": "598ITR5f_maz"},
+                "reference": {"fileMD5": "md5base", "logicalFileName": "Base.7z"},
+            },
+        ],
+    }
+    entries = [
+        {"folder": "patch.7z", "phase": 0, "md5": "zipmd5", "tag": "598ITR5f_maz"},
+        {"folder": "Base", "phase": 0, "md5": "md5base", "tag": "basetag"},
+    ]
+    report = profile._compute_order(manifest, entries)
+    assert report.folders == ["Base", "patch.7z"]  # base order would be the reverse
+    assert report.rules_applied == 1
+    assert report.rules_ignored == 0
+    assert report.warnings == []

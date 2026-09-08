@@ -3,8 +3,18 @@
 Streams each Nexus-pinned file and each `source.type == "direct"` file to
 `<out>/<file_name>`, verifies its MD5 against the manifest, and writes an
 MO2/Wabbajack-compatible `.meta` sidecar next to it plus a `downloads.json`
-summary of the whole run. Other source types (`browse`, `manual`, `bundle`,
-...) are not downloaded; they are recorded with `status="unsupported"`.
+summary of the whole run.
+
+`source.type == "bundle"` needs no network at all: the curator packed the mod
+into the collection archive itself, which `fetch` already unpacked, so the
+content is picked up from `<manifest dir>/bundled/<source.fileExpression>` and
+turned into a real archive in the downloads folder (a folder is zipped, a file
+is copied) -- everything downstream of this stage wants an archive path. The
+produced archive's own MD5 is what the entry records, since a bundle source
+carries none.
+
+Other source types (`browse`, `manual`, ...) are not downloaded; they are
+recorded with `status="unsupported"`.
 """
 
 from __future__ import annotations
@@ -14,9 +24,11 @@ import configparser
 import hashlib
 import json
 import os
+import shutil
 import sys
 import threading
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
@@ -49,6 +61,12 @@ CHUNK_SIZE = 1 << 20  # 1 MiB
 CHECKPOINT_EVERY = 10
 DIRECT_TIMEOUT = 60.0
 DIRECT_MAX_RETRIES = 3  # additional attempts after the first, with 2/4/8s backoff
+# Where `fetch` leaves the collection archive's bundled mods, next to collection.json.
+BUNDLED_DIR = "bundled"
+# Source types this stage turns into an archive on disk. `create.downloads_are_current`
+# re-runs the stage when a downloads.json written by an older version recorded one of
+# these as `unsupported` (bundles were, before 0.1.4).
+SUPPORTED_SOURCE_TYPES = frozenset({"nexus", "direct", "bundle"})
 
 
 def mo2_game_name(domain: str) -> str:
@@ -525,6 +543,147 @@ def _download_direct(
     return entry
 
 
+def _write_meta_for_bundle(mod: dict[str, Any], dest: Path, game_name: str) -> None:
+    """`.meta` for a bundled mod: like the direct one, but with no URL and no Nexus ids.
+
+    MO2 shows the archive as an unmanaged local file, which is exactly what it is.
+    """
+    meta_path = dest.with_name(dest.name + ".meta")
+    mod_name = mod.get("name") or ""
+    _write_meta(
+        meta_path,
+        game_name=game_name,
+        mod_id=0,
+        file_id=0,
+        name=mod_name,
+        mod_name=mod_name,
+        version=str(mod.get("version") or ""),
+        repository="",
+    )
+
+
+def _bundled_source(bundle_dir: Path, src: dict[str, Any]) -> Path | None:
+    """Locate a bundle mod's content inside the unpacked collection archive.
+
+    Vortex names the entry after `source.fileExpression` (e.g.
+    `Bundled - foo.7z (v)`), which is usually a *folder* holding the mod's loose
+    file tree even though the name ends in `.7z`. Fall back to `logicalFilename`
+    and then to any entry whose name contains the logical file name's stem.
+    """
+    if not bundle_dir.is_dir():
+        return None
+    for name in (src.get("fileExpression"), src.get("logicalFilename")):
+        if not name:
+            continue
+        candidate = bundle_dir / str(name)
+        if candidate.exists():
+            return candidate
+    stem = PurePosixPath(str(src.get("logicalFilename") or "")).stem.strip().lower()
+    if not stem:
+        return None
+    for child in sorted(bundle_dir.iterdir()):
+        if stem in child.name.lower():
+            return child
+    return None
+
+
+def _bundle_archive_name(src: dict[str, Any], mod: dict[str, Any]) -> str:
+    """`Bundled - <logical file name without extension>.zip`."""
+    raw = str(src.get("logicalFilename") or src.get("fileExpression") or mod.get("name") or "")
+    stem = PurePosixPath(raw).stem.strip() or "bundled mod"
+    return f"Bundled - {stem}.zip"
+
+
+def _zip_folder(folder: Path, dest: Path) -> None:
+    """Zip `folder`'s *contents* (no wrapper folder) into `dest`, deflated.
+
+    Written to a `.part` file and renamed, so an interrupted run never leaves a
+    truncated zip that a later run would take for finished work. Entries are
+    walked in sorted order so the same tree always produces the same archive.
+    """
+    tmp = dest.with_name(dest.name + ".part")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    files = sorted(
+        (p for p in folder.rglob("*") if p.is_file()),
+        key=lambda p: p.relative_to(folder).as_posix().lower(),
+    )
+    try:
+        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for path in files:
+                zf.write(path, arcname=path.relative_to(folder).as_posix())
+        tmp.replace(dest)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def _download_bundle(
+    mod: dict[str, Any],
+    out_dir: Path,
+    game_name: str,
+    bundle_dir: Path | None,
+    tracker: _ByteTracker | None = None,
+) -> DownloadEntry:
+    src = mod.get("source") or {}
+    entry = DownloadEntry(
+        name=mod.get("name") or "",
+        mod_id=None,
+        file_id=None,
+        tag=src.get("tag"),
+        md5=None,
+        update_policy=src.get("updatePolicy"),
+        install_mode=install_mode(mod),
+        optional=bool(mod.get("optional")),
+        phase=mod.get("phase", 0),
+        mod_type=(mod.get("details") or {}).get("type") or "",
+        source_type="bundle",
+    )
+    expression = src.get("fileExpression") or src.get("logicalFilename") or entry.name
+
+    located = _bundled_source(bundle_dir, src) if bundle_dir is not None else None
+    if located is None:
+        entry.status = "unsupported"
+        entry.error = f"bundled file not found in collection archive: {expression}"
+        return entry
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if located.is_dir():
+        dest = out_dir / _bundle_archive_name(src, mod)
+        already = dest.exists()
+        if not already:
+            try:
+                _zip_folder(located, dest)
+            except OSError as e:
+                entry.error = f"could not pack bundled folder {located.name!r}: {e}"
+                return entry
+    else:
+        dest = out_dir / located.name
+        already = dest.exists() and dest.stat().st_size == located.stat().st_size
+        if not already:
+            try:
+                shutil.copy2(located, dest)
+            except OSError as e:
+                entry.error = f"could not copy bundled file {located.name!r}: {e}"
+                return entry
+
+    entry.file_name = dest.name
+    entry.path = str(dest.resolve())
+    try:
+        entry.md5 = _md5_of_file(dest)
+    except OSError as e:
+        entry.error = f"could not hash bundled archive: {e}"
+        return entry
+    entry.size = dest.stat().st_size
+    entry.status = "skipped" if already else "ok"
+    _write_meta_for_bundle(mod, dest, game_name)
+    if not already and tracker is not None:
+        tracker.add_bytes(entry.size, dest.name)
+    return entry
+
+
 def _unsupported_entry(mod: dict[str, Any]) -> DownloadEntry:
     src = mod.get("source") or {}
     source_type = src.get("type") or "unknown"
@@ -555,12 +714,15 @@ def _download_mod(
     domain: str,
     game_name: str,
     tracker: _ByteTracker | None = None,
+    bundle_dir: Path | None = None,
 ) -> DownloadEntry:
     source_type = (mod.get("source") or {}).get("type")
     if source_type == "nexus":
         return _download_one(clients, mod, out_dir, domain, game_name, tracker)
     if source_type == "direct":
         return _download_direct(sessions, mod, out_dir, domain, game_name, tracker)
+    if source_type == "bundle":
+        return _download_bundle(mod, out_dir, game_name, bundle_dir, tracker)
     return _unsupported_entry(mod)
 
 
@@ -644,10 +806,22 @@ def run_download(
     expected_bytes = sum(int((m.get("source") or {}).get("fileSize") or 0) for m in selected_mods)
     tracker = _ByteTracker(rep, total, expected_bytes)
 
+    # `bundle` mods live inside the collection archive `fetch` unpacked next to the
+    # manifest, so they need no network -- see `_download_bundle`.
+    bundle_dir = manifest_path.resolve().parent / BUNDLED_DIR
+
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         futures = {
             pool.submit(
-                _download_mod, clients, sessions, mod, out_dir, domain, game_name, tracker
+                _download_mod,
+                clients,
+                sessions,
+                mod,
+                out_dir,
+                domain,
+                game_name,
+                tracker,
+                bundle_dir,
             ): mod
             for mod in selected_mods
         }

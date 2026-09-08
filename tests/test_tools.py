@@ -690,3 +690,53 @@ def test_collection_nexus_mods_ignores_other_games_and_non_nexus_sources(tmp_pat
     other_game["source"] = {**other_game["source"], "domain": "fallout4"}
     assert tools._provided_by_collection(other_game, found) is None
     assert tools._provided_by_collection(_fake_dll_ng_companion(), found)["layer"] == "gts"
+
+
+# -- a custom archive store (`create --downloads-dir`) ---------------------------------
+
+
+@pytest.mark.local
+@pytest.mark.skipif(not _SEVENZIP_AVAILABLE, reason="tools/7za.exe not bootstrapped locally")
+def test_install_companion_mods_copies_the_archive_into_a_custom_downloads_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    mo2_dir = tmp_path / "inst"
+    (mo2_dir / "mods").mkdir(parents=True)
+    custom = tmp_path / "archives"
+    led = ledger_mod.Ledger(mo2_dir)
+    led.set_game(domain="skyrimspecialedition", mo2_name="SkyrimSE")
+    led.set_downloads_dir(custom)
+    led.save()
+
+    archive = tmp_path / "src" / "DynDOLOD Resources SE.zip"
+    archive.parent.mkdir()
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("meshes/x.nif", b"\x00\x01")
+
+    fake_companion = {
+        "id": "dyndolod-resources",
+        "name": "DynDOLOD Resources SE",
+        "source": {
+            "type": "nexus",
+            "domain": "skyrimspecialedition",
+            "mod_id": 52897,
+            "file": "latest-main",
+        },
+        "install": "plain",
+    }
+    monkeypatch.setattr(tools, "load_companion_catalog", lambda: [fake_companion])
+    monkeypatch.setattr(
+        tools,
+        "resolve_source",
+        lambda entry, client: _resolved(52897, 747879, archive.name, "Alpha-59"),
+    )
+    monkeypatch.setattr(tools, "_download_cached", lambda url, dest, **kw: archive)
+
+    entry = {"id": "dyndolod", "companion_mods": ["dyndolod-resources"]}
+    records, ok = tools._install_companion_mods(entry, mo2_dir, client=None, led=led, force=False)
+
+    assert ok is True and len(records) == 1
+    dl = custom.resolve() / archive.name
+    assert dl.is_file()
+    assert dl.with_name(dl.name + ".meta").is_file()
+    assert not (mo2_dir / "downloads").exists()

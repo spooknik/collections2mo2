@@ -45,7 +45,7 @@ from .reporter import Reporter, get_reporter
 
 
 def _instance_paths(instance_dir: str) -> create.Paths:
-    return create.Paths(Path(instance_dir).expanduser().resolve())
+    return create.Paths.for_instance(instance_dir)
 
 
 def _clear_readonly(func, path: str, _exc) -> None:
@@ -145,10 +145,10 @@ def cmd_add(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
         rep.log(f"    ... +{len(ctx.shared) - 10} more")
     rep.log(f"  separator(s):    {', '.join(layer_sep) or '(none)'}")
     rep.log(f"  user mods kept:  {len(report.get('user_mods') or [])}")
-    if ctx.missing:
-        rep.log(f"  NOT installed (unavailable on Nexus): {len(ctx.missing)}")
-        for name in ctx.missing:
-            rep.log(f"    {name}")
+    if ctx.skipped:
+        rep.log(f"  NOT installed (skipped): {len(ctx.skipped)}")
+        for item in ctx.skipped:
+            rep.log(f"    {item.name}  [{item.stage}] {item.reason}")
     ini_keys = led.ini_keys_of(ctx.owner)
     key_count = sum(len(keys) for sections in ini_keys.values() for keys in sections.values())
     rep.log(f"  INI keys set:    {key_count}")
@@ -457,6 +457,14 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help="carry on when Nexus no longer serves a file the collection pinned (the "
         "author deleted it); those mods are left out and listed in the summary. An "
         "md5 mismatch still stops the run.",
+    )
+    p.add_argument(
+        "--skip-errors",
+        action="store_true",
+        default=False,
+        help="carry on past any mod that cannot be downloaded, listed or installed (implies "
+        "--allow-missing): the layer goes in without those mods, which are listed at the "
+        "end and remembered in the ledger for `status`",
     )
     p.add_argument(
         "--reuse-downloads",

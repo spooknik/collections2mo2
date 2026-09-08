@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import categories as categories_mod
 from . import ledger as ledger_mod
 from .manifest import load_manifest
 from .naming import layer_separator_name, sanitize_folder_name, separator_name
@@ -132,9 +133,12 @@ def _resolve_endpoint(
     return None
 
 
-def _entry_lookup(entries: list[dict[str, Any]]) -> tuple[dict[str, int], dict[tuple, int]]:
+def _entry_lookup(
+    entries: list[dict[str, Any]],
+) -> tuple[dict[str, int], dict[tuple, int], dict[str, int]]:
     by_md5: dict[str, int] = {}
     by_modfile: dict[tuple, int] = {}
+    by_tag: dict[str, int] = {}
     for i, e in enumerate(entries):
         md5 = e.get("md5")
         if md5:
@@ -142,12 +146,24 @@ def _entry_lookup(entries: list[dict[str, Any]]) -> tuple[dict[str, int], dict[t
         mod_id, file_id = e.get("mod_id"), e.get("file_id")
         if mod_id is not None and file_id is not None:
             by_modfile.setdefault((mod_id, file_id), i)
-    return by_md5, by_modfile
+        tag = e.get("tag")
+        if tag:
+            by_tag.setdefault(str(tag), i)
+    return by_md5, by_modfile, by_tag
 
 
 def _entry_index_for_mod(
-    mod: dict[str, Any], by_md5: dict[str, int], by_modfile: dict[tuple, int]
+    mod: dict[str, Any],
+    by_md5: dict[str, int],
+    by_modfile: dict[tuple, int],
+    by_tag: dict[str, int] | None = None,
 ) -> int | None:
+    """Find the install entry for a manifest mod: md5, then `(modId, fileId)`, then `tag`.
+
+    The `tag` fallback is what a `bundle` mod has to be found by -- the curator packed
+    it into the collection archive, so the manifest gives it no md5 and no Nexus ids,
+    and without this its `modRules` would silently drop out of the load order.
+    """
     src = mod.get("source") or {}
     md5 = src.get("md5")
     if md5 and md5 in by_md5:
@@ -155,6 +171,9 @@ def _entry_index_for_mod(
     key = (src.get("modId"), src.get("fileId"))
     if key in by_modfile:
         return by_modfile[key]
+    tag = src.get("tag")
+    if by_tag and tag and str(tag) in by_tag:
+        return by_tag[str(tag)]
     return None
 
 
@@ -176,6 +195,7 @@ def _collect_edges(
     mod_by_logical: dict[str, dict],
     entries_by_md5: dict[str, int],
     entries_by_modfile: dict[tuple, int],
+    entries_by_tag: dict[str, int],
     warnings: list[str],
     stats: RuleStats,
 ) -> list[tuple[int, int]]:
@@ -195,8 +215,8 @@ def _collect_edges(
             stats.ignored += 1
             continue
 
-        src_idx = _entry_index_for_mod(src_mod, entries_by_md5, entries_by_modfile)
-        ref_idx = _entry_index_for_mod(ref_mod, entries_by_md5, entries_by_modfile)
+        src_idx = _entry_index_for_mod(src_mod, entries_by_md5, entries_by_modfile, entries_by_tag)
+        ref_idx = _entry_index_for_mod(ref_mod, entries_by_md5, entries_by_modfile, entries_by_tag)
         if src_idx is None or ref_idx is None:
             stats.ignored += 1
             warnings.append(
@@ -282,7 +302,7 @@ def _compute_order(manifest: dict[str, Any], entries: list[dict[str, Any]]) -> O
 
     mods = manifest.get("mods") or []
     mod_by_md5, mod_by_logical = _index_manifest_mods(mods)
-    entries_by_md5, entries_by_modfile = _entry_lookup(entries)
+    entries_by_md5, entries_by_modfile, entries_by_tag = _entry_lookup(entries)
 
     rules = manifest.get("modRules") or []
     stats = RuleStats()
@@ -293,6 +313,7 @@ def _compute_order(manifest: dict[str, Any], entries: list[dict[str, Any]]) -> O
         mod_by_logical,
         entries_by_md5,
         entries_by_modfile,
+        entries_by_tag,
         warnings,
         stats,
     )
@@ -589,12 +610,28 @@ def build_custom_executables(
     return blocks
 
 
+def mo2_download_directory(instance_dir: Path | str, led: ledger_mod.Ledger) -> str | None:
+    """The `[Settings] download_directory` value MO2 needs, or None for its default.
+
+    MO2 looks in `<instance>/downloads` unless told otherwise, so an instance whose
+    ledger keeps the archives elsewhere (`create --downloads-dir`) must say so in
+    `ModOrganizer.ini` or MO2's own downloads tab shows nothing. MO2 (Qt) is happy with
+    forward slashes, and writing them keeps the value out of QSettings' backslash
+    escaping.
+    """
+    downloads = led.downloads_dir.resolve()
+    if downloads == (Path(instance_dir) / ledger_mod.DEFAULT_DOWNLOADS_NAME).resolve():
+        return None
+    return downloads.as_posix()
+
+
 def render_mo2_ini(
     game_name: str,
     game_path: str,
     profile_name: str,
     mo2_version: str,
     exe_blocks: list[dict[str, str]],
+    download_directory: str | None = None,
 ) -> str:
     display_name = MO2_GAME_DISPLAY_NAMES.get(game_name, game_name)
     # MO2 stores gamePath as a QByteArray with native separators, backslashes doubled.
@@ -613,6 +650,7 @@ def render_mo2_ini(
         "",
         "[Settings]",
         "style=",
+        *([f"download_directory={download_directory}"] if download_directory else []),
         "",
         "[customExecutables]",
         f"size={len(exe_blocks)}",
@@ -1489,10 +1527,21 @@ class Layer:
     manifest_path: Path
     manifest: dict[str, Any]
     entries: list[dict[str, Any]]
+    install_path: Path | None = None
 
     @property
     def is_base(self) -> bool:
         return self.index == 0
+
+    @property
+    def categories_path(self) -> Path | None:
+        """`c2mo2/<slug>-<rev>.categories.json`, the sibling of this layer's install.json."""
+        if self.install_path is None:
+            return None
+        name = self.install_path.name
+        if not name.endswith(".install.json"):
+            return None
+        return self.install_path.with_name(name[: -len(".install.json")] + ".categories.json")
 
     @property
     def archive_dir(self) -> Path:
@@ -1562,7 +1611,11 @@ def load_layers(instance_dir: Path, led: ledger_mod.Ledger) -> tuple[list[Layer]
                 name=record.get("name") or slug,
                 manifest_path=manifest_path,
                 manifest=load_manifest(manifest_path),
-                entries=install.get("entries") or [],
+                # An entry `install` gave up on (`strategy: "failed"`, kept in the JSON so
+                # `install --only X --force` can retry it) has no usable folder; listing it
+                # would put a phantom mod in modlist.txt.
+                entries=[e for e in install.get("entries") or [] if e.get("strategy") != "failed"],
+                install_path=install_path,
             )
         )
     return layers, warnings
@@ -1601,7 +1654,7 @@ def compute_layered_order(layers: list[Layer]) -> LayeredOrder:
     # Rules from every layer, resolved against the union of every layer's mods.
     all_mods = [m for layer in layers for m in (layer.manifest.get("mods") or [])]
     mod_by_md5, mod_by_logical = _index_manifest_mods(all_mods)
-    entries_by_md5, entries_by_modfile = _entry_lookup(entries)
+    entries_by_md5, entries_by_modfile, entries_by_tag = _entry_lookup(entries)
     stats = RuleStats()
     edges: list[tuple[int, int]] = []
     for layer in layers:
@@ -1613,6 +1666,7 @@ def compute_layered_order(layers: list[Layer]) -> LayeredOrder:
                 mod_by_logical,
                 entries_by_md5,
                 entries_by_modfile,
+                entries_by_tag,
                 warnings,
                 stats,
             )
@@ -1781,6 +1835,38 @@ def plugins_present(mods_dir: Path, game_path: str | None) -> set[str]:
     return found
 
 
+def ensure_ini_key(ini_path: Path, section: str, key: str, value: str) -> bool:
+    """Add `key=value` to `[section]` of `ini_path` unless the section already has `key`.
+
+    Line-based like `tools.merge_executables`, so every other line survives byte for
+    byte (MO2's own INI is not configparser-clean). A key that is already there is left
+    alone whatever its value: the user may have changed it in MO2's settings. Returns
+    True when the file was changed.
+    """
+    lines = ini_path.read_text(encoding="utf-8").splitlines()
+    wanted = f"[{section}]"
+    header_idx: int | None = None
+    current = ""
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            current = stripped
+            if current == wanted:
+                header_idx = i
+            continue
+        if current == wanted and stripped.split("=", 1)[0].strip() == key:
+            return False
+    new_line = f"{key}={value}"
+    if header_idx is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend([wanted, new_line])
+    else:
+        lines.insert(header_idx + 1, new_line)
+    _write(ini_path, "\n".join(lines) + "\n")
+    return True
+
+
 def update_mo2_ini(
     ini_path: Path,
     game_name: str,
@@ -1788,6 +1874,7 @@ def update_mo2_ini(
     profile_name: str,
     mo2_version: str,
     exe_blocks: list[dict[str, str]],
+    download_directory: str | None = None,
 ) -> list[str]:
     """Write `ModOrganizer.ini` for a new instance, or top up an existing one.
 
@@ -1795,25 +1882,86 @@ def update_mo2_ini(
     carries settings we did not write -- Root Builder's configuration, MO2's own plugin
     state, the game and launcher executables MO2 adds on first start. Re-rendering the
     profile must not throw those away, so an existing file only gains the custom
-    executables it is missing; `gamePath` in particular is left alone because `build`
+    executables it is missing (and a `download_directory` it lacks, when the archives
+    live outside the instance); `gamePath` in particular is left alone because `build`
     points it at the Stock Game copy. Returns the executable titles added.
     """
     if not ini_path.exists():
         _write(
-            ini_path, render_mo2_ini(game_name, game_path, profile_name, mo2_version, exe_blocks)
+            ini_path,
+            render_mo2_ini(
+                game_name,
+                game_path,
+                profile_name,
+                mo2_version,
+                exe_blocks,
+                download_directory=download_directory,
+            ),
         )
         return [b["title"] for b in exe_blocks]
     from . import tools as tools_mod  # local: tools.py is standalone, this avoids a cycle
 
     was_crlf = b"\r\n" in ini_path.read_bytes()[:65536]
     added = tools_mod.merge_executables(ini_path, exe_blocks)
-    if added and was_crlf:
+    changed = bool(added)
+    if download_directory:
+        changed |= ensure_ini_key(ini_path, "Settings", "download_directory", download_directory)
+    if changed and was_crlf:
         # merge_executables writes LF; MO2 wrote this file with CRLF and will again. Put
         # the CRLF back, so that adding and then removing a layer is a no-op on the bytes
         # of a file nobody asked us to reformat.
         data = ini_path.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
         ini_path.write_bytes(data)
     return added
+
+
+def apply_layer_categories(layers: list[Layer], instance_dir: Path, mods_dir: Path) -> int:
+    """Top up every layer's mods with their Nexus category keys. Returns files changed.
+
+    Cheap and idempotent, so it can run on every render: it is what gives an instance
+    built before categories existed its categories on the next `add`/`remove`/`update`,
+    and what catches the mods an install skipped as `existing` (those folders are never
+    rewritten, so the installer never got to put the keys in). A category the user has
+    since changed in MO2 is left alone -- see `categories.apply_meta_ini`.
+    """
+    loaded: list[tuple[Layer, categories_mod.LayerCategories]] = []
+    for layer in layers:
+        path = layer.categories_path
+        if path is None or not path.exists():
+            continue
+        data = categories_mod.load_layer(path)
+        if data is not None:
+            loaded.append((layer, data))
+    if not loaded:
+        return 0
+
+    # The instance's own numbering always wins; seed it only if it has none at all.
+    table = categories_mod.CategoryTable.from_instance(instance_dir)
+    if table is None:
+        for _, data in loaded:
+            seed = categories_mod.CategoryTable.from_json(data.game_categories)
+            if seed:
+                categories_mod.write_instance_files(instance_dir, seed)
+                break
+        table = categories_mod.CategoryTable.from_instance(instance_dir)
+    if table is None:
+        return 0
+
+    changed = 0
+    for layer, data in loaded:
+        by_md5, by_modfile, by_tag = _entry_lookup(layer.entries)
+        for mod in layer.manifest.get("mods") or []:
+            idx = _entry_index_for_mod(mod, by_md5, by_modfile, by_tag)
+            if idx is None:
+                continue
+            resolved = data.resolve(mod, table)
+            folder = layer.entries[idx].get("folder")
+            if resolved is None or not folder:
+                continue
+            meta = mods_dir / folder / "meta.ini"
+            if meta.exists() and categories_mod.apply_meta_ini(meta, *resolved):
+                changed += 1
+    return changed
 
 
 def render_instance(
@@ -1867,7 +2015,7 @@ def render_instance(
 
     mods_dir = instance_dir / "mods"
     mods_dir.mkdir(parents=True, exist_ok=True)
-    (instance_dir / "downloads").mkdir(parents=True, exist_ok=True)
+    led.downloads_dir.mkdir(parents=True, exist_ok=True)
     (instance_dir / "overwrite").mkdir(parents=True, exist_ok=True)
     profile_dir = instance_dir / "profiles" / profile_name
     profile_dir.mkdir(parents=True, exist_ok=True)
@@ -2021,11 +2169,24 @@ def render_instance(
         ):
             rep.log(note)
 
+    # -- Nexus categories --------------------------------------------------------------
+    categories_updated = apply_layer_categories(layers, instance_dir, mods_dir)
+    if categories_updated:
+        rep.log(f"categories: {categories_updated} meta.ini updated")
+
     # -- ModOrganizer.ini -------------------------------------------------------------
     all_tools = [t for layer in layers for t in (layer.manifest.get("tools") or [])]
     exe_blocks = build_custom_executables(order.entries, all_tools, game_path, mods_dir=mods_dir)
     ini_path = instance_dir / "ModOrganizer.ini"
-    added = update_mo2_ini(ini_path, game_name, game_path, profile_name, mo2_version, exe_blocks)
+    added = update_mo2_ini(
+        ini_path,
+        game_name,
+        game_path,
+        profile_name,
+        mo2_version,
+        exe_blocks,
+        download_directory=mo2_download_directory(instance_dir, led),
+    )
     if added:
         rep.log(f"ModOrganizer.ini: {len(added)} executable(s) registered")
     files_written.append(str(ini_path))
@@ -2125,7 +2286,7 @@ def cmd_profile(args: argparse.Namespace, reporter: Reporter | None = None) -> i
     items = build_profile_order(entries, order_report.order_idx, args.separators)
 
     mo2_dir.mkdir(parents=True, exist_ok=True)
-    (mo2_dir / "downloads").mkdir(parents=True, exist_ok=True)
+    ledger_mod.downloads_dir(mo2_dir).mkdir(parents=True, exist_ok=True)
     (mo2_dir / "overwrite").mkdir(parents=True, exist_ok=True)
     profile_dir = mo2_dir / "profiles" / profile_name
     profile_dir.mkdir(parents=True, exist_ok=True)

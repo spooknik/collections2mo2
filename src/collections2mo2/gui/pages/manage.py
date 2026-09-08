@@ -278,10 +278,20 @@ class ManagePage(WizardPage):
         recents.remember_instance(summary.out, base_name)
         self._refresh_recent_combo()
         self.status_label.setText("")
-        self.info_label.setText(
+        info = (
             f"<b>{summary.out}</b> -- {summary.game_name or summary.game_domain}, "
             f"MO2 {summary.mo2_version}, {summary.user_mod_count} user mod(s)"
         )
+        # Only worth a line when the archives are not where everything assumes they are.
+        if summary.downloads_dir != summary.out / "downloads":
+            info += f"<br>Downloads: {summary.downloads_dir}"
+        # One line per layer that a `--skip-errors` run left mods out of, so the state
+        # is visible here and not only in the log of the run that caused it. The full
+        # list lives on the ledger record (`c2mo2 status` prints it).
+        for layer in summary.layers:
+            if layer.skipped:
+                info += f"<br>{layer.name}: {len(layer.skipped)} mod(s) skipped by the last run"
+        self.info_label.setText(info)
         self.table.setRowCount(len(summary.layers))
         for row, layer in enumerate(summary.layers):
             installed = f"{layer.revision}" + (" (base)" if layer.is_base else "")
@@ -451,12 +461,20 @@ class ManagePage(WizardPage):
         box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle("Remove instance")
         box.setText(f"Delete the entire instance folder?\n\n{target}  ({size_text})")
-        box.setInformativeText(
+        detail = (
             "Everything inside it is deleted: Mod Organizer 2, the Stock Game copy of "
             "your game, every installed mod, the downloaded archives and any tools "
             "installed into it.\n\nYour real Steam install is not touched. This cannot "
             "be undone."
         )
+        # A downloads folder outside the instance is not inside what gets deleted, and
+        # re-downloading a collection is hours of work -- say so rather than let the
+        # blanket "the downloaded archives" line imply it goes too.
+        summary = self._summary
+        if summary is not None and summary.downloads_dir != summary.out / "downloads":
+            detail += f"\n\nYour downloads folder {summary.downloads_dir} is outside the "
+            detail += "instance and is kept."
+        box.setInformativeText(detail)
         box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         box.setDefaultButton(QMessageBox.StandardButton.No)
         if box.exec() != QMessageBox.StandardButton.Yes:

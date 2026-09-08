@@ -11,10 +11,11 @@ the earlier attempt to do this as an MO2 Python plugin; MO2's plugin API cannot 
 installs or write profiles. Pipeline: `fetch` -> `download` -> `inspect` -> `install` -> `profile`
 -> `build` (-> `tools` when `--tools`/the GUI Tools page asks for catalogue tools; it runs last
 because `tools install` writes the ledger itself); `create` runs all of them into one instance dir (`<out>/c2mo2/` holds the stage JSON,
-`<out>/downloads/` the archives) and writes the ledger `c2mo2-instance.json` (`ledger.py`).
+`<out>/downloads/` the archives by default) and writes the ledger `c2mo2-instance.json` (`ledger.py`).
 An instance can hold several collections as layers: `create` = init + `add` the first layer +
 `build`, and `c2mo2 add` / `c2mo2 remove` (`layers.py`) put further collections on and off, sharing
-`mods/` and `downloads/` while each keeps its own `c2mo2/<slug>-<rev>.*.json`. The profile is
+`mods/` and `downloads/` while each keeps its own `c2mo2/<slug>-<rev>.*.json` (manifest,
+downloads, inspect, install, and `categories.json` from `categories.prepare_layer`). The profile is
 rendered from every layer at once by `profile.render_instance`. `c2mo2 update` (`update.py`) moves
 one layer to a newer revision by diffing the two manifests and applying only the delta;
 `c2mo2 status` is its read-only companion.
@@ -82,6 +83,13 @@ gitignored. Never print `.env` contents or the API key.
   a full `--force` run takes ~15 minutes for GTS. Close MO2 on that instance first.
 - 7-Zip is bootstrapped into `tools/` from the official GitHub release assets because py7zr cannot
   decode BCJ2 and the "extra" package lacks the RAR codec (see `sevenzip.py` docstring).
+- `sevenzip.extract` tolerates 7-Zip exit 2 when every `ERROR:` line is about reapplying a
+  reparse point or symbolic link *and* every file in the listing is present in the output at
+  its recorded size; the lines come back as warnings the installer stores on the entry.
+  Zips made from a OneDrive/Dropbox folder carry `FILE_ATTRIBUTE_REPARSE_POINT` (attribute
+  `L` in `7za l -slt`) on ordinary files -- the cloud placeholder -- and 7-Zip writes the
+  bytes, then fails with "Incorrect reparse stream"; no `-snl` variant avoids it. Seen on
+  Race-Based Textures (xa2h3u rev 33, 2026-09-08). CRC/data errors still raise.
 - MO2's executables dropdown has a hidden `<Edit...>` item at index 0, so
   `[Widgets] MainWindow_executablesListBox_index=1` in ModOrganizer.ini selects the *first*
   `[customExecutables]` entry, and MO2 falls back to 1 when the key is missing. We write the
@@ -126,6 +134,61 @@ gitignored. Never print `.env` contents or the API key.
   OpenSSL under the same `libcrypto-3-x64.dll` name CPython 3.13 uses, and the frozen `_ssl`
   then fails ("procedure could not be found"), so the GUI opens on Sign-in with an HTTPS error.
   CI's Python 3.12 names its DLLs `libcrypto-3.dll` and never collided (2026-09-03).
+- The downloads folder is configurable at create time only (`create --downloads-dir`, or the
+  GUI wizard's field). `ledger.downloads_dir(instance)` / `Ledger.downloads_dir` is the single
+  place the `downloads` name is joined onto an instance path, and `create.Paths.for_instance`
+  reads it for every command that opens an existing instance, so nothing past `create` takes
+  the flag. Stage JSON stores absolute archive paths, which is why there is no relocation
+  command yet -- moving the folder on disk would orphan every recorded path. MO2 needs
+  `download_directory` set in `ModOrganizer.ini` when the folder is non-default
+  (`profile.mo2_download_directory`), topped up onto an existing ini by
+  `profile.ensure_ini_key` the same way the script-extender key is.
+- Nexus categories cost two requests per collection revision, not one per mod: the game's
+  category list (`nexus.NexusClient.game_info`, v1 `GET /v1/games/<domain>.json`,
+  `categories`) and every mod's category from the collection revision's GraphQL
+  (`modFiles { file { mod { modCategory { id } } } }`, an id like `"24,1704"` -- Nexus
+  category id, then game id). The manifest's `details.category` name is the
+  case-insensitive fallback when GraphQL has nothing (some names Vortex records are
+  stale). `categories.py` resolves and stores this per layer as
+  `c2mo2/<slug>-<rev>.categories.json` (`create.LayerPaths.categories_json`);
+  `installer._write_meta_ini` writes `category`/`nexusCategory` into each mod's
+  `meta.ini`, and `profile.apply_layer_categories` tops up an already-installed instance.
+  MO2 maps the two ids through `categories.dat` and `nexuscatmap.dat` in the instance
+  root, numbering categories in ascending Nexus id order the way MO2's own "import Nexus
+  categories" does -- but only when *neither* file exists yet; if the instance already has
+  a `nexuscatmap.dat` (MO2's or the user's own edits), that numbering is read back and
+  used instead, and never overwritten. The fetch is wrapped in a broad catch: this feature
+  is purely cosmetic, so any error is one warning and mods are just left uncategorised
+  rather than failing the run.
+- `--skip-errors` (`create`/`add`/`update`; the GUI's Review page has it as a checkbox)
+  carries a run past three failure gates -- download, `inspect`'s 7-Zip listing, and
+  `install` -- instead of stopping at the first one; it implies the older, narrower
+  `--allow-missing` (file gone from Nexus only; an md5 mismatch still stops that flag
+  alone). Each skipped mod becomes a `create.SkippedMod(name, stage, reason)` collected on
+  `create.Run.skipped` / `api.CreateResult.skipped`, printed at the end, and written to the
+  layer's ledger record (`ledger.py`, read back by `Ledger.layer_skipped`) so `c2mo2
+  status` prints `NOT installed (skipped by the last run): N` and the GUI's Manage page
+  shows it. A failed `install` entry is kept in `install.json` as `strategy: "failed"`
+  (`installer.py:479`) so `c2mo2 install --only <mod> --force` can retry it later;
+  `profile.py` filters `strategy == "failed"` entries out of `modlist.txt`. On `update`
+  specifically (`update.py`), a mod whose new revision's file fails to download or install
+  keeps the previous revision's copy on disk (noted in `install.json`) instead of losing
+  the mod entirely; a brand-new mod that fails is simply absent.
+
+- A `source.type == "bundle"` mod is one the curator packed into the collection archive
+  itself: the manifest gives it a `fileExpression`, a `logicalFilename` and a `tag`, but
+  no `modId`, no `fileId` and no `md5`. `fetch` already unpacks the whole archive, so
+  `downloader._download_bundle` needs no network -- it looks under
+  `<manifest dir>/bundled/<fileExpression>` (then `logicalFilename`, then a
+  case-insensitive stem match). **That entry is usually a folder despite its name ending
+  in `.7z`** (`Bundled - khajiit overhaul MR patch.7z (v)/textures/...`), so a folder is
+  zipped, contents-rooted, into the downloads folder as `Bundled - <stem>.zip` and a real
+  file is copied; downstream stages only ever see an ordinary archive path. The entry
+  records the *produced* archive's md5 (there is none in the manifest) and a `.meta` with
+  `repository=` empty and no ids. Because a bundle mod has neither md5 nor Nexus ids,
+  `profile._entry_index_for_mod` falls back to `tag` after md5 and `(modId, fileId)`, or
+  its `modRules` would be dropped; `update._match_old_mods` already tries `tag` first, but
+  a bundle mod whose tag Vortex re-issued reads as removed + added, i.e. a reinstall.
 
 ## Shared contracts
 

@@ -39,8 +39,17 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from . import archive_inspect, build, game_version, installer, ledger, profile, survey
-from .downloader import mo2_game_name, run_download
+from . import (
+    archive_inspect,
+    build,
+    categories,
+    game_version,
+    installer,
+    ledger,
+    profile,
+    survey,
+)
+from .downloader import SUPPORTED_SOURCE_TYPES, mo2_game_name, run_download
 from .manifest import fetch_manifest, load_manifest
 from .nexus import AuthRequired, CollectionRef, NexusClient, NexusError
 from .reporter import Reporter, get_reporter, stdout_to_reporter
@@ -55,6 +64,7 @@ STAGE_FILES = {
     "inspect_json": "inspect.json",
     "install_json": "install.json",
     "survey_json": "survey.json",
+    "categories_json": "categories.json",
 }
 
 
@@ -170,6 +180,39 @@ def instance_path_warnings(path: str | Path, game_path: str | Path | None = None
     return warnings
 
 
+def downloads_path_warnings(
+    downloads: str | Path,
+    instance: str | Path | None = None,
+    game_path: str | Path | None = None,
+) -> list[str]:
+    """Warnings about `downloads` as a custom archive store (`create --downloads-dir`).
+
+    Advisory like `instance_path_warnings`, and shown by the same two surfaces. The
+    generic location checks apply (Program Files, OneDrive, a Steam library, ...); on
+    top of those, the store must not sit inside the instance's own `mods/` or
+    `overwrite/` (MO2 would index the archives as a mod) or inside the game folder.
+    """
+    text = str(Path(downloads))
+    warnings = [
+        w for w in instance_path_warnings(downloads, game_path) if "characters long" not in w
+    ]
+    if instance is not None:
+        inst = Path(instance)
+        if Path(text) == inst:
+            warnings.append(
+                "The downloads folder is the instance folder itself. Give the archives their "
+                "own folder (e.g. E:\\NexusDownloads, or leave this blank to use "
+                "<instance>\\downloads)."
+            )
+        elif any(_is_within(text, inst / sub) for sub in ("mods", "overwrite", "profiles")):
+            warnings.append(
+                "The downloads folder is inside the instance's mods/, overwrite/ or profiles/ "
+                "folder, where MO2 would treat the archives as mod files. Put it next to the "
+                "instance or on another drive instead."
+            )
+    return warnings
+
+
 def report_game_version(
     manifest: dict[str, Any],
     game_path: Path | str | None,
@@ -220,11 +263,38 @@ class StageResult:
 
 
 @dataclass
+class SkippedMod:
+    """A collection mod the run went on without (`--skip-errors` / `--allow-missing`).
+
+    `stage` is where it dropped out ("download", "inspect" or "install") and `reason`
+    the error that stage reported. The list is printed at the end of the run and kept
+    on the layer's ledger record (`skipped`), so `status` and the GUI can show it later.
+    """
+
+    name: str
+    stage: str
+    reason: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {"name": self.name, "stage": self.stage, "reason": self.reason}
+
+
+def skip_errors_requested(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "skip_errors", False))
+
+
+@dataclass
 class Run:
     """Bookkeeping for one `create` / `add` invocation."""
 
     reporter: Reporter
     stages: list[StageResult] = field(default_factory=list)
+    skipped: list[SkippedMod] = field(default_factory=list)
+
+    def skip(self, name: str, stage: str, reason: str) -> SkippedMod:
+        item = SkippedMod(name, stage, reason)
+        self.skipped.append(item)
+        return item
 
     def record(self, name: str, status: str, detail: str = "") -> StageResult:
         result = StageResult(name, status, detail)
@@ -245,9 +315,25 @@ class Run:
 
 @dataclass(frozen=True)
 class Paths:
-    """The instance-wide folders. Anything per-collection lives in `LayerPaths`."""
+    """The instance-wide folders. Anything per-collection lives in `LayerPaths`.
+
+    `downloads_dir` is the archive store when it is not `<out>/downloads` (people keep
+    mods on a fast drive and archives on a big one). `create` sets it from
+    `--downloads-dir` and records it in the ledger; everything that opens an existing
+    instance builds its `Paths` with `for_instance`, which reads it back, so a plain
+    `Paths(out)` is only right for a folder that has no ledger yet.
+    """
 
     out: Path
+    downloads_dir: Path | None = None
+
+    @classmethod
+    def for_instance(cls, out: Path | str) -> Paths:
+        """`Paths` for an existing instance, honouring the ledger's `downloads_dir`."""
+        out = Path(out).expanduser().resolve()
+        downloads = ledger.downloads_dir(out)
+        default = out / ledger.DEFAULT_DOWNLOADS_NAME
+        return cls(out, None if downloads == default else downloads)
 
     @property
     def stage(self) -> Path:
@@ -259,7 +345,7 @@ class Paths:
 
     @property
     def downloads(self) -> Path:
-        return self.out / "downloads"
+        return self.downloads_dir or self.out / ledger.DEFAULT_DOWNLOADS_NAME
 
     @property
     def mods(self) -> Path:
@@ -318,6 +404,12 @@ class LayerPaths:
     @property
     def survey_json(self) -> Path:
         return self.paths.stage / f"{self.prefix}.survey.json"
+
+    @property
+    def categories_json(self) -> Path:
+        """The layer's Nexus categories (`categories.prepare_layer`): what `install`
+        writes into each mod's meta.ini and what the profile top-up re-applies."""
+        return self.paths.stage / f"{self.prefix}.categories.json"
 
     def ledger_files(self) -> dict[str, str]:
         """The layer's stage JSON as instance-relative paths, for the ledger."""
@@ -531,11 +623,19 @@ def downloads_are_current(lp: LayerPaths, manifest_path: Path, mod_count: int) -
     for entry in entries:
         status = entry.get("status")
         if status == "unsupported":
+            if entry.get("source_type") in SUPPORTED_SOURCE_TYPES:
+                # Recorded by a version that could not handle this source (bundles before
+                # 0.1.4); the stage can produce the archive now, so run it again.
+                return False
             continue
         if status not in ("ok", "skipped"):
             return False
         path = entry.get("path")
         if not path or not Path(path).exists():
+            return False
+        if not _is_within(path, lp.downloads):
+            # The archives were fetched into another folder (`create --downloads-dir`
+            # changed since); run the stage again so they land where the ledger says.
             return False
     return True
 
@@ -620,6 +720,39 @@ def _download_failures(downloads_json: Path) -> tuple[list[tuple[str, str]], lis
     return unavailable, mismatched
 
 
+MD5_MISMATCH_REASON = "md5 mismatch: the file Nexus served is not the one the collection pinned"
+
+
+def _inspect_failures(inspect_json: Path) -> list[tuple[str, str]]:
+    """`(mod name, error)` for archives `inspect` could not list (see its `failures`)."""
+    data = _read_json(inspect_json) or {}
+    return [
+        (f.get("name") or f.get("file_name") or "?", f.get("error") or "could not be listed")
+        for f in data.get("failures") or []
+    ]
+
+
+def _install_failures(install_json: Path) -> list[tuple[str, str]]:
+    """`(mod name, error)` for install.json entries whose install failed."""
+    data = _read_json(install_json) or {}
+    out: list[tuple[str, str]] = []
+    for entry in data.get("entries") or []:
+        if entry.get("strategy") != "failed":
+            continue
+        name = entry.get("name") or entry.get("folder") or entry.get("tag") or "?"
+        errors = [w for w in entry.get("warnings") or [] if str(w).startswith("install failed")]
+        out.append((name, "; ".join(errors) or "install failed"))
+    return out
+
+
+def _report_skipped(rep: Reporter, run: Run, stage: str, flag: str) -> None:
+    items = [s for s in run.skipped if s.stage == stage]
+    verb = {"download": "downloaded", "inspect": "listed", "install": "installed"}[stage]
+    rep.warn(f"{len(items)} mod(s) could not be {verb}; continuing without them ({flag}):")
+    for item in items:
+        rep.warn(f"  {item.name}: {item.reason}")
+
+
 def _survey_is_current(survey_json: Path, manifest_path: Path) -> bool:
     data = _read_json(survey_json)
     if not data:
@@ -649,6 +782,9 @@ class LayerContext:
     layer_paths: LayerPaths
     installed: int = 0
     shared: list[str] = field(default_factory=list)
+    # Mods the layer went in without (`--skip-errors` / `--allow-missing`); `missing`
+    # is the older download-only view of the same list, kept for callers that use it.
+    skipped: list[SkippedMod] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
     is_base: bool = True
 
@@ -710,6 +846,23 @@ def add_layer(
         rep.done("fetch", f"{info.name} [{domain}] revision {revision} -> {manifest_path}")
 
     report_game_version(manifest, game_path, game_name, rep, is_base=not led.data.get("layers"))
+
+    # -- categories (cosmetic, never fatal) ---------------------------------------
+    # Two requests per layer -- the game's category list and every mod's category from
+    # the collection's GraphQL revision -- so MO2 shows the Nexus category of each mod
+    # instead of "No category". Fetched once per revision; the JSON is what install
+    # reads, and the profile render re-applies it to mods installed before this existed.
+    if not lp.categories_json.exists():
+        categories.prepare_layer(
+            client,
+            domain=domain,
+            slug=ref.slug,
+            revision=revision,
+            manifest=manifest,
+            out_json=lp.categories_json,
+            instance_dir=paths.out,
+            rep=rep,
+        )
 
     ctx = LayerContext(
         slug=ref.slug,
@@ -792,23 +945,25 @@ def add_layer(
             return None
         if rc != 0:
             unavailable, mismatched = _download_failures(lp.downloads_json)
-            allow = getattr(args, "allow_missing", False)
-            if not allow or mismatched or not unavailable:
-                run.record("download", "failed", "one or more archives failed or mismatched")
-                return None
+            skip = skip_errors_requested(args)
+            allow = skip or getattr(args, "allow_missing", False)
             # A file the curator pinned that Nexus no longer serves (the author deleted
             # or archived it) can never be downloaded, so with --allow-missing the layer
-            # goes in without it rather than the whole instance being unbuildable. The
-            # mods it would have installed are simply absent, and named here.
-            ctx_missing = unavailable
-            rep.warn(
-                f"{len(ctx_missing)} archive(s) are not available from Nexus; continuing "
-                "without them (--allow-missing):"
-            )
-            for name, error in ctx_missing:
-                rep.warn(f"  {name}: {error}")
-            run.record("download", "warned", f"{len(ctx_missing)} archive(s) unavailable")
-            missing = [name for name, _ in ctx_missing]
+            # goes in without it rather than the whole instance being unbuildable. An
+            # md5 mismatch is a different animal (Nexus served a file the collection was
+            # not built against) and only --skip-errors shrugs it off; the mismatched
+            # file is quarantined by the downloader and never installed either way.
+            if not allow or (mismatched and not skip) or not (unavailable or mismatched):
+                run.record("download", "failed", "one or more archives failed or mismatched")
+                return None
+            for name, error in unavailable:
+                run.skip(name, "download", error)
+            for name in mismatched:
+                run.skip(name, "download", MD5_MISMATCH_REASON)
+            _report_skipped(rep, run, "download", "--skip-errors" if skip else "--allow-missing")
+            count = len(unavailable) + len(mismatched)
+            run.record("download", "warned", f"{count} archive(s) skipped")
+            missing = [name for name, _ in unavailable] + list(mismatched)
         else:
             run.record("download", "ok")
 
@@ -825,9 +980,18 @@ def add_layer(
             reporter=rep,
         )
         if rc != 0:
-            run.record("inspect", "failed", "one or more archives could not be listed")
-            return None
-        run.record("inspect", "ok")
+            failures = _inspect_failures(lp.inspect_json)
+            if not skip_errors_requested(args) or not failures:
+                run.record("inspect", "failed", "one or more archives could not be listed")
+                return None
+            # An archive 7-Zip cannot read (truncated upload, exotic format) never
+            # reaches install: `inspect` only lists the archives it could open.
+            for name, error in failures:
+                run.skip(name, "inspect", error)
+            _report_skipped(rep, run, "inspect", "--skip-errors")
+            run.record("inspect", "warned", f"{len(failures)} archive(s) skipped")
+        else:
+            run.record("inspect", "ok")
 
     # -- install --------------------------------------------------------------------
     # Layer-aware folder naming: a mod whose name is already taken by another layer
@@ -851,20 +1015,32 @@ def add_layer(
                 owner=owner,
                 taken_folders=taken,
                 folder_suffix="" if is_base else ref.slug,
+                categories_json=str(lp.categories_json),
             ),
             reporter=rep,
         )
         if rc != 0:
-            run.record("install", "failed", "one or more mods failed to install")
-            return None
-        run.record("install", "ok")
+            failures = _install_failures(lp.install_json)
+            if not skip_errors_requested(args) or not failures:
+                run.record("install", "failed", "one or more mods failed to install")
+                return None
+            # The entry stays in install.json with `strategy: "failed"` so a later
+            # `install --only X --force` can retry it; the ledger and the profile leave
+            # it out (`profile.load_layers` drops failed entries).
+            for name, error in failures:
+                run.skip(name, "install", error)
+            _report_skipped(rep, run, "install", "--skip-errors")
+            run.record("install", "warned", f"{len(failures)} mod(s) skipped")
+        else:
+            run.record("install", "ok")
 
     # -- ownership -------------------------------------------------------------------
     ctx.missing = missing
+    ctx.skipped = list(run.skipped)
     install_data = _read_json(lp.install_json) or {}
     for entry in install_data.get("entries") or []:
         folder = entry.get("folder")
-        if not folder:
+        if not folder or entry.get("strategy") == "failed":
             continue
         record = led.data["mods"].get(folder)
         owners = led.owners_of(folder) if record else []
@@ -910,6 +1086,7 @@ def add_layer(
         manifest=manifest_path.resolve().relative_to(paths.out.resolve()).as_posix(),
         files=lp.ledger_files(),
     )
+    led.set_layer_skipped(ref.slug, revision, [s.as_dict() for s in ctx.skipped])
     return ctx
 
 
@@ -952,14 +1129,35 @@ def cmd_create(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     run = Run(rep)
     started = time.monotonic()
 
-    paths = Paths(Path(args.out).expanduser().resolve())
+    paths = Paths.for_instance(args.out)
     game_path = Path(args.game_path).expanduser().resolve()
     if not game_path.is_dir():
         rep.warn(f"--game-path {game_path} is not a directory")
         return 2
 
+    requested_downloads = getattr(args, "downloads_dir", None)
+    if requested_downloads:
+        wanted = Path(requested_downloads).expanduser().resolve()
+        if wanted != paths.downloads and (paths.stage / "collections").is_dir():
+            # Re-running into an instance whose archives sit elsewhere: the new location
+            # wins (`downloads_are_current` refuses stage JSON that points outside it, so
+            # the download stage runs again and fetches whatever the new folder lacks),
+            # but say so, and say how to avoid downloading everything twice.
+            rep.warn(
+                f"{paths.out} kept its downloads in {paths.downloads}; switching to {wanted}. "
+                f"Archives still in the old folder are downloaded again unless you also pass "
+                f"--reuse-downloads {paths.downloads}"
+            )
+        default = paths.out / ledger.DEFAULT_DOWNLOADS_NAME
+        paths = Paths(paths.out, None if wanted == default else wanted)
+    elif paths.downloads_dir is not None:
+        rep.log(f"downloads: {paths.downloads} (recorded in the instance ledger)")
+
     for warning in instance_path_warnings(paths.out, game_path):
         rep.warn(f"{paths.out}: {warning}")
+    if paths.downloads_dir is not None:
+        for warning in downloads_path_warnings(paths.downloads, paths.out, game_path):
+            rep.warn(f"{paths.downloads}: {warning}")
 
     load_dotenv()
     api_key = os.environ.get("NEXUS_API_KEY") or None
@@ -976,6 +1174,11 @@ def cmd_create(args: argparse.Namespace, reporter: Reporter | None = None) -> in
     paths.mods.mkdir(parents=True, exist_ok=True)
 
     led = ledger.load(paths.out)
+    if paths.downloads_dir is not None or led.data.get("downloads_dir"):
+        # Record the archive store before the first download lands in it, so a run that
+        # dies half-way still leaves an instance that knows where its archives are.
+        led.set_downloads_dir(paths.downloads)
+        led.save()
     migrate_instance(paths, led, rep)
     layers = led.data.get("layers") or []
     if layers and layers[0].get("slug") != CollectionRef.parse(args.url).slug:
@@ -1111,6 +1314,15 @@ def _finish(
             line += f"  ({stage.detail})"
         rep.log(line)
     rep.log(f"  elapsed: {elapsed:.1f}s")
+    if run.skipped:
+        # Said once more at the very end, after the stage lines, because the per-stage
+        # warnings scrolled past a long time ago by now.
+        rep.warn(
+            f"{len(run.skipped)} mod(s) are NOT in the instance (--skip-errors / "
+            "--allow-missing); install them by hand or re-run once Nexus serves them:"
+        )
+        for item in run.skipped:
+            rep.warn(f"  {item.name}  [{item.stage}] {item.reason}")
     if run.failed:
         rep.warn(f"{label} did not finish: see the failed stage above")
         return 1
@@ -1142,6 +1354,12 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         "--reuse-downloads",
         default=None,
         help="an existing download store to hardlink/copy archives + .meta from first",
+    )
+    p.add_argument(
+        "--downloads-dir",
+        default=None,
+        help="keep the archives here instead of <out>/downloads (e.g. on a bigger drive); "
+        "recorded in the instance, so add/update/tools/build find them later",
     )
     p.add_argument("--jobs", type=int, default=4, help="parallel workers per stage (default: 4)")
     p.add_argument(
@@ -1180,6 +1398,15 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help="carry on when Nexus no longer serves a file the collection pinned (the "
         "author deleted it); those mods are left out and listed in the summary. An "
         "md5 mismatch still stops the run.",
+    )
+    p.add_argument(
+        "--skip-errors",
+        action="store_true",
+        default=False,
+        help="carry on past any mod that cannot be downloaded, listed or installed (implies "
+        "--allow-missing, and also tolerates md5 mismatches and failed installs): the "
+        "instance is built without those mods, which are listed at the end and remembered "
+        "in the ledger for `status`",
     )
     p.add_argument(
         "--mo2-version",

@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import categories as categories_mod
 from . import fomod, layout
 from .naming import assign_folder_names, mod_folder_name
 from .reporter import Reporter, get_reporter
@@ -396,6 +397,7 @@ def _install_one(
     file_state: FileStateIndex | None = None,
     folder: str | None = None,
     owner: str | None = None,
+    category: tuple[int, int] | None = None,
 ) -> ModResult:
     tag = entry.get("tag") or ""
     result = ModResult(
@@ -426,7 +428,7 @@ def _install_one(
     tmp = tmp_root / (tag or result.folder)
     _rmtree(tmp)
     try:
-        extract(entry["path"], tmp)
+        result.warnings.extend(extract(entry["path"], tmp))
         if dest_root.exists():
             _rmtree(dest_root)
         dest_root.mkdir(parents=True, exist_ok=True)
@@ -468,7 +470,7 @@ def _install_one(
         result.file_count = _copy_pairs(base, pairs, dest_root, result.warnings, landed)
         result.plugins = _root_plugins(dest_root)
         result.root_file_count = _root_folder_count(dest_root)
-        _write_meta_ini(dest_root, entry, mod, game_name, owner)
+        _write_meta_ini(dest_root, entry, mod, game_name, owner, category)
         if file_state is not None:
             # Publish before returning: mods still queued can now see these files.
             file_state.add_installed(landed)
@@ -503,13 +505,17 @@ def _write_meta_ini(
     mod: dict[str, Any],
     game_name: str,
     owner: str | None = None,
+    category: tuple[int, int] | None = None,
 ) -> None:
+    # `category` is (mo2 category id, nexus category id) -- see categories.py for how
+    # the two are mapped. Without it the file keeps the uncategorised form MO2 accepts.
+    category_lines = categories_mod.meta_ini_lines(*category) if category else ["category=0"]
     lines = [
         "[General]",
         f"modid={entry.get('mod_id') or 0}",
         f"version={_ini_value(mod.get('version'))}",
         "newestVersion=",
-        "category=0",
+        *category_lines,
         f"installationFile={_ini_value(entry.get('file_name'))}",
         "repository=Nexus",
         f"gameName={game_name}",
@@ -651,6 +657,25 @@ def cmd_install(args: argparse.Namespace, reporter: Reporter | None = None) -> i
     tmp_root = mods_dir.parent / ".tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
 
+    # Nexus categories, when the orchestrator fetched them for this layer. The ids in
+    # the instance's own nexuscatmap.dat win over the ones the layer JSON was numbered
+    # with: MO2 (or the user) may have imported categories itself, and every existing
+    # meta.ini `category=` value is relative to that numbering.
+    layer_categories = None
+    category_table: categories_mod.CategoryTable | None = None
+    categories_json = getattr(args, "categories_json", None)
+    if categories_json:
+        layer_categories = categories_mod.load_layer(Path(categories_json))
+    if layer_categories is not None:
+        category_table = categories_mod.CategoryTable.from_instance(
+            mods_dir.parent
+        ) or categories_mod.CategoryTable.from_json(layer_categories.game_categories)
+
+    def _category_for(mod: dict[str, Any]) -> tuple[int, int] | None:
+        if layer_categories is None or category_table is None:
+            return None
+        return layer_categories.resolve(mod, category_table)
+
     todo = [e for e in entries if e.get("tag") in by_tag]
     missing = [e for e in entries if e.get("tag") not in by_tag]
     for entry in missing:
@@ -678,6 +703,7 @@ def cmd_install(args: argparse.Namespace, reporter: Reporter | None = None) -> i
                 file_state,
                 folder_names.get(entry["tag"]),
                 owner,
+                _category_for(by_tag[entry["tag"]]),
             ): entry
             for entry in todo
         }
@@ -768,6 +794,13 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         help='who these mods belong to, e.g. "collection:<slug>@<rev>"; stamped into '
         "each mod's meta.ini as comments=owner: <value> for the instance ledger",
+    )
+    p.add_argument(
+        "--categories",
+        dest="categories_json",
+        default=None,
+        help="<slug>-<rev>.categories.json from `categories.prepare_layer`; adds "
+        "category/nexusCategory to each mod's meta.ini",
     )
     p.add_argument(
         "--choices-overrides",
