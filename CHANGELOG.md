@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.1.4 - 2026-09-08
 
 ### Added
 
@@ -44,6 +44,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stream". `c2mo2` now checks that every file in the archive was extracted at its listed
   size and records the 7-Zip message as a warning on the mod instead of marking the
   install failed (seen on Race-Based Textures in a Skyrim collection).
+## 0.1.3 - 2026-09-03
+
+### Fixed
+
 - A `c2mo2-gui.exe` built with PyInstaller from a Git Bash shell on Python 3.13 could ship
   Git's OpenSSL instead of Python's and then fail every HTTPS request ("the SSL module is
   not available"), landing on the Sign-in page with that error. The spec now always
