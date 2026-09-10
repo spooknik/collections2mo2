@@ -46,11 +46,12 @@ PAGE_CLASSES = [
 
 @pytest.fixture(autouse=True)
 def _clean_keyring(monkeypatch):
-    # SignInPage.__init__ reads the real OS keyring to prefill the key field; stub it
-    # out so the test suite never touches the machine's actual credential store.
+    # `WizardWindow.__init__` asks the real OS credential store whether a sign-in is
+    # saved; stub it out so the test suite never touches the machine's actual store.
     from collections2mo2 import api
 
-    monkeypatch.setattr(api, "get_saved_api_key", lambda: None)
+    monkeypatch.setattr(api, "has_saved_signin", lambda: False)
+    monkeypatch.setattr(api, "current_auth", lambda: None)
 
 
 @pytest.mark.parametrize("page_cls", PAGE_CLASSES)
@@ -325,15 +326,13 @@ def _isolated_qsettings(tmp_path):
 
 
 def test_home_shown_first_when_signed_in(qtbot, monkeypatch, _isolated_qsettings):
-    """A saved key must show Home immediately, never blocking on the background
-    validation that follows."""
+    """A stored sign-in must show Home immediately, never blocking on the background
+    check that follows."""
     from collections2mo2 import api
     from collections2mo2.gui.app import WizardWindow
 
-    monkeypatch.setattr(api, "get_saved_api_key", lambda: "fake-key")
-    monkeypatch.setattr(
-        api, "validate_api_key", lambda api_key: api.SignInResult(name="Bob", is_premium=True)
-    )
+    monkeypatch.setattr(api, "has_saved_signin", lambda: True)
+    monkeypatch.setattr(api, "check_signin", lambda: api.SignInResult(name="Bob", is_premium=True))
 
     window = WizardWindow()
     qtbot.addWidget(window)
@@ -358,25 +357,25 @@ def test_signin_shown_when_no_key(qtbot, monkeypatch, _isolated_qsettings):
     from collections2mo2 import api
     from collections2mo2.gui.app import WizardWindow
 
-    monkeypatch.setattr(api, "get_saved_api_key", lambda: None)
+    monkeypatch.setattr(api, "has_saved_signin", lambda: False)
 
     window = WizardWindow()
     qtbot.addWidget(window)
 
     assert window._current == "signin"
-    assert window._signin_worker is None  # nothing to validate
+    assert window._signin_worker is None  # nothing to check
 
 
 def test_signin_shown_when_saved_key_fails_validation(qtbot, monkeypatch, _isolated_qsettings):
     from collections2mo2 import api
     from collections2mo2.gui.app import WizardWindow
 
-    monkeypatch.setattr(api, "get_saved_api_key", lambda: "bad-key")
+    monkeypatch.setattr(api, "has_saved_signin", lambda: True)
 
-    def _fail(api_key):
-        raise api.ApiError("Nexus rejected that key.")
+    def _fail():
+        raise api.ApiError("Nexus rejected that sign-in.")
 
-    monkeypatch.setattr(api, "validate_api_key", _fail)
+    monkeypatch.setattr(api, "check_signin", _fail)
 
     window = WizardWindow()
     qtbot.addWidget(window)
@@ -390,15 +389,103 @@ def test_signin_shown_when_saved_key_fails_validation(qtbot, monkeypatch, _isola
     assert "rejected" in window.pages["signin"].status_label.text()
 
 
+# -- Sign-in page: browser OAuth, no key field -------------------------------------------
+
+
+def test_signin_page_offers_browser_sign_in_and_no_key_field(qtbot):
+    """The page must offer Nexus's browser sign-in and never ask for a pasted key
+    (Nexus's Acceptable Use Policy forbids a public app taking a personal API key)."""
+    from PySide6.QtWidgets import QLineEdit
+
+    page = SignInPage(WizardState())
+    qtbot.addWidget(page)
+
+    assert page.signin_btn.text() == "Sign in with Nexus Mods"
+    assert page.findChildren(QLineEdit) == []
+    assert page.is_ready() is False
+
+
+def test_signin_page_sign_in_succeeds(qtbot, monkeypatch):
+    from collections2mo2 import api
+
+    monkeypatch.setattr(api, "sign_in", lambda cancel=None: api.SignInResult("Bob", True))
+
+    page = SignInPage(WizardState())
+    qtbot.addWidget(page)
+    page.signin_btn.click()
+
+    assert "browser" in page.status_label.text()
+    assert page.signin_btn.isEnabled() is False  # no second sign-in while one runs
+    assert page._worker is not None
+    assert page._worker.wait(5000)
+    qtbot.wait(50)  # let the queued succeeded signal reach the GUI thread
+
+    assert "Signed in as Bob" in page.status_label.text()
+    assert page.is_ready() is True
+    assert page.state.signin is not None and page.state.signin.name == "Bob"
+    assert page.signout_btn.isHidden() is False
+    assert page.signin_btn.isEnabled() is True
+
+
+def test_signin_page_cancel_sets_the_event(qtbot, monkeypatch):
+    import threading
+
+    from collections2mo2 import api
+
+    started = threading.Event()
+
+    def fake_sign_in(cancel=None):
+        started.set()
+        cancel.wait(5)
+        raise api.OperationCancelled("cancelled")
+
+    monkeypatch.setattr(api, "sign_in", fake_sign_in)
+
+    page = SignInPage(WizardState())
+    qtbot.addWidget(page)
+    page.signin_btn.click()
+    assert started.wait(2)
+    assert page.cancel_btn.isHidden() is False
+
+    page.cancel_btn.click()
+    assert page._cancel_event.is_set() is True
+
+    assert page._worker.wait(5000)
+    qtbot.wait(50)
+
+    assert page.status_label.text() == "Sign-in cancelled."
+    assert page.is_ready() is False
+    assert page.state.signin is None
+
+
+def test_signin_page_sign_out_clears_the_account(qtbot, monkeypatch):
+    from collections2mo2 import api
+
+    calls: list[int] = []
+    monkeypatch.setattr(api, "sign_out", lambda: calls.append(1))
+
+    state = WizardState()
+    state.signin = api.SignInResult("Bob", True)
+    page = SignInPage(state)
+    qtbot.addWidget(page)
+    page.on_enter()
+    assert page.is_ready() is True
+
+    page.signout_btn.click()
+    assert calls == [1]
+    assert state.signin is None
+    assert page.status_label.text() == "Signed out."
+    assert page.is_ready() is False
+
+
 def test_back_to_start_resets_state_keeps_account(qtbot, monkeypatch, _isolated_qsettings):
     from collections2mo2 import api
     from collections2mo2.gui.app import WizardWindow
 
-    monkeypatch.setattr(api, "get_saved_api_key", lambda: None)
+    monkeypatch.setattr(api, "has_saved_signin", lambda: False)
     window = WizardWindow()
     qtbot.addWidget(window)
 
-    window.state.api_key = "abc123"
     window.state.signin = api.SignInResult(name="Bob", is_premium=True)
     window.state.collection_url = (
         "https://www.nexusmods.com/games/skyrimspecialedition/collections/xyz"
@@ -413,7 +500,6 @@ def test_back_to_start_resets_state_keeps_account(qtbot, monkeypatch, _isolated_
 
     assert window._current == "home"
     # the account survives...
-    assert window.state.api_key == "abc123"
     assert window.state.signin is not None
     assert window.state.signin.name == "Bob"
     # ...but every choice made for the run is cleared
@@ -625,7 +711,7 @@ def test_window_close_while_busy_prompts_and_can_be_declined(qtbot, monkeypatch)
     from collections2mo2 import api
     from collections2mo2.gui.app import WizardWindow
 
-    monkeypatch.setattr(api, "get_saved_api_key", lambda: None)
+    monkeypatch.setattr(api, "has_saved_signin", lambda: False)
     window = WizardWindow()
     qtbot.addWidget(window)
 
@@ -670,7 +756,7 @@ def test_window_close_while_busy_confirmed_cancels_and_accepts(qtbot, monkeypatc
     from collections2mo2 import api
     from collections2mo2.gui.app import WizardWindow
 
-    monkeypatch.setattr(api, "get_saved_api_key", lambda: None)
+    monkeypatch.setattr(api, "has_saved_signin", lambda: False)
     window = WizardWindow()
     qtbot.addWidget(window)
 

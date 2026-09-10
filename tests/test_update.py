@@ -578,7 +578,8 @@ def _stub_update(
     monkeypatch.setattr(
         create, "render_profile", lambda *a, **kw: {"mod_order": ["A", "B"], "user_mods": []}
     )
-    monkeypatch.setattr(update, "load_dotenv", lambda *a, **kw: None)
+    monkeypatch.setattr(update.oauth, "load_dotenv", lambda *a, **kw: None)
+    monkeypatch.setattr(update.oauth, "_cached_auth", None)
     monkeypatch.setenv("NEXUS_API_KEY", "test-key")
 
 
@@ -735,7 +736,6 @@ def test_status_lists_the_mods_the_last_run_skipped(monkeypatch, tmp_path: Path)
         "base", 1, [{"name": "Gone Mod", "stage": "download", "reason": "404 Not Found"}]
     )
     led.save()
-    monkeypatch.setattr(update, "load_dotenv", lambda *a, **kw: None)
     rep = _CollectingReporter()
 
     rc = update.cmd_status(argparse.Namespace(instance=str(inst), offline=True), rep)
@@ -747,7 +747,6 @@ def test_status_lists_the_mods_the_last_run_skipped(monkeypatch, tmp_path: Path)
 
 def test_status_says_nothing_about_skips_for_a_clean_layer(monkeypatch, tmp_path: Path):
     inst = _updatable_instance(tmp_path)
-    monkeypatch.setattr(update, "load_dotenv", lambda *a, **kw: None)
     rep = _CollectingReporter()
 
     assert update.cmd_status(argparse.Namespace(instance=str(inst), offline=True), rep) == 0

@@ -1435,7 +1435,8 @@ def _stub_add_layer(monkeypatch, inst: Path, skipped: list) -> None:
         "render_profile",
         lambda *a, **kw: {"layers": [{"slug": "addon", "separators": []}], "user_mods": []},
     )
-    monkeypatch.setattr(layers, "load_dotenv", lambda *a, **kw: None)
+    monkeypatch.setattr(layers.oauth, "load_dotenv", lambda *a, **kw: None)
+    monkeypatch.setattr(layers.oauth, "_cached_auth", None)
     monkeypatch.setenv("NEXUS_API_KEY", "test-key")
 
 

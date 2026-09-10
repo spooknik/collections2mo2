@@ -51,13 +51,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
-from . import archive_inspect, build, categories, create, installer, ledger, profile
+from . import archive_inspect, build, categories, create, installer, ledger, oauth, profile
 from .downloader import run_download
 from .manifest import fetch_manifest, load_manifest
 from .naming import assign_folder_names
-from .nexus import AuthRequired, CollectionRef, NexusClient, NexusError
+from .nexus import NOT_SIGNED_IN, AuthRequired, CollectionRef, NexusClient, NexusError
 from .reporter import Reporter, get_reporter
 
 # `meta.ini` is rewritten by every install and by `stamp_owner`, so it can never say
@@ -596,10 +594,9 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         rep.warn(f"{paths.out} is not a c2mo2 instance ({ledger.LEDGER_NAME} not found)")
         return 2
 
-    load_dotenv()
-    api_key = os.environ.get("NEXUS_API_KEY") or None
-    if not api_key:
-        rep.warn("NEXUS_API_KEY is required (set it in .env; see .env.example)")
+    auth = oauth.default_auth()
+    if auth is None:
+        rep.warn(NOT_SIGNED_IN)
         return 2
 
     led = ledger.load(paths.out)
@@ -619,7 +616,7 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
 
     # -- resolve the target revision -------------------------------------------------
     rep.stage("resolve")
-    client = NexusClient(api_key=api_key)
+    client = NexusClient(auth)
     try:
         wanted = _parse_to(getattr(args, "to", None))
     except ValueError as exc:
@@ -800,7 +797,7 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
                 jobs=args.jobs,
                 limit=None,
                 include_optional=True,
-                api_key=api_key,
+                auth=auth,
                 json_path=tmp_downloads,
                 reporter=rep,
             )
@@ -1156,7 +1153,6 @@ def cmd_status(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         rep.warn(f"{paths.out} is not a c2mo2 instance ({ledger.LEDGER_NAME} not found)")
         return 2
 
-    load_dotenv()
     led = ledger.load(paths.out)  # never saved: `status` must not write to the instance
     layers = led.data.get("layers") or []
     game = led.data.get("game") or {}
@@ -1169,7 +1165,7 @@ def cmd_status(args: argparse.Namespace, reporter: Reporter | None = None) -> in
 
     client = None
     if not getattr(args, "offline", False):
-        client = NexusClient(api_key=os.environ.get("NEXUS_API_KEY") or None)
+        client = NexusClient(oauth.default_auth())
 
     owners = led.scan_mods_dir(paths.mods)
     rep.log("")

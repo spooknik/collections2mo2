@@ -7,10 +7,10 @@ engine function's signature drifts, the fix is in this one file.
 
 Two other things live here besides the wrapper functions:
 
-- **Sign-in helpers** (`validate_api_key`, `*_api_key` keyring helpers, `activate_api_key`)
-  because the engine has no notion of "the signed-in user" -- it only reads
-  `NEXUS_API_KEY` from the environment/`.env` (see `cli.py: _client()`). The GUI stores
-  the key with `keyring` and calls `activate_api_key` before any engine call.
+- **Sign-in helpers** (`sign_in`, `check_signin`, `sign_out`, `current_auth`) over
+  `oauth.py`: the browser-based OAuth sign-in Nexus requires of a public app. The engine
+  itself picks the sign-in up through `oauth.default_auth()` (the credential store, or a
+  developer's `NEXUS_API_KEY`), so the GUI only has to make sure one exists.
 - **GUI-only lookups** (Steam game detection, default instance path, disk usage, path
   warnings) that have no engine equivalent because the CLI always takes `--game-path`
   and `--out` as explicit arguments.
@@ -34,6 +34,7 @@ import re
 import shutil
 import stat
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -41,11 +42,11 @@ from typing import Any
 import keyring
 import keyring.errors
 
-from . import build, create, game_version, layers, ledger, profile, survey, tools
+from . import build, create, game_version, layers, ledger, oauth, profile, survey, tools
 from . import sevenzip as sevenzip_mod
 from . import tools as tools_mod
 from .manifest import fetch_manifest, load_manifest
-from .nexus import API_BASE, AuthRequired, CollectionRef, NexusClient, NexusError
+from .nexus import API_BASE, AuthRequired, CollectionRef, NexusAuth, NexusClient, NexusError
 from .reporter import NullReporter, Reporter, get_reporter, stdout_to_reporter
 
 __all__ = [
@@ -59,10 +60,10 @@ __all__ = [
     "SignInResult",
     "SurveySummary",
     "ToolEntry",
-    "activate_api_key",
     "add_collection_layer",
-    "clear_api_key",
+    "check_signin",
     "create_instance",
+    "current_auth",
     "default_instance_dir",
     "detect_skyrim_se_path",
     "dir_size_bytes",
@@ -70,9 +71,10 @@ __all__ = [
     "downloads_path_warnings",
     "export_to_wabbajack",
     "fetch_collection_summary",
+    "forget_legacy_api_key",
     "format_bytes",
     "game_version_check",
-    "get_saved_api_key",
+    "has_saved_signin",
     "has_update_support",
     "has_wabbajack_support",
     "install_more_tools",
@@ -84,16 +86,16 @@ __all__ = [
     "list_revisions",
     "list_tool_groups",
     "load_instance",
-    "nexus_api_key_signup_url",
+    "nexus_authorized_apps_url",
     "open_folder",
     "path_warnings",
     "remove_collection_layer",
     "run_fomod_survey",
-    "save_api_key",
     "short_game_version",
+    "sign_in",
+    "sign_out",
     "skipped_mods",
     "update_collection_layer",
-    "validate_api_key",
 ]
 
 
@@ -157,58 +159,27 @@ GUI_CACHE_DIR = (DATA_DIR_OVERRIDE or _default_data_dir()) / "gui-cache"
 
 # -- sign-in ----------------------------------------------------------------------------
 
+# Where the pre-0.2.0 GUI kept the user's personal API key. Public apps may not use
+# personal keys (Nexus API Acceptable Use Policy), so the entry is only ever deleted now.
 KEYRING_SERVICE = "collections2mo2"
 LEGACY_KEYRING_SERVICE = "collections2wabbajack"
-KEYRING_USERNAME = "nexus-api-key"
-NEXUS_API_KEY_URL = "https://www.nexusmods.com/users/myaccount?tab=api+access"
+LEGACY_KEYRING_USERNAME = "nexus-api-key"
 
 
-def nexus_api_key_signup_url() -> str:
-    return NEXUS_API_KEY_URL
+def nexus_authorized_apps_url() -> str:
+    """The Nexus page where the user can revoke this app's access to their account."""
+    return oauth.AUTHORIZED_APPS_URL
 
 
-def get_saved_api_key() -> str | None:
-    """The API key stored in the OS credential store, or `None` if there isn't one.
-
-    Falls back to the pre-rename service name (`collections2wabbajack`) so a user who
-    signed in before the rename stays signed in; `save_api_key` only ever writes the
-    current name.
-    """
+def forget_legacy_api_key() -> None:
+    """Delete the personal API key an older release stored, if any."""
     for service in (KEYRING_SERVICE, LEGACY_KEYRING_SERVICE):
         try:
-            key = keyring.get_password(service, KEYRING_USERNAME)
-        except keyring.errors.KeyringError:
-            continue
-        if key:
-            return key
-    return None
-
-
-def save_api_key(api_key: str) -> None:
-    keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, api_key)
-
-
-def clear_api_key() -> None:
-    """Sign out. Clears the legacy service name too, or `get_saved_api_key`'s fallback
-    would sign the user straight back in."""
-    for service in (KEYRING_SERVICE, LEGACY_KEYRING_SERVICE):
-        try:
-            if keyring.get_password(service, KEYRING_USERNAME) is None:
+            if keyring.get_password(service, LEGACY_KEYRING_USERNAME) is None:
                 continue
-            keyring.delete_password(service, KEYRING_USERNAME)
+            keyring.delete_password(service, LEGACY_KEYRING_USERNAME)
         except keyring.errors.KeyringError:
             pass
-
-
-def activate_api_key(api_key: str) -> None:
-    """Make `api_key` the one every engine call in this process sees.
-
-    The engine reads `NEXUS_API_KEY` from the environment (`cli.py: _client()` etc.,
-    via `python-dotenv`'s `load_dotenv()`, which by default does not override an
-    already-set environment variable) -- so setting it here before any engine call
-    is enough, and safe even if the repo's own `.env` also has a key in it.
-    """
-    os.environ["NEXUS_API_KEY"] = api_key
 
 
 @dataclass(frozen=True)
@@ -217,20 +188,63 @@ class SignInResult:
     is_premium: bool
 
 
-def validate_api_key(api_key: str) -> SignInResult:
-    """`GET /v1/users/validate.json` -- confirms the key and whether it is Premium.
+def has_saved_signin() -> bool:
+    """Whether a sign-in exists to try (an OAuth token pair in the credential store, or
+    a developer's `NEXUS_API_KEY`). It may still turn out to be revoked: `check_signin`."""
+    return oauth.default_auth() is not None
 
+
+def current_auth() -> NexusAuth | None:
+    """The credentials the engine will use, for GUI calls that take an `auth=`."""
+    return oauth.default_auth()
+
+
+def sign_in(*, cancel: threading.Event | None = None) -> SignInResult:
+    """Run the browser sign-in (`oauth.login`) and confirm the account with Nexus.
+
+    Opens the system browser on Nexus's authorise page and waits for the redirect; set
+    `cancel` to abandon the wait (raises `OperationCancelled`). Raises `ApiError` with a
+    message fit to show the user on any failure.
+    """
+    try:
+        oauth.login(cancel=cancel)
+    except oauth.LoginCancelled as exc:
+        raise OperationCancelled(str(exc)) from exc
+    except (oauth.OAuthError, NexusError) as exc:
+        raise ApiError(str(exc)) from exc
+    forget_legacy_api_key()
+    return check_signin()
+
+
+def sign_out() -> None:
+    oauth.sign_out()
+    forget_legacy_api_key()
+
+
+def check_signin() -> SignInResult:
+    """`GET /v1/users/validate.json` with the current sign-in: confirms Nexus accepts it
+    and whether the account is Premium.
+
+    A rejected OAuth sign-in (revoked on Nexus, or an aged-out refresh token) is cleared
+    from the credential store here, so the GUI's next start goes straight to Sign in.
     Raises `ApiError` with a message fit to show the user on any failure.
     """
-    if not api_key or not api_key.strip():
-        raise ApiError("Paste your Nexus personal API key first.")
-    client = NexusClient(api_key=api_key.strip())
+    auth = oauth.default_auth()
+    if auth is None:
+        raise ApiError("Not signed in to Nexus Mods.")
+    client = NexusClient(auth)
     try:
         resp = client.session.get(f"{API_BASE}/v1/users/validate.json", timeout=30)
+    except oauth.SignedOut as exc:
+        sign_out()
+        raise ApiError(str(exc)) from exc
     except Exception as exc:
         raise ApiError(f"Could not reach Nexus Mods: {exc}") from exc
     if resp.status_code == 401:
-        raise ApiError("Nexus rejected that key. Copy it again from your account page.")
+        if isinstance(auth, oauth.BearerAuth):
+            sign_out()
+            raise ApiError("Nexus Mods no longer accepts this sign-in; sign in again.")
+        raise ApiError("Nexus rejected the API key in NEXUS_API_KEY.")
     try:
         resp.raise_for_status()
     except Exception as exc:
@@ -241,6 +255,14 @@ def validate_api_key(api_key: str) -> SignInResult:
         raise ApiError("Nexus returned an unexpected response.") from exc
     name = body.get("name") or "?"
     is_premium = bool(body.get("is_premium"))
+    if isinstance(auth, oauth.BearerAuth):
+        # The token's own claims are the fallback if validate.json ever stops carrying
+        # these fields for OAuth callers.
+        tokens = auth.tokens
+        if name == "?" and tokens.username:
+            name = tokens.username
+        if "is_premium" not in body and tokens.is_premium is not None:
+            is_premium = tokens.is_premium
     return SignInResult(name=name, is_premium=is_premium)
 
 
@@ -300,15 +322,15 @@ def _game_versions(revision: dict[str, Any] | None) -> list[str]:
 
 
 def fetch_collection_summary(
-    url: str, *, revision: int | None = None, api_key: str | None = None
+    url: str, *, revision: int | None = None, auth: NexusAuth | None = None
 ) -> CollectionSummary:
     """Metadata for a collection URL without downloading anything (`nexus.py`'s
-    anonymous GraphQL path -- a key is accepted but not required)."""
+    anonymous GraphQL path -- a sign-in is accepted but not required)."""
     try:
         ref = CollectionRef.parse(url)
     except NexusError as exc:
         raise ApiError(str(exc)) from exc
-    client = NexusClient(api_key=api_key)
+    client = NexusClient(auth)
     try:
         data = client.graphql(_SUMMARY_QUERY, {"slug": ref.slug, "revision": revision})
     except (NexusError, AuthRequired) as exc:
@@ -363,7 +385,7 @@ def run_fomod_survey(
     url: str,
     *,
     revision: int | None,
-    api_key: str,
+    auth: NexusAuth | None = None,
     jobs: int = 4,
     reporter: Reporter | None = None,
 ) -> SurveySummary:
@@ -379,7 +401,9 @@ def run_fomod_survey(
         ref = CollectionRef.parse(url)
     except NexusError as exc:
         raise ApiError(str(exc)) from exc
-    client = NexusClient(api_key=api_key)
+    if auth is None:
+        auth = oauth.default_auth()
+    client = NexusClient(auth)
     try:
         info, manifest_path = fetch_manifest(client, ref, revision, GUI_CACHE_DIR / "collections")
     except (AuthRequired, NexusError, OSError, ValueError) as exc:
@@ -394,7 +418,7 @@ def run_fomod_survey(
             survey_all=False,
             min_remaining=100,
             limit=None,
-            api_key=api_key,
+            auth=auth,
             reporter=rep,
         )
     except AuthRequired as exc:
@@ -794,8 +818,7 @@ def load_instance(instance_dir: str | Path) -> InstanceSummary:
 
     led = ledger.load(paths.out)
     game = led.data.get("game") or {}
-    api_key = os.environ.get("NEXUS_API_KEY") or None
-    client = NexusClient(api_key=api_key)
+    client = NexusClient(oauth.default_auth())
 
     layer_statuses: list[LayerStatus] = []
     for i, layer in enumerate(led.data.get("layers") or []):

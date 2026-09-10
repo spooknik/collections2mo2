@@ -11,7 +11,9 @@ from .. import api
 @dataclass
 class WizardState:
     # -- sign-in --------------------------------------------------------------
-    api_key: str = ""
+    # The confirmed Nexus account, or None when nobody is signed in. The credentials
+    # themselves never live here: they are in the OS credential store, and the engine
+    # picks them up through `oauth.default_auth()` (`api.current_auth()`).
     signin: api.SignInResult | None = None
 
     # -- collection -------------------------------------------------------------
@@ -56,7 +58,7 @@ class WizardState:
 
     def reset_for_new_run(self, *, keep_preset: bool = False) -> None:
         """ "Back to start": clear every choice made for a create run (or picked up by
-        Manage), keeping the signed-in account (`api_key` / `signin`) intact.
+        Manage), keeping the signed-in account (`signin`) intact.
 
         `keep_preset` keeps `preset_instance_dir`; the only caller that asks for that
         is the "set up a collection in this existing folder" jump, which resets the

@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import threading
 import time
@@ -33,8 +32,9 @@ from typing import Any
 
 import requests
 
+from . import oauth
 from .manifest import install_mode, load_manifest
-from .nexus import API_BASE, AuthRequired, NexusClient, NexusError
+from .nexus import API_BASE, NOT_SIGNED_IN, AuthRequired, NexusAuth, NexusClient, NexusError
 from .reporter import Reporter, get_reporter
 
 CHECKPOINT_EVERY = 25
@@ -208,14 +208,14 @@ class SurveyState:
 class _ThreadClients:
     """One NexusClient per worker thread (requests.Session is not thread-safe)."""
 
-    def __init__(self, api_key: str | None):
-        self._api_key = api_key
+    def __init__(self, auth: NexusAuth | None):
+        self._auth = auth
         self._local = threading.local()
 
     def get(self) -> NexusClient:
         client = getattr(self._local, "client", None)
         if client is None:
-            client = NexusClient(api_key=self._api_key)
+            client = NexusClient(self._auth)
             self._local.client = client
         return client
 
@@ -439,7 +439,7 @@ def run_survey(
     survey_all: bool,
     min_remaining: int,
     limit: int | None,
-    api_key: str | None,
+    auth: NexusAuth | None,
     reporter: Reporter | None = None,
 ) -> int:
     rep = get_reporter(reporter)
@@ -481,7 +481,7 @@ def run_survey(
         _print_report(state, targets, all_mods, 0, 0)
         return 0
 
-    clients = _ThreadClients(api_key)
+    clients = _ThreadClients(auth)
     limiter = RateLimiter(min_remaining)
     try:
         limiter.sync(clients.get())
@@ -583,13 +583,10 @@ def cmd_survey(args: argparse.Namespace) -> int:
     else:
         out_path = manifest_path.resolve().parent.parent / "survey.json"
 
-    from dotenv import load_dotenv
-
-    load_dotenv()
-    api_key = os.environ.get("NEXUS_API_KEY") or None
-    if not api_key:
+    auth = oauth.default_auth()
+    if auth is None:
         print(
-            "error: NEXUS_API_KEY is required (set it in .env). See .env.example.",
+            f"error: {NOT_SIGNED_IN}",
             file=sys.stderr,
         )
         return 2
@@ -602,7 +599,7 @@ def cmd_survey(args: argparse.Namespace) -> int:
             survey_all=args.all,
             min_remaining=args.min_remaining,
             limit=args.limit,
-            api_key=api_key,
+            auth=auth,
         )
     except AuthRequired as e:
         print(f"error: {e}", file=sys.stderr)

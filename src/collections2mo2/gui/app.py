@@ -128,12 +128,11 @@ class WizardWindow(QMainWindow):
         ):
             self._add_page(name, page)
 
-        # Sign-in is only the first thing shown when there is no saved key to try --
-        # otherwise Home shows immediately and the key is validated in the background
-        # (see `_start_signin_check`), never blocking the window on the network.
-        saved_key = api.get_saved_api_key()
-        if saved_key:
-            self.state.api_key = saved_key
+        # Sign-in is only the first thing shown when there is no stored sign-in to try
+        # -- otherwise Home shows immediately and the sign-in is checked with Nexus in
+        # the background (see `_start_signin_check`), never blocking on the network.
+        has_signin = api.has_saved_signin()
+        if has_signin:
             self._current = "home"
             self._checking_signin = True
         else:
@@ -143,8 +142,8 @@ class WizardWindow(QMainWindow):
         self.pages[self._current].on_enter()
         self._update_nav()
 
-        if saved_key:
-            self._start_signin_check(saved_key)
+        if has_signin:
+            self._start_signin_check()
 
     def _add_page(self, name: str, page: WizardPage) -> None:
         self.pages[name] = page
@@ -153,10 +152,10 @@ class WizardWindow(QMainWindow):
         page.custom_action.connect(self._on_custom_action)
         page.busy_changed.connect(self._set_busy)
 
-    # -- sign-in: validate a saved key in the background, without blocking Home -----
+    # -- sign-in: check a stored sign-in in the background, without blocking Home ---
 
-    def _start_signin_check(self, api_key: str) -> None:
-        self._signin_worker = EngineWorker(api.validate_api_key, {"api_key": api_key})
+    def _start_signin_check(self) -> None:
+        self._signin_worker = EngineWorker(api.check_signin, {})
         self._signin_worker.succeeded.connect(self._on_signin_check_ok)
         self._signin_worker.failed.connect(self._on_signin_check_failed)
         self._signin_worker.start()
@@ -164,7 +163,6 @@ class WizardWindow(QMainWindow):
     def _on_signin_check_ok(self, result: api.SignInResult) -> None:
         self._checking_signin = False
         self.state.signin = result
-        api.activate_api_key(self.state.api_key)
         self._update_nav()
 
     def _on_signin_check_failed(self, message: str) -> None:
@@ -183,7 +181,7 @@ class WizardWindow(QMainWindow):
             self.account_label.setText(f"Signed in as {self.state.signin.name} ({premium})")
         else:
             self.account_label.setText("Not signed in")
-        self.account_btn.setText("Change key" if self.state.signin is not None else "Sign in")
+        self.account_btn.setText("Account" if self.state.signin is not None else "Sign in")
         self.account_btn.setEnabled(not self._busy)
         self.header_bar.setVisible(self._current != "signin")
 

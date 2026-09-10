@@ -3,7 +3,7 @@
 Every long-running `api.py` call is invoked as `EngineWorker(fn, kwargs, reporter)`:
 `fn` is called on a background `QThread` with `kwargs`, plus `reporter=` if (and only
 if) `fn` actually declares that parameter -- most `api.py` calls do (they wrap a
-multi-stage pipeline), but a few one-shot lookups (`validate_api_key`,
+multi-stage pipeline), but a few one-shot lookups (`check_signin`,
 `fetch_collection_summary`, `dir_size_bytes`, ...) don't. The result or exception comes
 back on the GUI thread via `succeeded` / `failed` signals.
 """

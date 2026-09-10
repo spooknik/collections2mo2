@@ -48,7 +48,6 @@ from __future__ import annotations
 import argparse
 import configparser
 import json
-import os
 import re
 import shutil
 import sys
@@ -62,6 +61,7 @@ import requests
 from . import create as create_mod
 from . import installer as installer_mod
 from . import ledger as ledger_mod
+from . import oauth
 from .manifest import load_manifest
 from .naming import sanitize_folder_name
 from .nexus import USER_AGENT, AuthRequired, NexusClient, NexusError
@@ -795,11 +795,7 @@ def cmd_tools_list(args: argparse.Namespace) -> int:
 
 
 def _client() -> NexusClient:
-    from dotenv import load_dotenv
-
-    load_dotenv()
-    key = os.environ.get("NEXUS_API_KEY") or None
-    return NexusClient(api_key=key)
+    return NexusClient(oauth.default_auth())
 
 
 def _companion_tag(companion_id: str, version: str) -> str:

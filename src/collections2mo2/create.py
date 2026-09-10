@@ -37,8 +37,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
 from . import (
     archive_inspect,
     build,
@@ -46,12 +44,13 @@ from . import (
     game_version,
     installer,
     ledger,
+    oauth,
     profile,
     survey,
 )
 from .downloader import SUPPORTED_SOURCE_TYPES, mo2_game_name, run_download
 from .manifest import fetch_manifest, load_manifest
-from .nexus import AuthRequired, CollectionRef, NexusClient, NexusError
+from .nexus import NOT_SIGNED_IN, AuthRequired, CollectionRef, NexusAuth, NexusClient, NexusError
 from .reporter import Reporter, get_reporter, stdout_to_reporter
 
 # The instance path, the mod folder name (up to 80 chars) and the mod's own nested
@@ -794,7 +793,7 @@ def add_layer(
     args: argparse.Namespace,
     *,
     led: ledger.Ledger,
-    api_key: str,
+    auth: NexusAuth,
     game_path: Path,
     run: Run,
     rep: Reporter,
@@ -813,7 +812,7 @@ def add_layer(
     rep.stage("fetch")
     try:
         ref = CollectionRef.parse(args.url)
-        client = NexusClient(api_key=api_key)
+        client = NexusClient(auth)
         info = client.revision_info(ref, args.revision)
         rev_dir = paths.collections / ref.slug / str(info.revision_number)
         had_manifest = (
@@ -903,7 +902,7 @@ def add_layer(
                 survey_all=False,
                 min_remaining=100,
                 limit=None,
-                api_key=api_key,
+                auth=auth,
                 reporter=rep,
             )
         except Exception as exc:  # noqa: BLE001 - the survey only informs the operator
@@ -936,7 +935,7 @@ def add_layer(
                 jobs=args.jobs,
                 limit=None,
                 include_optional=True,
-                api_key=api_key,
+                auth=auth,
                 json_path=lp.downloads_json,
                 reporter=rep,
             )
@@ -1159,10 +1158,9 @@ def cmd_create(args: argparse.Namespace, reporter: Reporter | None = None) -> in
         for warning in downloads_path_warnings(paths.downloads, paths.out, game_path):
             rep.warn(f"{paths.downloads}: {warning}")
 
-    load_dotenv()
-    api_key = os.environ.get("NEXUS_API_KEY") or None
-    if not api_key:
-        rep.warn("NEXUS_API_KEY is required (set it in .env; see .env.example)")
+    auth = oauth.default_auth()
+    if auth is None:
+        rep.warn(NOT_SIGNED_IN)
         return 2
 
     # Before any of our own folders are created, or the legacy `c2wj/` rename below
@@ -1187,7 +1185,7 @@ def cmd_create(args: argparse.Namespace, reporter: Reporter | None = None) -> in
             "for layering another collection on top of it"
         )
 
-    ctx = add_layer(paths, args, led=led, api_key=api_key, game_path=game_path, run=run, rep=rep)
+    ctx = add_layer(paths, args, led=led, auth=auth, game_path=game_path, run=run, rep=rep)
     if ctx is None:
         return _finish(run, rep, paths, started)
 

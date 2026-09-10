@@ -15,6 +15,30 @@ uv run c2mo2-gui
 `uv sync` installs both the CLI/engine dependencies and the GUI's (PySide6, keyring)
 plus the dev group (pytest, pytest-qt, pyinstaller, ruff via pre-commit).
 
+Sign in once with `uv run c2mo2 login` (opens your browser to nexusmods.com; same
+token store as the GUI). `c2mo2 logout` signs out, `c2mo2 whoami` prints who you're
+signed in as. For testing, `NEXUS_API_KEY` in `.env` (copy `.env.example`) still works
+as an override and takes precedence over a stored sign-in - Nexus's API Acceptable Use
+Policy allows a personal key for testing, but a shipped build must not rely on one, so
+don't lean on it for anything beyond local runs. The pre-commit secret check
+(`scripts/check_secrets.py`) still refuses to commit a real key or an `.env` file.
+
+### Nexus application registration
+
+Sign-in uses OAuth 2.0 for registered applications
+(https://modding.wiki/en/api/oauth2-guide), not a personal API key. The client id is
+issued by Nexus Mods staff - email community@nexusmods.com with the app name, a short
+description, a logo suitable for a dark background, a link to this repository, and the
+callback URI `http://127.0.0.1:43119/callback`. Until Nexus issues a real id,
+`oauth.CLIENT_ID` is the placeholder `collections2mo2` and Nexus will reject sign-in
+attempts - registration has to land before OAuth sign-in works end to end.
+
+Two env vars help test a differently registered client without touching code:
+`C2MO2_NEXUS_CLIENT_ID` overrides the OAuth client id, and `C2MO2_OAUTH_PORT` overrides
+the loopback callback port (default `43119`). Every request to api.nexusmods.com also
+carries `Application-Name: collections2mo2` and `Application-Version: <version>`
+headers, as the policy requires, alongside the existing User-Agent.
+
 ## Tests
 
 ```

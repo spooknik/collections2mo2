@@ -247,11 +247,12 @@ there before building.
 
 ## I'm not a Nexus Premium member - what happens?
 
-The collection manifest itself only needs a logged-in personal API key (any account).
-**Automatic mod downloads require Nexus Premium** - the Nexus API only issues direct
-download links to Premium accounts, so `create`/`download` will fail at the download
-step without it. Manual-download support (falling back to a browser download when a
-link isn't available) is not implemented yet.
+The collection manifest itself only needs to be signed in (any account, via `c2mo2 login`
+or the GUI's sign-in button). **Automatic mod downloads require Nexus Premium** - the
+Nexus API only issues direct download links to Premium accounts, so `create`/`download`
+will fail at the download step without it. Manual-download support (falling back to a
+browser download when a link isn't available) is not implemented yet. `c2mo2 whoami`
+prints whether the signed-in account is Premium.
 
 ## Can I add my own mods to a converted instance?
 
@@ -267,12 +268,23 @@ recorded), `c2mo2` takes the installer's own defaults. This is listed explicitly
 the run's log/output so you can review and reinstall with `--choices-overrides` if you
 want something different.
 
-## Where is my Nexus API key stored?
+## Where is my Nexus sign-in stored, and how do I sign out?
 
-- **GUI**: Windows Credential Manager, via `keyring`. Never written to disk in plain
-  text, never sent anywhere but Nexus Mods itself.
-- **CLI**: your local `.env` file (`NEXUS_API_KEY=...`), which is gitignored and never
-  printed by any command.
+Signing in (`c2mo2 login`, or the GUI's "Sign in with Nexus Mods" button) opens your
+browser on nexusmods.com; after you press Allow, the app receives an OAuth token pair
+and stores it in Windows Credential Manager, via `keyring`, under the service name
+`collections2mo2`. Nothing is ever written to disk in plain text, and no password or API
+key passes through the app. `c2mo2 logout` (or "Sign out" in the GUI) removes it; you can
+also revoke the app's access from your Nexus account's
+[Authorized Applications](https://users.nexusmods.com/oauth/authorized_applications)
+page. `c2mo2 whoami` prints who you're signed in as.
+
+If you signed in with an older `c2mo2` release that used a personal API key, that key is
+deleted from Credential Manager automatically the first time you sign in or out with this
+version - it's never used again.
+
+For developers: `NEXUS_API_KEY` in `.env` still works as a testing-only override (it
+takes precedence over a stored sign-in) - see `docs/development.md`.
 
 ## What happens if a collection pins a file that's since been deleted from Nexus?
 
@@ -332,5 +344,22 @@ removing it is CLI-only (`c2mo2 remove <slug> --force`).
 
 Yes. The first time any `c2mo2` command or the GUI opens it, the `c2wj-instance.json`
 ledger, the `c2wj/` folder, `c2wj-build.json`, and the generated display-settings mod
-are renamed to their `c2mo2` names automatically, and a stored API key or
-already-downloaded tools under the old per-user folder are still found.
+are renamed to their `c2mo2` names automatically, and a stored sign-in (or, from an
+older release, a personal API key) or already-downloaded tools under the old per-user
+folder are still found.
+
+## Why does the app open my browser to sign in?
+
+That's Nexus Mods' own OAuth sign-in flow, not something `c2mo2` runs itself: the app
+opens `nexusmods.com` in your normal browser, you log in and press Allow there (your
+password never touches `c2mo2`), and Nexus redirects the browser to a small listener
+the app starts on `http://127.0.0.1:43119/callback` for the duration of the sign-in,
+which hands the app a token. This replaced pasting a personal API key into the app,
+which Nexus's [API Acceptable Use Policy](https://help.nexusmods.com/article/114-api-acceptable-use-policy)
+does not allow for public applications.
+
+## The sign-in page says the port is in use
+
+`c2mo2` listens on `http://127.0.0.1:43119` for the few seconds a sign-in takes. If
+something else already holds that port - another program, or a second copy of `c2mo2`
+mid sign-in - the listener can't start. Close whatever else is using it and try again.

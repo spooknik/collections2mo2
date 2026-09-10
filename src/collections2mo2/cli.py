@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
-
-from dotenv import load_dotenv
 
 from . import (
     __version__,
@@ -18,6 +15,8 @@ from . import (
     downloader,
     installer,
     layers,
+    nexus,
+    oauth,
     profile,
     survey,
     tools,
@@ -25,13 +24,11 @@ from . import (
     wabbajack,
 )
 from .manifest import fetch_manifest, load_manifest, non_nexus_sources, summarise
-from .nexus import AuthRequired, CollectionRef, NexusClient, NexusError
+from .nexus import NOT_SIGNED_IN, AuthRequired, CollectionRef, NexusClient, NexusError
 
 
 def _client() -> NexusClient:
-    load_dotenv()
-    key = os.environ.get("NEXUS_API_KEY") or None
-    return NexusClient(api_key=key)
+    return NexusClient(oauth.default_auth())
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
@@ -41,10 +38,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         info, path = fetch_manifest(client, ref, args.revision, Path(args.work))
     except AuthRequired as e:
         print(f"error: {e}", file=sys.stderr)
-        print(
-            "Put a personal API key in .env as NEXUS_API_KEY= (see .env.example).",
-            file=sys.stderr,
-        )
+        print(NOT_SIGNED_IN, file=sys.stderr)
         return 2
     except NexusError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -92,6 +86,66 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+# -- sign-in -----------------------------------------------------------------------------
+
+# `api` pulls in the whole engine (and rewrites the tool cache paths for packaged
+# builds) at import time, so the sign-in commands import it when they run rather than
+# at module import.
+
+
+def _print_signin(result) -> None:  # api.SignInResult
+    membership = "Premium" if result.is_premium else "not Premium"
+    suffix = ""
+    if isinstance(oauth.default_auth(), nexus.ApiKeyAuth):
+        suffix = " [personal API key from NEXUS_API_KEY -- testing only]"
+    print(f"Signed in as {result.name} ({membership}).{suffix}")
+
+
+def cmd_login(args: argparse.Namespace) -> int:
+    from . import api
+
+    print("Opening your browser to sign in to Nexus Mods...")
+    try:
+        result = api.sign_in()
+    except KeyboardInterrupt:
+        print("Cancelled.", file=sys.stderr)
+        return 130
+    except api.OperationCancelled as e:
+        print(f"Cancelled: {e}", file=sys.stderr)
+        return 130
+    except api.ApiError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    _print_signin(result)
+    if not result.is_premium:
+        print(
+            "Note: automatic mod downloads need a Nexus Mods Premium account; "
+            "without one you would have to download every archive by hand."
+        )
+    return 0
+
+
+def cmd_logout(args: argparse.Namespace) -> int:
+    from . import api
+
+    api.sign_out()
+    print("Signed out.")
+    print(f"You can also revoke this app's access at {api.nexus_authorized_apps_url()}")
+    return 0
+
+
+def cmd_whoami(args: argparse.Namespace) -> int:
+    from . import api
+
+    try:
+        result = api.check_signin()
+    except api.ApiError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    _print_signin(result)
+    return 0
+
+
 def _tolerant_output() -> None:
     """Never let a mod name or a curator's changelog kill a run on an encoding error.
 
@@ -132,6 +186,15 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("manifest", help="path to collection.json")
     r.add_argument("--json", action="store_true", help="summary as JSON")
     r.set_defaults(func=cmd_report)
+
+    li = sub.add_parser("login", help="sign in to Nexus Mods in your browser")
+    li.set_defaults(func=cmd_login)
+
+    lo = sub.add_parser("logout", help="forget the stored Nexus Mods sign-in")
+    lo.set_defaults(func=cmd_logout)
+
+    who = sub.add_parser("whoami", help="show which Nexus Mods account is signed in")
+    who.set_defaults(func=cmd_whoami)
 
     downloader.add_parser(sub)
     archive_inspect.add_parser(sub)

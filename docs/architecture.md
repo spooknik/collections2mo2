@@ -37,8 +37,9 @@ gitignored. Never print `.env` contents or the API key.
 
 ## Non-obvious facts (verified against the live API, Sept 2026)
 
-- Collection metadata is readable anonymously via GraphQL, but the manifest archive needs an
-  `apikey` header: GraphQL `collectionRevision.downloadLink` returns a path like
+- Collection metadata is readable anonymously via GraphQL, but the manifest archive needs a
+  sign-in (a Bearer token or, for developers, the `apikey` header): GraphQL
+  `collectionRevision.downloadLink` returns a path like
   `/v2/collections/<id>/revisions/<id>/download_link`; GET on it returns
   `{"download_links": [{"name","short_name","URI"}]}`. The archive is 7z with `collection.json`.
 - Mod file downloads use the v1 REST API and require Nexus Premium. Every manifest mod carries a
@@ -189,6 +190,20 @@ gitignored. Never print `.env` contents or the API key.
   `profile._entry_index_for_mod` falls back to `tag` after md5 and `(modId, fileId)`, or
   its `modRules` would be dropped; `update._match_old_mods` already tries `tag` first, but
   a bundle mod whose tag Vortex re-issued reads as removed + added, i.e. a reinstall.
+
+- Sign-in (`oauth.py`) is OAuth 2.0 PKCE for a public client: no client secret, a
+  loopback callback on `http://127.0.0.1:43119/callback` for the duration of a sign-in,
+  and the token pair stored in `keyring` under service `collections2mo2`, chunked across
+  several entries (`nexus-oauth`, `nexus-oauth.0`, ...) because Windows Credential
+  Manager caps a single secret at 1280 UTF-16 characters. `BearerAuth` attaches the
+  access token only to api.nexusmods.com requests, never to CDN download URLs, and
+  refreshes it under a lock shared process-wide via `oauth.default_auth()` so parallel
+  download workers don't race a refresh. `NEXUS_API_KEY` in `.env` is a developer-only
+  override that takes precedence over a stored sign-in. The JWT's claims are decoded
+  unverified, for display (`whoami`, the GUI's account chip) only - every real request
+  still goes through Nexus and would fail on its own if the token were bad. Every
+  request also carries `Application-Name`/`Application-Version` headers alongside the
+  existing User-Agent, per Nexus's API Acceptable Use Policy.
 
 ## Shared contracts
 

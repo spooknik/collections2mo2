@@ -75,7 +75,7 @@ class CollectionPage(WizardPage):
         self.info_box.setVisible(False)
         self.status_label.setText("Fetching collection metadata...")
         self._fetch_worker = EngineWorker(
-            api.fetch_collection_summary, {"url": url, "api_key": self.state.api_key or None}
+            api.fetch_collection_summary, {"url": url, "auth": api.current_auth()}
         )
         self._fetch_worker.succeeded.connect(self._on_fetched)
         self._fetch_worker.failed.connect(self._on_fetch_failed)

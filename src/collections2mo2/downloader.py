@@ -23,7 +23,6 @@ import argparse
 import configparser
 import hashlib
 import json
-import os
 import shutil
 import sys
 import threading
@@ -37,8 +36,9 @@ from urllib.parse import unquote, urlsplit
 
 import requests
 
+from . import oauth
 from .manifest import install_mode, load_manifest
-from .nexus import USER_AGENT, AuthRequired, NexusClient, NexusError
+from .nexus import NOT_SIGNED_IN, USER_AGENT, AuthRequired, NexusAuth, NexusClient, NexusError
 from .reporter import Reporter, get_reporter
 
 # Nexus domain -> MO2 short game name.
@@ -122,14 +122,14 @@ class RunState:
 class _ThreadClients:
     """One NexusClient per worker thread (requests.Session is not thread-safe)."""
 
-    def __init__(self, api_key: str | None):
-        self._api_key = api_key
+    def __init__(self, auth: NexusAuth | None):
+        self._auth = auth
         self._local = threading.local()
 
     def get(self) -> NexusClient:
         client = getattr(self._local, "client", None)
         if client is None:
-            client = NexusClient(api_key=self._api_key)
+            client = NexusClient(self._auth)
             self._local.client = client
         return client
 
@@ -741,7 +741,7 @@ def run_download(
     jobs: int,
     limit: int | None,
     include_optional: bool,
-    api_key: str | None,
+    auth: NexusAuth | None,
     json_path: Path | None = None,
     reporter: Reporter | None = None,
 ) -> int:
@@ -782,7 +782,7 @@ def run_download(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     state = RunState(manifest=str(manifest_path.resolve()), domain=domain, game_name=game_name)
-    clients = _ThreadClients(api_key)
+    clients = _ThreadClients(auth)
     sessions = _ThreadSessions()
 
     counts: dict[str, int] = {
@@ -898,13 +898,10 @@ def cmd_download(args: argparse.Namespace) -> int:
     else:
         out_dir = manifest_path.resolve().parent.parent / "downloads"
 
-    from dotenv import load_dotenv
-
-    load_dotenv()
-    api_key = os.environ.get("NEXUS_API_KEY") or None
-    if not api_key:
+    auth = oauth.default_auth()
+    if auth is None:
         print(
-            "error: NEXUS_API_KEY is required (set it in .env). See .env.example.",
+            f"error: {NOT_SIGNED_IN}",
             file=sys.stderr,
         )
         return 2
@@ -916,7 +913,7 @@ def cmd_download(args: argparse.Namespace) -> int:
             jobs=args.jobs,
             limit=args.limit,
             include_optional=args.include_optional,
-            api_key=api_key,
+            auth=auth,
         )
     except AuthRequired as e:
         print(f"error: {e}", file=sys.stderr)

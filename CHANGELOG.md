@@ -4,6 +4,38 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Changed
+
+- Signing in to Nexus Mods is now OAuth 2.0 (browser sign-in) instead of a personal API
+  key, in line with Nexus's [API Acceptable Use Policy](https://help.nexusmods.com/article/114-api-acceptable-use-policy),
+  which does not allow public applications to use personal keys. The GUI's Sign-in page
+  has a "Sign in with Nexus Mods" button: it opens your browser, you press Allow, and
+  the app receives a token through a local callback - no password or API key is ever
+  typed into the app. The token is stored in Windows Credential Manager the same as
+  before.
+
+### Added
+
+- `c2mo2 login`, `c2mo2 logout`, and `c2mo2 whoami` (prints who you're signed in as,
+  and whether the account is Premium). Every command that talks to Nexus uses the
+  stored sign-in automatically.
+- Every request to Nexus now carries `Application-Name`/`Application-Version` headers
+  alongside the existing User-Agent, as the policy requires.
+
+### Removed
+
+- Pasting a personal API key into the GUI's Sign-in page.
+
+### Migration
+
+- An API key stored by an older release is deleted from Credential Manager the first
+  time you sign in or out with this version; it's never used again. Sign in once with
+  `c2mo2 login` or the GUI's "Sign in with Nexus Mods" button.
+- For development/testing only, `NEXUS_API_KEY` in `.env` still works and takes
+  precedence over a stored sign-in; see `docs/development.md`.
+
 ## 0.1.4 - 2026-09-08
 
 ### Added

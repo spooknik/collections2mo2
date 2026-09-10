@@ -182,7 +182,7 @@ def test_run_download_sums_manifest_file_sizes_for_bytes_total(tmp_path, monkeyp
         jobs=1,
         limit=None,
         include_optional=True,
-        api_key="fake",
+        auth=None,
         reporter=rep,
     )
     assert rep.calls, "expected at least one progress() call"
@@ -361,7 +361,7 @@ def test_run_download_packs_bundle_mods_without_a_network_client(tmp_path: Path)
         jobs=1,
         limit=None,
         include_optional=True,
-        api_key=None,
+        auth=None,
         json_path=json_path,
         reporter=_RecordingReporter(),
     )

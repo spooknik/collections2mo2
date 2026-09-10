@@ -36,11 +36,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
-from . import build, create, installer, ledger, profile
+from . import build, create, installer, ledger, oauth, profile
 from .manifest import load_manifest
-from .nexus import CollectionRef
+from .nexus import NOT_SIGNED_IN, CollectionRef
 from .reporter import Reporter, get_reporter
 
 
@@ -75,10 +73,9 @@ def cmd_add(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
         )
         return 2
 
-    load_dotenv()
-    api_key = os.environ.get("NEXUS_API_KEY") or None
-    if not api_key:
-        rep.warn("NEXUS_API_KEY is required (set it in .env; see .env.example)")
+    auth = oauth.default_auth()
+    if auth is None:
+        rep.warn(NOT_SIGNED_IN)
         return 2
 
     led = ledger.load(paths.out)
@@ -104,9 +101,7 @@ def cmd_add(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
     paths.stage.mkdir(parents=True, exist_ok=True)
     before = set(led.data["mods"])
 
-    ctx = create.add_layer(
-        paths, args, led=led, api_key=api_key, game_path=game_path, run=run, rep=rep
-    )
+    ctx = create.add_layer(paths, args, led=led, auth=auth, game_path=game_path, run=run, rep=rep)
     if ctx is None:
         led.save()
         return create._finish(run, rep, paths, started, "add")

@@ -63,10 +63,10 @@ listed at the end and remembered in the ledger for `c2mo2 status`. Re-running
 ## Requirements
 
 - Windows 10 or 11.
-- A Nexus Mods account with a personal API key (Account Settings -> API Access).
-  **Nexus Premium is required for automatic downloads** - the API only issues direct
-  download links to Premium accounts. A free account can still fetch a collection's
-  manifest and browse it.
+- A Nexus Mods account, signed in through the app (`c2mo2 login`, or the GUI's "Sign in
+  with Nexus Mods" button) - no API key needed. **Nexus Premium is required for
+  automatic downloads** - the API only issues direct download links to Premium
+  accounts. A free account can still fetch a collection's manifest and browse it.
 - A Steam copy of the game the collection targets. Tested end-to-end on Skyrim
   Special Edition; other Bethesda games (Skyrim, SkyrimVR, Fallout 4, Fallout New
   Vegas, Fallout 3, Oblivion) are mapped but not verified.
@@ -92,10 +92,11 @@ uv sync
 uv run c2mo2-gui
 ```
 
-The wizard: paste your Nexus API key (stored in Windows Credential Manager, never
-sent anywhere but Nexus) -> paste a collection URL -> pick an install folder and your
-game folder (Steam installs are auto-detected) -> pick optional tools -> pick display
-settings -> review -> Start. The **Manage** tab (from the home screen) reopens an
+The wizard: press "Sign in with Nexus Mods" (opens your browser to nexusmods.com, you
+press Allow, and the app receives a token - no password or API key ever typed into the
+app; stored in Windows Credential Manager) -> paste a collection URL -> pick an install
+folder and your game folder (Steam installs are auto-detected) -> pick optional tools ->
+pick display settings -> review -> Start. The **Manage** tab (from the home screen) reopens an
 instance you already built: add or remove a collection layer, update a layer, install
 more tools, or export to Wabbajack. Removing the *base* collection is CLI-only
 (`c2mo2 remove <slug> --force`); the Manage tab offers "Remove instance...", which
@@ -105,7 +106,7 @@ deletes the whole instance folder, instead.
 
 ```
 uv sync
-cp .env.example .env      # paste your personal Nexus API key into .env
+uv run c2mo2 login        # opens your browser to sign in with Nexus Mods
 
 # Build a complete instance in one step
 uv run c2mo2 create https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3 \
@@ -144,8 +145,9 @@ Built and confirmed working end to end on:
 - **Publishing a compiled `.wabbajack` of someone else's collection requires that
   curator's permission.** Community conversions of Gate to Sovngarde, for example,
   obtained it first - do the same.
-- `c2mo2` identifies itself to Nexus Mods with its own User-Agent, honours Nexus's
-  rate limits, and only ever downloads with your own Premium key - it does not proxy,
+- `c2mo2` identifies itself to Nexus Mods with its own User-Agent plus
+  `Application-Name`/`Application-Version` headers, honours Nexus's rate limits, and
+  only ever downloads under your own signed-in, Premium account - it does not proxy,
   cache, or redistribute anyone's files.
 - Whatever you build is yours to use. The collection's content - the mods themselves -
   still belongs to their authors and to the curator who assembled the list; this tool
@@ -173,13 +175,13 @@ Full answers in [`docs/faq.md`](docs/faq.md). Short version:
 - **"A required patch is missing" from the Runtime Swapper.** Your `Stock Game` copy
   isn't the exact game version the collection expects.
 - **I'm not Premium - now what?** Automatic downloads won't work yet; manual-download
-  support isn't implemented.
+  support isn't implemented. Signing in itself doesn't need Premium.
 - **Can I add my own mods?** Yes - they keep their position across `update`/`add`/
   `remove`.
 - **A FOMOD mod took the installer's defaults.** "Fresh install" mods (no recorded
   choices) do that by design, and it's called out in the run's log.
-- **Where's my API key stored?** Windows Credential Manager for the GUI, `.env` for
-  the CLI. Never printed, never committed.
+- **Where's my Nexus sign-in stored?** Windows Credential Manager, for both the GUI and
+  the CLI (`c2mo2 login`). `c2mo2 logout` removes it. Never printed, never committed.
 
 ## Status and limitations
 

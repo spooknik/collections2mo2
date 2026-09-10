@@ -10,11 +10,13 @@ from __future__ import annotations
 import argparse
 import os
 import stat
+import time
 from pathlib import Path
 
 import pytest
 
-from collections2mo2 import api
+from collections2mo2 import api, oauth
+from collections2mo2.nexus import ApiKeyAuth
 from collections2mo2.reporter import NullReporter
 
 # -- create_instance: argument mapping ------------------------------------------------
@@ -525,7 +527,7 @@ def test_export_to_wabbajack_maps_arguments(monkeypatch):
     assert ns.dry_run is False
 
 
-# -- sign-in: keyring + validate_api_key, both with fakes --------------------------------
+# -- sign-in: OAuth credentials + check_signin, all with fakes ---------------------------
 
 
 class _FakeKeyring:
@@ -540,25 +542,6 @@ class _FakeKeyring:
 
     def delete_password(self, service, username):
         del self.store[(service, username)]
-
-
-def test_api_key_keyring_roundtrip(monkeypatch):
-    fake = _FakeKeyring()
-    monkeypatch.setattr(api.keyring, "get_password", fake.get_password)
-    monkeypatch.setattr(api.keyring, "set_password", fake.set_password)
-    monkeypatch.setattr(api.keyring, "delete_password", fake.delete_password)
-
-    assert api.get_saved_api_key() is None
-    api.save_api_key("abc123")
-    assert api.get_saved_api_key() == "abc123"
-    api.clear_api_key()
-    assert api.get_saved_api_key() is None
-
-
-def test_activate_api_key_sets_env(monkeypatch):
-    monkeypatch.delenv("NEXUS_API_KEY", raising=False)
-    api.activate_api_key("my-key")
-    assert os.environ["NEXUS_API_KEY"] == "my-key"
 
 
 class _FakeResponse:
@@ -587,28 +570,108 @@ class _FakeClient:
         self.session = session
 
 
-def test_validate_api_key_success(monkeypatch):
-    response = _FakeResponse(200, {"name": "Spooknik", "is_premium": True})
-    monkeypatch.setattr(
-        api, "NexusClient", lambda api_key=None: _FakeClient(_FakeSession(response))
+def _fake_client(monkeypatch, response):
+    session = _FakeSession(response)
+    monkeypatch.setattr(api, "NexusClient", lambda auth=None, **kw: _FakeClient(session))
+
+
+def _bearer(expires_in: float = 3600.0) -> oauth.BearerAuth:
+    """A `BearerAuth` whose token is comfortably fresh, so nothing tries to refresh."""
+    tokens = oauth.Tokens(
+        access_token="access", refresh_token="refresh", expires_at=time.time() + expires_in
     )
-    result = api.validate_api_key("some-key")
+    return oauth.BearerAuth(tokens)
+
+
+def test_check_signin_reports_the_account(monkeypatch):
+    monkeypatch.setattr(api.oauth, "default_auth", lambda: ApiKeyAuth("dev-key"))
+    _fake_client(monkeypatch, _FakeResponse(200, {"name": "Spooknik", "is_premium": True}))
+
+    result = api.check_signin()
+
     assert result.name == "Spooknik"
     assert result.is_premium is True
 
 
-def test_validate_api_key_rejected(monkeypatch):
-    response = _FakeResponse(401, {})
-    monkeypatch.setattr(
-        api, "NexusClient", lambda api_key=None: _FakeClient(_FakeSession(response))
-    )
-    with pytest.raises(api.ApiError):
-        api.validate_api_key("bad-key")
+def test_check_signin_without_a_sign_in_is_an_api_error(monkeypatch):
+    monkeypatch.setattr(api.oauth, "default_auth", lambda: None)
+    with pytest.raises(api.ApiError, match="Not signed in"):
+        api.check_signin()
 
 
-def test_validate_api_key_requires_nonempty():
-    with pytest.raises(api.ApiError):
-        api.validate_api_key("   ")
+def test_check_signin_clears_a_rejected_oauth_sign_in(monkeypatch):
+    signed_out: list[bool] = []
+    monkeypatch.setattr(api.oauth, "default_auth", lambda: _bearer())
+    monkeypatch.setattr(api.oauth, "sign_out", lambda *a, **kw: signed_out.append(True))
+    fake = _FakeKeyring()
+    monkeypatch.setattr(api.keyring, "get_password", fake.get_password)
+    monkeypatch.setattr(api.keyring, "delete_password", fake.delete_password)
+    _fake_client(monkeypatch, _FakeResponse(401, {}))
+
+    with pytest.raises(api.ApiError, match="no longer accepts"):
+        api.check_signin()
+    assert signed_out == [True]
+
+
+def test_check_signin_keeps_a_rejected_env_key(monkeypatch):
+    """A 401 on `NEXUS_API_KEY` is the developer's problem, not a stored sign-in to clear."""
+    signed_out: list[bool] = []
+    monkeypatch.setattr(api.oauth, "default_auth", lambda: ApiKeyAuth("bad-key"))
+    monkeypatch.setattr(api.oauth, "sign_out", lambda *a, **kw: signed_out.append(True))
+    _fake_client(monkeypatch, _FakeResponse(401, {}))
+
+    with pytest.raises(api.ApiError, match="NEXUS_API_KEY"):
+        api.check_signin()
+    assert signed_out == []
+
+
+def test_forget_legacy_api_key_deletes_both_service_names(monkeypatch):
+    fake = _FakeKeyring()
+    fake.store[(api.KEYRING_SERVICE, api.LEGACY_KEYRING_USERNAME)] = "new-name"
+    fake.store[(api.LEGACY_KEYRING_SERVICE, api.LEGACY_KEYRING_USERNAME)] = "old-name"
+    monkeypatch.setattr(api.keyring, "get_password", fake.get_password)
+    monkeypatch.setattr(api.keyring, "delete_password", fake.delete_password)
+
+    api.forget_legacy_api_key()
+
+    assert fake.store == {}
+
+
+def test_forget_legacy_api_key_is_quiet_when_there_is_nothing_to_delete(monkeypatch):
+    fake = _FakeKeyring()
+    monkeypatch.setattr(api.keyring, "get_password", fake.get_password)
+    monkeypatch.setattr(api.keyring, "delete_password", fake.delete_password)
+
+    api.forget_legacy_api_key()  # must not raise
+
+
+def test_sign_in_maps_a_cancelled_login(monkeypatch):
+    def cancelled(**kwargs):
+        raise oauth.LoginCancelled("sign-in cancelled")
+
+    monkeypatch.setattr(api.oauth, "login", cancelled)
+    with pytest.raises(api.OperationCancelled):
+        api.sign_in()
+
+
+def test_sign_in_maps_an_oauth_error_to_an_api_error(monkeypatch):
+    def failed(**kwargs):
+        raise oauth.OAuthError("Nexus Mods token request failed (HTTP 500)")
+
+    monkeypatch.setattr(api.oauth, "login", failed)
+    with pytest.raises(api.ApiError, match="HTTP 500"):
+        api.sign_in()
+
+
+def test_has_saved_signin_follows_default_auth(monkeypatch):
+    monkeypatch.setattr(api.oauth, "default_auth", lambda: None)
+    assert api.has_saved_signin() is False
+    monkeypatch.setattr(api.oauth, "default_auth", lambda: ApiKeyAuth("dev-key"))
+    assert api.has_saved_signin() is True
+
+
+def test_nexus_authorized_apps_url_is_the_oauth_page():
+    assert api.nexus_authorized_apps_url() == oauth.AUTHORIZED_APPS_URL
 
 
 # -- pre-rename data dir / env var -------------------------------------------------------
@@ -656,24 +719,6 @@ def test_default_data_dir_reuses_the_legacy_folder_when_it_is_the_only_one(monke
 def test_default_data_dir_is_the_new_name_on_a_clean_machine(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     assert api._default_data_dir() == tmp_path / "collections2mo2"
-
-
-def test_saved_api_key_falls_back_to_the_legacy_keyring_service(monkeypatch):
-    fake = _FakeKeyring()
-    fake.store[(api.LEGACY_KEYRING_SERVICE, api.KEYRING_USERNAME)] = "old-key"
-    monkeypatch.setattr(api.keyring, "get_password", fake.get_password)
-    monkeypatch.setattr(api.keyring, "set_password", fake.set_password)
-    monkeypatch.setattr(api.keyring, "delete_password", fake.delete_password)
-
-    assert api.get_saved_api_key() == "old-key"
-
-    # A key saved under the current name wins, and clearing removes both.
-    api.save_api_key("new-key")
-    assert fake.store[(api.KEYRING_SERVICE, api.KEYRING_USERNAME)] == "new-key"
-    assert api.get_saved_api_key() == "new-key"
-    api.clear_api_key()
-    assert api.get_saved_api_key() is None
-    assert fake.store == {}
 
 
 # -- delete_instance ---------------------------------------------------------------------

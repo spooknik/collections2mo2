@@ -4,17 +4,28 @@ from __future__ import annotations
 
 import re
 import time
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import requests
+import requests.auth
 
 from . import __version__
 
 API_BASE = "https://api.nexusmods.com"
+API_HOST = "api.nexusmods.com"
 GRAPHQL_URL = f"{API_BASE}/v2/graphql"
-USER_AGENT = f"collections2mo2/{__version__} (+https://github.com/spooknik/collections2mo2)"
+APPLICATION_NAME = "collections2mo2"
+USER_AGENT = f"{APPLICATION_NAME}/{__version__} (+https://github.com/spooknik/collections2mo2)"
+# The Acceptable Use Policy asks every request for a stable application name and the
+# release it came from, on top of the User-Agent.
+IDENTIFYING_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Application-Name": APPLICATION_NAME,
+    "Application-Version": __version__,
+}
 
 COLLECTION_URL_RE = re.compile(
     r"^https?://(?:www\.)?nexusmods\.com/games/(?P<game>[a-z0-9_-]+)/collections/(?P<slug>[a-z0-9]+)",
@@ -28,6 +39,45 @@ class NexusError(RuntimeError):
 
 class AuthRequired(NexusError):
     pass
+
+
+SIGN_IN_HINT = "Sign in first (`c2mo2 login`, or the GUI's Sign in page)."
+NOT_SIGNED_IN = (
+    "Not signed in to Nexus Mods. Run `c2mo2 login` "
+    "(developers: NEXUS_API_KEY in .env is allowed for testing only)."
+)
+
+
+def is_api_request(url: str | None) -> bool:
+    """True for requests to the API host itself -- the only place credentials go.
+
+    Download URLs the API hands out point at CDN hosts and are signed; sending the
+    user's key or token there would leak it for nothing.
+    """
+    if not url:
+        return False
+    try:
+        return (urllib.parse.urlsplit(url).hostname or "").lower() == API_HOST
+    except ValueError:
+        return False
+
+
+# Anything that can sit on `requests.Session.auth`: `ApiKeyAuth` (a developer's personal
+# key from `NEXUS_API_KEY`, allowed by the policy for testing only) or
+# `oauth.BearerAuth` (the OAuth sign-in every real user goes through).
+NexusAuth = requests.auth.AuthBase
+
+
+class ApiKeyAuth(requests.auth.AuthBase):
+    """`apikey: <personal key>` on API requests. Testing use only, per the policy."""
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+
+    def __call__(self, r: requests.PreparedRequest) -> requests.PreparedRequest:
+        if is_api_request(r.url):
+            r.headers["apikey"] = self.api_key
+        return r
 
 
 @dataclass(frozen=True)
@@ -56,14 +106,33 @@ class RevisionInfo:
 
 
 class NexusClient:
-    def __init__(self, api_key: str | None = None, timeout: float = 60.0):
-        self.api_key = api_key
+    """One `requests.Session` against the Nexus API, authenticated by `auth`.
+
+    `auth` is any `NexusAuth`; `api_key` is a shorthand for `ApiKeyAuth(api_key)` kept
+    for tests and the `.env` developer override. With neither, the client can still read
+    the anonymous GraphQL surface (collection metadata), and every authenticated call
+    raises `AuthRequired` up front instead of a 401 from Nexus.
+    """
+
+    def __init__(
+        self,
+        auth: NexusAuth | None = None,
+        *,
+        api_key: str | None = None,
+        timeout: float = 60.0,
+    ):
+        if api_key and auth is None:
+            auth = ApiKeyAuth(api_key)
+        self.auth = auth
         self.timeout = timeout
         self.session = requests.Session()
-        self.session.headers["User-Agent"] = USER_AGENT
+        self.session.headers.update(IDENTIFYING_HEADERS)
         self.session.headers["Accept"] = "application/json"
-        if api_key:
-            self.session.headers["apikey"] = api_key
+        self.session.auth = auth
+
+    @property
+    def authenticated(self) -> bool:
+        return self.auth is not None
 
     # -- GraphQL ---------------------------------------------------------------
 
@@ -183,11 +252,13 @@ class NexusClient:
 
     def collection_download_url(self, info: RevisionInfo) -> str:
         """Exchange the revision's download_link path for a real (time-limited) URL."""
-        if not self.api_key:
-            raise AuthRequired("NEXUS_API_KEY is required to download a collection manifest")
+        if not self.authenticated:
+            raise AuthRequired(
+                f"downloading a collection manifest needs a Nexus sign-in. {SIGN_IN_HINT}"
+            )
         resp = self.session.get(API_BASE + info.download_link_path, timeout=self.timeout)
         if resp.status_code == 401:
-            raise AuthRequired("Nexus rejected the API key (401)")
+            raise AuthRequired("Nexus rejected the sign-in (401)")
         resp.raise_for_status()
         body = resp.json()
         # Observed shape (2026-09): {"download_links": [{"name", "short_name", "URI"}, ...]}
@@ -213,8 +284,8 @@ class NexusClient:
         Retries on HTTP 429 (honouring Retry-After, else 30s) and on 5xx / connection
         errors with exponential backoff (2s, 4s, 8s, ...), up to `max_retries` attempts.
         """
-        if not self.api_key:
-            raise AuthRequired("NEXUS_API_KEY is required for the Nexus v1 API")
+        if not self.authenticated:
+            raise AuthRequired(f"the Nexus v1 API needs a sign-in. {SIGN_IN_HINT}")
         url = API_BASE + path
         attempt = 0
         while True:
@@ -227,7 +298,7 @@ class NexusClient:
                 time.sleep(2**attempt)
                 continue
             if resp.status_code == 401:
-                raise AuthRequired("Nexus rejected the API key (401)")
+                raise AuthRequired("Nexus rejected the sign-in (401)")
             if resp.status_code == 403:
                 raise AuthRequired(
                     "Nexus rejected the request (403): a Premium account is required "
