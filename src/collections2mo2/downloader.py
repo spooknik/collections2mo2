@@ -48,6 +48,7 @@ MO2_GAME_NAMES: dict[str, str] = {
     "skyrimvr": "SkyrimVR",
     "fallout4": "Fallout4",
     "fallout4vr": "Fallout4VR",
+    "newvegas": "FalloutNV",  # Nexus's domain for New Vegas; `falloutnv` is MO2's short name
     "falloutnv": "FalloutNV",
     "fallout3": "Fallout3",
     "oblivion": "Oblivion",
@@ -73,8 +74,9 @@ def mo2_game_name(domain: str) -> str:
     name = MO2_GAME_NAMES.get(domain)
     if name is None:
         raise NexusError(
-            f"unknown Nexus domain {domain!r}: add it to MO2_GAME_NAMES in downloader.py "
-            f"(known domains: {', '.join(sorted(MO2_GAME_NAMES))})"
+            f"unknown Nexus domain {domain!r}; this game is not supported yet "
+            f"(supported domains: {', '.join(sorted(MO2_GAME_NAMES))}). "
+            "Please open an issue at https://github.com/spooknik/collections2mo2/issues"
         )
     return name
 
