@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.1.5 - 2026-09-19
+
+### Fixed
+
+- Fallout New Vegas collections failed at `fetch` with "unknown Nexus domain 'newvegas'":
+  the game table only knew MO2's short name `falloutnv`, not the Nexus domain. The error
+  for a genuinely unsupported game now points at the issue tracker instead of a source
+  file that does not exist in the packaged build.
+
 ## 0.1.4 - 2026-09-08
 
 ### Added
