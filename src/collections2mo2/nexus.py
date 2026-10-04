@@ -42,10 +42,7 @@ class AuthRequired(NexusError):
 
 
 SIGN_IN_HINT = "Sign in first (`c2mo2 login`, or the GUI's Sign in page)."
-NOT_SIGNED_IN = (
-    "Not signed in to Nexus Mods. Run `c2mo2 login` "
-    "(developers: NEXUS_API_KEY in .env is allowed for testing only)."
-)
+NOT_SIGNED_IN = "Not signed in to Nexus Mods. Run `c2mo2 login`."
 
 
 def is_api_request(url: str | None) -> bool:
@@ -62,22 +59,9 @@ def is_api_request(url: str | None) -> bool:
         return False
 
 
-# Anything that can sit on `requests.Session.auth`: `ApiKeyAuth` (a developer's personal
-# key from `NEXUS_API_KEY`, allowed by the policy for testing only) or
-# `oauth.BearerAuth` (the OAuth sign-in every real user goes through).
+# Anything that can sit on `requests.Session.auth`; in practice `oauth.BearerAuth`, the
+# OAuth sign-in -- the only way the app authenticates.
 NexusAuth = requests.auth.AuthBase
-
-
-class ApiKeyAuth(requests.auth.AuthBase):
-    """`apikey: <personal key>` on API requests. Testing use only, per the policy."""
-
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-
-    def __call__(self, r: requests.PreparedRequest) -> requests.PreparedRequest:
-        if is_api_request(r.url):
-            r.headers["apikey"] = self.api_key
-        return r
 
 
 @dataclass(frozen=True)
@@ -108,8 +92,7 @@ class RevisionInfo:
 class NexusClient:
     """One `requests.Session` against the Nexus API, authenticated by `auth`.
 
-    `auth` is any `NexusAuth`; `api_key` is a shorthand for `ApiKeyAuth(api_key)` kept
-    for tests and the `.env` developer override. With neither, the client can still read
+    `auth` is any `NexusAuth` (the OAuth sign-in). Without one, the client can still read
     the anonymous GraphQL surface (collection metadata), and every authenticated call
     raises `AuthRequired` up front instead of a 401 from Nexus.
     """
@@ -118,11 +101,8 @@ class NexusClient:
         self,
         auth: NexusAuth | None = None,
         *,
-        api_key: str | None = None,
         timeout: float = 60.0,
     ):
-        if api_key and auth is None:
-            auth = ApiKeyAuth(api_key)
         self.auth = auth
         self.timeout = timeout
         self.session = requests.Session()

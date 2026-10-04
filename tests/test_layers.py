@@ -1402,7 +1402,6 @@ def _add_args(inst: Path, **kwargs) -> argparse.Namespace:
         jobs=1,
         game_path=None,
         choices_overrides=None,
-        skip_survey=True,
         allow_missing=False,
         skip_errors=False,
         reuse_downloads=None,
@@ -1435,12 +1434,9 @@ def _stub_add_layer(monkeypatch, inst: Path, skipped: list) -> None:
         "render_profile",
         lambda *a, **kw: {"layers": [{"slug": "addon", "separators": []}], "user_mods": []},
     )
-    monkeypatch.setattr(layers.oauth, "load_dotenv", lambda *a, **kw: None)
-    monkeypatch.setattr(layers.oauth, "_cached_auth", None)
-    monkeypatch.setenv("NEXUS_API_KEY", "test-key")
 
 
-def test_add_lists_the_mods_the_layer_went_in_without(monkeypatch, tmp_path: Path):
+def test_add_lists_the_mods_the_layer_went_in_without(monkeypatch, tmp_path: Path, signed_in):
     inst = _base_instance(tmp_path)
     _stub_add_layer(
         monkeypatch,
@@ -1460,7 +1456,7 @@ def test_add_lists_the_mods_the_layer_went_in_without(monkeypatch, tmp_path: Pat
     assert "    Bad Mod  [install] install failed: nothing extracted" in rep.logs
 
 
-def test_add_says_nothing_about_skips_for_a_clean_layer(monkeypatch, tmp_path: Path):
+def test_add_says_nothing_about_skips_for_a_clean_layer(monkeypatch, tmp_path: Path, signed_in):
     inst = _base_instance(tmp_path)
     _stub_add_layer(monkeypatch, inst, [])
     rep = _CollectingReporter()

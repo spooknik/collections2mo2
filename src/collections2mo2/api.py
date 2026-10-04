@@ -9,8 +9,8 @@ Two other things live here besides the wrapper functions:
 
 - **Sign-in helpers** (`sign_in`, `check_signin`, `sign_out`, `current_auth`) over
   `oauth.py`: the browser-based OAuth sign-in Nexus requires of a public app. The engine
-  itself picks the sign-in up through `oauth.default_auth()` (the credential store, or a
-  developer's `NEXUS_API_KEY`), so the GUI only has to make sure one exists.
+  itself picks the sign-in up through `oauth.default_auth()` (the credential store), so
+  the GUI only has to make sure one exists.
 - **GUI-only lookups** (Steam game detection, default instance path, disk usage, path
   warnings) that have no engine equivalent because the CLI always takes `--game-path`
   and `--out` as explicit arguments.
@@ -42,10 +42,9 @@ from typing import Any
 import keyring
 import keyring.errors
 
-from . import build, create, game_version, layers, ledger, oauth, profile, survey, tools
+from . import build, create, game_version, layers, ledger, oauth, profile, tools
 from . import sevenzip as sevenzip_mod
 from . import tools as tools_mod
-from .manifest import fetch_manifest, load_manifest
 from .nexus import API_BASE, AuthRequired, CollectionRef, NexusAuth, NexusClient, NexusError
 from .reporter import NullReporter, Reporter, get_reporter, stdout_to_reporter
 
@@ -58,7 +57,6 @@ __all__ = [
     "OperationCancelled",
     "RevisionChoice",
     "SignInResult",
-    "SurveySummary",
     "ToolEntry",
     "add_collection_layer",
     "check_signin",
@@ -90,7 +88,6 @@ __all__ = [
     "open_folder",
     "path_warnings",
     "remove_collection_layer",
-    "run_fomod_survey",
     "short_game_version",
     "sign_in",
     "sign_out",
@@ -152,10 +149,6 @@ def _apply_data_dir_override() -> Path | None:
 
 DATA_DIR_OVERRIDE = _apply_data_dir_override()
 
-# Where the GUI stashes a fetched collection.json before an instance folder is chosen
-# (the "Check FOMODs" pre-flight on the Collection page runs before Location/game).
-GUI_CACHE_DIR = (DATA_DIR_OVERRIDE or _default_data_dir()) / "gui-cache"
-
 
 # -- sign-in ----------------------------------------------------------------------------
 
@@ -189,8 +182,8 @@ class SignInResult:
 
 
 def has_saved_signin() -> bool:
-    """Whether a sign-in exists to try (an OAuth token pair in the credential store, or
-    a developer's `NEXUS_API_KEY`). It may still turn out to be revoked: `check_signin`."""
+    """Whether a sign-in exists to try (an OAuth token pair in the credential store).
+    It may still turn out to be revoked: `check_signin`."""
     return oauth.default_auth() is not None
 
 
@@ -241,10 +234,8 @@ def check_signin() -> SignInResult:
     except Exception as exc:
         raise ApiError(f"Could not reach Nexus Mods: {exc}") from exc
     if resp.status_code == 401:
-        if isinstance(auth, oauth.BearerAuth):
-            sign_out()
-            raise ApiError("Nexus Mods no longer accepts this sign-in; sign in again.")
-        raise ApiError("Nexus rejected the API key in NEXUS_API_KEY.")
+        sign_out()
+        raise ApiError("Nexus Mods no longer accepts this sign-in; sign in again.")
     try:
         resp.raise_for_status()
     except Exception as exc:
@@ -366,99 +357,6 @@ def fetch_collection_summary(
 
 def list_revisions(summary: CollectionSummary) -> list[RevisionChoice]:
     return [r for r in summary.revisions if r.status == "published"] or summary.revisions
-
-
-# -- survey (optional pre-flight) ---------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class SurveySummary:
-    status: str  # "ok" | "rate_limited" | "error"
-    detail: str
-    targets: int
-    fetched: int
-    fresh_fomod_count: int
-    fresh_fomod_names: list[str]
-
-
-def run_fomod_survey(
-    url: str,
-    *,
-    revision: int | None,
-    auth: NexusAuth | None = None,
-    jobs: int = 4,
-    reporter: Reporter | None = None,
-) -> SurveySummary:
-    """Fetch the manifest (if not already cached) and run `survey.run_survey` on it.
-
-    Non-blocking in intent only insofar as the caller runs this off the UI thread; it
-    still makes network calls and can take a while on a large collection, which is why
-    it is rate-limit-aware (mirrors `c2mo2 survey`'s exit code 3) and safe to re-run --
-    results are cached in `GUI_CACHE_DIR` keyed by slug/revision.
-    """
-    rep = get_reporter(reporter)
-    try:
-        ref = CollectionRef.parse(url)
-    except NexusError as exc:
-        raise ApiError(str(exc)) from exc
-    if auth is None:
-        auth = oauth.default_auth()
-    client = NexusClient(auth)
-    try:
-        info, manifest_path = fetch_manifest(client, ref, revision, GUI_CACHE_DIR / "collections")
-    except (AuthRequired, NexusError, OSError, ValueError) as exc:
-        raise ApiError(str(exc)) from exc
-
-    out_path = GUI_CACHE_DIR / "survey" / ref.slug / f"{info.revision_number}.survey.json"
-    try:
-        rc = survey.run_survey(
-            manifest_path=manifest_path,
-            out_path=out_path,
-            jobs=jobs,
-            survey_all=False,
-            min_remaining=100,
-            limit=None,
-            auth=auth,
-            reporter=rep,
-        )
-    except AuthRequired as exc:
-        raise ApiError(str(exc)) from exc
-    except NexusError as exc:
-        return SurveySummary("error", str(exc), 0, 0, 0, [])
-
-    state = survey.SurveyState.load(out_path)
-    entries = list(state.entries.values()) if state else []
-    fresh_fomod = [e for e in entries if e.install_mode == "fresh" and e.has_fomod]
-    manifest = load_manifest(manifest_path)
-    targets = survey._select_targets(manifest.get("mods") or [], False)
-    fetched = sum(1 for e in entries if e.preview_fetched)
-
-    if rc == 0:
-        return SurveySummary(
-            "ok",
-            "survey complete",
-            len(targets),
-            fetched,
-            len(fresh_fomod),
-            [e.name for e in fresh_fomod],
-        )
-    if rc == 3:
-        return SurveySummary(
-            "rate_limited",
-            "Nexus's hourly API budget ran out; re-run later to finish the survey.",
-            len(targets),
-            fetched,
-            len(fresh_fomod),
-            [e.name for e in fresh_fomod],
-        )
-    return SurveySummary(
-        "error",
-        "the survey did not complete",
-        len(targets),
-        fetched,
-        len(fresh_fomod),
-        [e.name for e in fresh_fomod],
-    )
 
 
 # -- install location / game detection -----------------------------------------------------
@@ -721,7 +619,6 @@ def create_instance(
     vsync: str = "keep",
     window: str = "keep",
     choices_overrides: str | None = None,
-    skip_survey: bool = True,
     allow_missing: bool = False,
     skip_errors: bool = False,
     mo2_version: str = build.DEFAULT_MO2_VERSION,
@@ -754,7 +651,6 @@ def create_instance(
         vsync=vsync,
         window=window,
         choices_overrides=choices_overrides,
-        skip_survey=skip_survey,
         allow_missing=allow_missing,
         skip_errors=skip_errors,
         mo2_version=mo2_version,
@@ -887,7 +783,6 @@ def add_collection_layer(
     game_path: str | Path | None = None,
     jobs: int = 4,
     choices_overrides: str | None = None,
-    skip_survey: bool = True,
     allow_missing: bool = False,
     skip_errors: bool = False,
     reuse_downloads: str | None = None,
@@ -905,7 +800,6 @@ def add_collection_layer(
         jobs=jobs,
         game_path=str(game_path) if game_path else None,
         choices_overrides=choices_overrides,
-        skip_survey=skip_survey,
         allow_missing=allow_missing,
         skip_errors=skip_errors,
         reuse_downloads=reuse_downloads,

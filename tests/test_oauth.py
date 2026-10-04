@@ -19,7 +19,6 @@ import pytest
 import requests
 
 from collections2mo2 import oauth
-from collections2mo2.nexus import ApiKeyAuth
 
 # -- PKCE --------------------------------------------------------------------------------
 
@@ -426,14 +425,6 @@ def test_bearer_auth_only_signs_api_requests():
     assert "Authorization" not in cdn_req.headers
 
 
-def test_api_key_auth_only_signs_api_requests():
-    auth = ApiKeyAuth("dev-key")
-    assert (
-        auth(_prepared("https://api.nexusmods.com/v1/games/x.json")).headers["apikey"] == "dev-key"
-    )
-    assert "apikey" not in auth(_prepared("https://supporter-files.nexus-cdn.com/x")).headers
-
-
 def test_bearer_auth_refreshes_an_expiring_token_and_saves_it(fake_keyring):
     session = _FakeSession(
         _FakeResponse(200, {"access_token": "fresh", "refresh_token": "r2", "expires_in": 3600})
@@ -467,22 +458,11 @@ def test_bearer_auth_does_not_refresh_a_fresh_token():
 @pytest.fixture(autouse=True)
 def _no_cached_auth(monkeypatch):
     """`default_auth` memoises the `BearerAuth` it built; never let one test's fake leak
-    into the next, and never let `.env` from the checkout decide the outcome."""
+    into the next."""
     monkeypatch.setattr(oauth, "_cached_auth", None)
-    monkeypatch.setattr(oauth, "load_dotenv", lambda *a, **kw: None)
 
 
-def test_default_auth_prefers_the_environment_key(monkeypatch, fake_keyring):
-    oauth.TokenStore().save(oauth.Tokens(access_token="a", refresh_token="r", expires_at=99.0))
-    monkeypatch.setenv("NEXUS_API_KEY", "  dev-key  ")
-
-    auth = oauth.default_auth()
-    assert isinstance(auth, ApiKeyAuth)
-    assert auth.api_key == "dev-key"
-
-
-def test_default_auth_falls_back_to_the_stored_sign_in(monkeypatch, fake_keyring):
-    monkeypatch.delenv("NEXUS_API_KEY", raising=False)
+def test_default_auth_returns_the_stored_sign_in(fake_keyring):
     tokens = oauth.Tokens(access_token="a", refresh_token="r", expires_at=99.0)
     oauth.TokenStore().save(tokens)
 
@@ -491,18 +471,11 @@ def test_default_auth_falls_back_to_the_stored_sign_in(monkeypatch, fake_keyring
     assert auth.tokens == tokens
 
 
-def test_default_auth_is_none_when_nobody_is_signed_in(monkeypatch, fake_keyring):
-    monkeypatch.delenv("NEXUS_API_KEY", raising=False)
+def test_default_auth_is_none_when_nobody_is_signed_in(fake_keyring):
     assert oauth.default_auth() is None
 
 
-def test_default_auth_ignores_a_blank_environment_key(monkeypatch, fake_keyring):
-    monkeypatch.setenv("NEXUS_API_KEY", "   ")
-    assert oauth.default_auth() is None
-
-
-def test_sign_out_clears_the_store_and_the_cache(monkeypatch, fake_keyring):
-    monkeypatch.delenv("NEXUS_API_KEY", raising=False)
+def test_sign_out_clears_the_store_and_the_cache(fake_keyring):
     oauth.TokenStore().save(oauth.Tokens(access_token="a", refresh_token="r", expires_at=99.0))
     assert oauth.default_auth() is not None
 

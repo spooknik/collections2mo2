@@ -1,7 +1,7 @@
 """`c2mo2 create`: one command from a collection URL to a runnable MO2 instance.
 
-The pipeline stages (`fetch`, `survey`, `download`, `inspect`, `install`, `profile`,
-`build`) each remain usable on their own; `create` calls them in order, in-process,
+The pipeline stages (`fetch`, `download`, `inspect`, `install`, `profile`, `build`)
+each remain usable on their own; `create` calls them in order, in-process,
 passing explicit paths so nothing depends on the `work/<slug>/<revision>/` layout
 those commands default to. The result is a self-contained instance:
 
@@ -9,7 +9,7 @@ those commands default to. The result is a self-contained instance:
     <out>/downloads/                 MO2's download folder *and* our archive store
     <out>/c2mo2-instance.json         the ledger: who owns which mod folder
     <out>/c2mo2/collections/<slug>/<revision>/archive/collection.json
-    <out>/c2mo2/<slug>-<rev>.{downloads,inspect,install,survey}.json
+    <out>/c2mo2/<slug>-<rev>.{downloads,inspect,install,categories}.json
     <out>/c2mo2/profile-report.json   the profile, rendered from *all* layers at once
 
 Every stage is skipped when its output is already there and consistent with the
@@ -46,7 +46,6 @@ from . import (
     ledger,
     oauth,
     profile,
-    survey,
 )
 from .downloader import SUPPORTED_SOURCE_TYPES, mo2_game_name, run_download
 from .manifest import fetch_manifest, load_manifest
@@ -62,7 +61,6 @@ STAGE_FILES = {
     "downloads_json": "downloads.json",
     "inspect_json": "inspect.json",
     "install_json": "install.json",
-    "survey_json": "survey.json",
     "categories_json": "categories.json",
 }
 
@@ -399,10 +397,6 @@ class LayerPaths:
     @property
     def install_json(self) -> Path:
         return self.paths.stage / f"{self.prefix}.install.json"
-
-    @property
-    def survey_json(self) -> Path:
-        return self.paths.stage / f"{self.prefix}.survey.json"
 
     @property
     def categories_json(self) -> Path:
@@ -752,13 +746,6 @@ def _report_skipped(rep: Reporter, run: Run, stage: str, flag: str) -> None:
         rep.warn(f"  {item.name}: {item.reason}")
 
 
-def _survey_is_current(survey_json: Path, manifest_path: Path) -> bool:
-    data = _read_json(survey_json)
-    if not data:
-        return False
-    return _same_path(data.get("manifest"), manifest_path) and bool(data.get("entries"))
-
-
 # -- one layer ---------------------------------------------------------------------------
 
 
@@ -887,41 +874,6 @@ def add_layer(
         else:
             linked, copied, present = reuse_downloads(src, paths.downloads, rep)
             run.record("reuse-downloads", "ok", f"{linked} linked, {copied} copied, {present} kept")
-
-    # -- survey (optional pre-flight) ----------------------------------------------
-    if getattr(args, "skip_survey", False):
-        run.record("survey", "skipped", "--skip-survey")
-    elif _survey_is_current(lp.survey_json, manifest_path):
-        run.record("survey", "skipped", str(lp.survey_json))
-    else:
-        try:
-            rc = survey.run_survey(
-                manifest_path=manifest_path,
-                out_path=lp.survey_json,
-                jobs=args.jobs,
-                survey_all=False,
-                min_remaining=100,
-                limit=None,
-                auth=auth,
-                reporter=rep,
-            )
-        except Exception as exc:  # noqa: BLE001 - the survey only informs the operator
-            # Nothing downstream reads survey.json, so no failure in here -- a 404 on a
-            # file the curator pinned from an archived mod page, a dropped connection --
-            # is allowed to stop the run.
-            rc, exc_text = 1, f"{type(exc).__name__}: {exc}"
-        else:
-            exc_text = ""
-        if rc == 0:
-            run.record("survey", "ok")
-        elif rc == 3:
-            # Nexus's hourly v1 budget ran out. The survey only informs the operator;
-            # nothing downstream needs it, so carry on.
-            run.record("survey", "warned", "stopped early: Nexus hourly rate limit")
-            rep.warn("survey stopped early (Nexus hourly rate limit); continuing without it")
-        else:
-            run.record("survey", "warned", exc_text or f"exit {rc}")
-            rep.warn(f"survey did not complete ({exc_text or f'exit {rc}'}); continuing without it")
 
     # -- download -------------------------------------------------------------------
     missing: list[str] = []
@@ -1382,12 +1334,6 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         "--choices-overrides",
         default=None,
         help='JSON file of {"<tag>": <Vortex choices object>} for fresh-mode FOMODs',
-    )
-    p.add_argument(
-        "--skip-survey",
-        action="store_true",
-        default=False,
-        help="skip the Nexus content-preview survey (it costs hourly API budget)",
     )
     p.add_argument(
         "--allow-missing",

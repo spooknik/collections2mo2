@@ -17,11 +17,9 @@ plus the dev group (pytest, pytest-qt, pyinstaller, ruff via pre-commit).
 
 Sign in once with `uv run c2mo2 login` (opens your browser to nexusmods.com; same
 token store as the GUI). `c2mo2 logout` signs out, `c2mo2 whoami` prints who you're
-signed in as. For testing, `NEXUS_API_KEY` in `.env` (copy `.env.example`) still works
-as an override and takes precedence over a stored sign-in - Nexus's API Acceptable Use
-Policy allows a personal key for testing, but a shipped build must not rely on one, so
-don't lean on it for anything beyond local runs. The pre-commit secret check
-(`scripts/check_secrets.py`) still refuses to commit a real key or an `.env` file.
+signed in as. Testing uses the same OAuth sign-in; there is no personal-key override.
+The pre-commit secret check (`scripts/check_secrets.py`) still refuses to commit a real
+key or an `.env` file.
 
 ### Nexus application registration
 
@@ -68,8 +66,8 @@ file.
 
 ## Stage-by-stage (what `create` composes)
 
-`create` is `fetch` -> (`survey`) -> `download` -> `inspect` -> `install` -> `profile`
--> `build`, run in-process against one instance directory, resumable, with a ledger
+`create` is `fetch` -> `download` -> `inspect` -> `install` -> `profile` -> `build`,
+run in-process against one instance directory, resumable, with a ledger
 (`c2mo2-instance.json`) written at the end. Each stage is also a standalone CLI command
 (`docs/cli.md` has every option); useful for debugging one stage in isolation or
 inspecting the intermediate JSON.
@@ -101,9 +99,6 @@ uv run c2mo2 build work/h2uqa3/68/mo2 --game-path "D:/Games/Skyrim Special Editi
 - `build` downloads a pinned Mod Organizer 2 release and the Root Builder plugin into
   that folder and points `ModOrganizer.ini` at your game. After this,
   `mo2/ModOrganizer.exe` is a working portable instance.
-- `survey` is an optional pre-flight: using Nexus's content previews it reports FOMOD
-  presence and archive layouts for a collection without downloading it (rate-limited,
-  cached, resumable).
 
 Development/verification collection:
 [SKSE and Behaviours Essentials (h2uqa3)](https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3),

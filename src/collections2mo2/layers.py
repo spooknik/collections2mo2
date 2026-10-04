@@ -440,12 +440,6 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
         help='JSON file of {"<tag>": <Vortex choices object>} for fresh-mode FOMODs',
     )
     p.add_argument(
-        "--skip-survey",
-        action="store_true",
-        default=False,
-        help="skip the Nexus content-preview survey (it costs hourly API budget)",
-    )
-    p.add_argument(
         "--allow-missing",
         action="store_true",
         default=False,

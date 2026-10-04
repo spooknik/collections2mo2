@@ -11,7 +11,7 @@ registered in.
 - [Tools](#tools) - `tools list` / `install` / `remove` / `refresh`
 - [Export](#export) - `wabbajack`
 - [Low-level stages](#low-level-stages) - `fetch`, `report`, `download`, `inspect`,
-  `install`, `profile`, `build`, `survey`
+  `install`, `profile`, `build`
 
 All paths accept forward or back slashes; quote any path with spaces.
 
@@ -20,7 +20,7 @@ All paths accept forward or back slashes; quote any path with spaces.
 ### `c2mo2 create`
 
 Collection URL -> a runnable, self-contained MO2 instance, in one command. Runs
-`fetch` -> (`survey`) -> `download` -> `inspect` -> `install` -> `profile` -> `build`
+`fetch` -> `download` -> `inspect` -> `install` -> `profile` -> `build`
 in-process, resumable (re-running skips finished stages), and writes the instance
 ledger (`c2mo2-instance.json`).
 
@@ -41,7 +41,6 @@ c2mo2 create <url> --out OUT --game-path GAME_PATH [options]
 | `--vsync {on,off,keep}` | profile display vsync (default: `keep`) |
 | `--window {fullscreen,borderless,windowed,keep}` | profile window mode (default: `keep`) |
 | `--choices-overrides CHOICES_OVERRIDES` | JSON file of `{"<tag>": <Vortex choices object>}` for fresh-mode FOMODs |
-| `--skip-survey` | skip the Nexus content-preview survey (it costs hourly API budget) |
 | `--allow-missing` | carry on when Nexus no longer serves a file the collection pinned (the author deleted it); those mods are left out and listed in the summary. An md5 mismatch still stops the run. |
 | `--skip-errors` | carry on past any mod that cannot be downloaded, listed or installed (implies `--allow-missing`): the layer goes in without those mods, which are listed at the end and remembered in the ledger for `status` |
 | `--mo2-version MO2_VERSION` | Mod Organizer 2 release to install (default: `2.5.2`) |
@@ -70,7 +69,6 @@ c2mo2 add <url> --instance INSTANCE [options]
 | `--jobs JOBS` | parallel workers per stage (default: 4) |
 | `--game-path GAME_PATH` | the game install to install against (default: the instance ledger's) |
 | `--choices-overrides CHOICES_OVERRIDES` | JSON file of FOMOD choice overrides for fresh-mode FOMODs |
-| `--skip-survey` | skip the Nexus content-preview survey |
 | `--allow-missing` | carry on when Nexus no longer serves a pinned file |
 | `--skip-errors` | carry on past any mod that cannot be downloaded, listed or installed (implies `--allow-missing`): the layer goes in without those mods, which are listed at the end and remembered in the ledger for `status` |
 | `--reuse-downloads REUSE_DOWNLOADS` | an existing download store to hardlink/copy archives + `.meta` from first |
@@ -369,22 +367,3 @@ c2mo2 build <mo2_dir> [options]
 | `--stock-game` | copy `--game-path` into the instance and point MO2 at the copy, so collections that patch game files in place (e.g. a Runtime Swapper) never touch the real Steam install; requires `--game-path` |
 | `--stock-game-dir STOCK_GAME_DIR` | where to copy the game to (default: `<mo2_dir>/Stock Game`) |
 | `--force-stock` | re-copy the stock game even if the destination already looks populated |
-
-### `c2mo2 survey`
-
-Optional pre-flight: using Nexus's content previews, reports FOMOD presence and
-archive layouts for a collection without downloading it (rate-limited, cached,
-resumable).
-
-```
-c2mo2 survey <manifest> [options]
-```
-
-| option | description |
-| --- | --- |
-| `manifest` | path to `collection.json` (positional) |
-| `--out OUT` | output path (default: `<manifest dir>/../survey.json`) |
-| `--jobs JOBS` | parallel survey workers (default: 4) |
-| `--all` | survey every Nexus mod (default: only mods without choices/hashes) |
-| `--min-remaining MIN_REMAINING` | stop issuing v1 calls when hourly remaining drops below this (default: 100) |
-| `--limit LIMIT` | only consider the first N targets |

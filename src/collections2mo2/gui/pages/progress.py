@@ -95,7 +95,6 @@ class ProgressPage(WizardPage):
             "resolution": s.resolution,
             "vsync": s.vsync,
             "window": s.window,
-            "skip_survey": True,
             "allow_missing": False,
             "skip_errors": s.skip_errors,
             "tool_ids": list(s.tool_ids),

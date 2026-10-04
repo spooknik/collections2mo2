@@ -9,15 +9,13 @@ from pathlib import Path
 import pytest
 
 from collections2mo2 import create, ledger, oauth
-from collections2mo2.nexus import ApiKeyAuth
 
 
 @pytest.fixture(autouse=True)
-def _no_cached_signin(monkeypatch):
-    """`oauth.default_auth` caches a `BearerAuth` in a module global; keep the tests
-    off the real credential store (and off each other's cached auth)."""
-    monkeypatch.setattr(oauth, "_cached_auth", None)
-    monkeypatch.setattr(oauth, "load_dotenv", lambda *a, **kw: None)
+def _signed_in(signed_in):
+    """Every test here runs signed in with a stand-in auth (`conftest.signed_in`), off
+    the real credential store."""
+    return signed_in
 
 
 class _CollectingReporter:
@@ -279,7 +277,6 @@ def test_cmd_create_records_the_downloads_dir_and_hands_it_to_the_stages(
     # `add_layer` is where download/inspect/install run; returning None makes cmd_create
     # stop right after the ledger has recorded the store, which is what we are pinning.
     monkeypatch.setattr(create, "add_layer", lambda paths, *a, **kw: seen.append(paths))
-    monkeypatch.setenv("NEXUS_API_KEY", "test-key")
 
     rep = _CollectingReporter()
     rc = create.cmd_create(
@@ -305,7 +302,6 @@ def test_cmd_create_leaves_the_ledger_alone_for_the_default_store(monkeypatch, t
     out = tmp_path / "inst"
 
     monkeypatch.setattr(create, "add_layer", lambda *a, **kw: None)
-    monkeypatch.setenv("NEXUS_API_KEY", "test-key")
 
     rc = create.cmd_create(
         argparse.Namespace(
@@ -427,7 +423,6 @@ def _layer_args(**overrides) -> argparse.Namespace:
         url="https://www.nexusmods.com/games/skyrimspecialedition/collections/h2uqa3",
         revision=None,
         jobs=1,
-        skip_survey=True,
         allow_missing=False,
         reuse_downloads=None,
         choices_overrides=None,
@@ -496,7 +491,7 @@ def _drive_add_layer(tmp_path: Path, args: argparse.Namespace):
     run = create.Run(rep)
     led = ledger.Ledger(paths.out)
     ctx = create.add_layer(
-        paths, args, led=led, auth=ApiKeyAuth("test-key"), game_path=game, run=run, rep=rep
+        paths, args, led=led, auth=oauth.default_auth(), game_path=game, run=run, rep=rep
     )
     return ctx, run, led, rep
 

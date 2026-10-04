@@ -1,8 +1,8 @@
 """Nexus Mods sign-in: OAuth 2.0 with PKCE, as a public desktop client.
 
-Nexus's API Acceptable Use Policy forbids a public application from taking a user's
-*personal* API key (that key is for the user's own experiments only), so since 0.2.0
-the tool signs users in the way Nexus asks of registered apps: OAuth 2.0 with Proof Key
+Nexus's API Acceptable Use Policy forbids a public application from using a
+*personal* API key, so since 0.2.0 the tool signs users in the way Nexus asks of
+registered apps, and this is the only way it authenticates: OAuth 2.0 with Proof Key
 for Code Exchange (https://modding.wiki/en/api/oauth2-guide). The sequence is
 
 1. generate a random `code_verifier` and its SHA-256 `code_challenge`;
@@ -27,9 +27,8 @@ library plus `cryptography` for a check that protects nothing on the client side
 
 `CLIENT_ID` is the id Nexus assigns when the app is registered (there is no self-service
 registration; see docs/development.md). `C2MO2_NEXUS_CLIENT_ID` overrides it for
-testing against a differently registered client. A developer can still bypass OAuth
-with `NEXUS_API_KEY` in `.env` (`default_auth`); the policy allows a personal key for
-testing, and nothing else.
+testing against a differently registered client, and `C2MO2_OAUTH_PORT` moves the
+loopback callback port; both are read from the environment or a `.env` file.
 """
 
 from __future__ import annotations
@@ -54,7 +53,7 @@ import requests
 from dotenv import load_dotenv
 
 from . import __version__
-from .nexus import USER_AGENT, ApiKeyAuth, AuthRequired, NexusAuth, NexusError, is_api_request
+from .nexus import USER_AGENT, AuthRequired, NexusAuth, NexusError, is_api_request
 
 AUTHORIZE_URL = "https://users.nexusmods.com/oauth/authorize"
 TOKEN_URL = "https://users.nexusmods.com/oauth/token"
@@ -63,6 +62,10 @@ REVOKE_URL = "https://users.nexusmods.com/oauth/revoke"
 # Where a user can revoke the app's access to their account (Nexus's user service is a
 # Doorkeeper deployment; the OAuth guide links "this page" without naming it).
 AUTHORIZED_APPS_URL = "https://users.nexusmods.com/oauth/authorized_applications"
+
+# The two developer overrides below may come from a `.env` file (see .env.example);
+# load it before reading them. Variables already in the environment win.
+load_dotenv()
 
 # Assigned by Nexus Mods when the application is registered. Until then this is the
 # name we asked for; the authorize page will reject it.
@@ -588,16 +591,10 @@ _cached_auth: BearerAuth | None = None
 def default_auth() -> NexusAuth | None:
     """What the engine uses when a command does not hand it credentials explicitly.
 
-    `NEXUS_API_KEY` (environment or `.env`) wins because it is the developer's
-    testing override -- the one use of a personal key the Acceptable Use Policy allows;
-    otherwise the OAuth sign-in in the credential store; otherwise `None`, which every
-    command reports as "sign in first".
+    The OAuth sign-in in the credential store, or `None`, which every command reports
+    as "sign in first".
     """
     global _cached_auth
-    load_dotenv()
-    key = os.environ.get("NEXUS_API_KEY")
-    if key and key.strip():
-        return ApiKeyAuth(key.strip())
     with _cache_lock:
         if _cached_auth is None:
             _cached_auth = saved_auth()

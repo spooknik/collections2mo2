@@ -251,7 +251,7 @@
       },
       "install": "fomod-defaults",
       "verified": "2026-09-02",
-      "verified_notes": "GET /v1/games/skyrimspecialedition/mods/52897/files.json -> newest MAIN file_id 747879, 'DynDOLOD Resources SE 3.00-52897-Alpha-59-1777722398.7z', version Alpha-59, 66902 KB. content_preview_link 200'd (survey.py's _fetch_preview): top level is 'FOMod/' + 'Package.txt' + 'Wizard.txt' plus '00 DynDOLOD Core Files - Required/' and several optional packs ('01 Low-Res LOD Textures', '02 Whiterun Exterior Grass', ...) -- a real FOMOD, the opposite of the earlier 'plain archive' guess -> install: fomod-defaults. No choices override recorded; the installer's FOMOD defaults were used as-is."
+      "verified_notes": "GET /v1/games/skyrimspecialedition/mods/52897/files.json -> newest MAIN file_id 747879, 'DynDOLOD Resources SE 3.00-52897-Alpha-59-1777722398.7z', version Alpha-59, 66902 KB. content_preview_link 200'd: top level is 'FOMod/' + 'Package.txt' + 'Wizard.txt' plus '00 DynDOLOD Core Files - Required/' and several optional packs ('01 Low-Res LOD Textures', '02 Whiterun Exterior Grass', ...) -- a real FOMOD, the opposite of the earlier 'plain archive' guess -> install: fomod-defaults. No choices override recorded; the installer's FOMOD defaults were used as-is."
     },
     {
       "id": "dyndolod-dll-ng",

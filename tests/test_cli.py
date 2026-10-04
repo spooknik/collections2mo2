@@ -12,10 +12,9 @@ import sys
 from pathlib import Path
 
 import pytest
-import requests
 
 import collections2mo2
-from collections2mo2.nexus import ApiKeyAuth, NexusClient
+from collections2mo2.nexus import NexusClient
 
 SUBCOMMANDS = [
     "fetch",
@@ -24,7 +23,6 @@ SUBCOMMANDS = [
     "inspect",
     "install",
     "profile",
-    "survey",
     "build",
     "create",
     "add",
@@ -84,11 +82,9 @@ def test_help_lists_the_sign_in_commands():
 
 
 def test_whoami_without_a_sign_in_reports_it(tmp_path):
-    """Run from an empty cwd so a developer's own `.env` cannot sign the test in, with
-    the credential store faked empty."""
+    """Run from an empty cwd with the credential store faked empty."""
     env = {
         **os.environ,
-        "NEXUS_API_KEY": "",
         "PYTHONPATH": str(Path(collections2mo2.__file__).resolve().parents[2]),
     }
     code = (
@@ -118,18 +114,3 @@ def test_nexus_client_sends_the_identifying_headers():
     assert client.session.headers["Application-Version"] == collections2mo2.__version__
     assert collections2mo2.__version__ in client.session.headers["User-Agent"]
     assert client.authenticated is False
-
-
-def test_nexus_client_takes_an_api_key_shorthand():
-    client = NexusClient(api_key="dev-key")
-    assert isinstance(client.auth, ApiKeyAuth)
-    assert client.session.auth is client.auth
-    assert client.authenticated is True
-
-
-def test_api_key_auth_signs_only_the_api_host():
-    auth = ApiKeyAuth("dev-key")
-    signed = auth(requests.Request("GET", "https://api.nexusmods.com/v1/games/x.json").prepare())
-    assert signed.headers["apikey"] == "dev-key"
-    cdn = auth(requests.Request("GET", "https://cdn.nexusmods.com/file.7z").prepare())
-    assert "apikey" not in cdn.headers

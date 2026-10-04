@@ -181,7 +181,7 @@ def test_progress_widget_scripted_download_sequence(qtbot):
 
     reporter.stage("download", 34)
     reporter._flush()
-    assert widget.stage_label.text() == "Stage 3 of 7 - Downloading archives"
+    assert widget.stage_label.text() == "Stage 2 of 6 - Downloading archives"
     assert widget.progress_bar.maximum() == 34
 
     total_bytes = 340_000_000

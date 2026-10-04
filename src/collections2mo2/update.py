@@ -1001,8 +1001,6 @@ def cmd_update(args: argparse.Namespace, reporter: Reporter | None = None) -> in
             "entries": install_out,
         },
     )
-    if lp_old.survey_json.exists() and not lp_new.survey_json.exists():
-        shutil.copy2(lp_old.survey_json, lp_new.survey_json)
 
     # -- ownership: every surviving folder changes hands to the new revision ------------
     for entry in install_out:

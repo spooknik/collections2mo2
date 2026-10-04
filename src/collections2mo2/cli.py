@@ -15,10 +15,8 @@ from . import (
     downloader,
     installer,
     layers,
-    nexus,
     oauth,
     profile,
-    survey,
     tools,
     update,
     wabbajack,
@@ -95,10 +93,7 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 def _print_signin(result) -> None:  # api.SignInResult
     membership = "Premium" if result.is_premium else "not Premium"
-    suffix = ""
-    if isinstance(oauth.default_auth(), nexus.ApiKeyAuth):
-        suffix = " [personal API key from NEXUS_API_KEY -- testing only]"
-    print(f"Signed in as {result.name} ({membership}).{suffix}")
+    print(f"Signed in as {result.name} ({membership}).")
 
 
 def cmd_login(args: argparse.Namespace) -> int:
@@ -201,7 +196,6 @@ def main(argv: list[str] | None = None) -> int:
     installer.add_parser(sub)
     profile.add_parser(sub)
     profile.add_instance_parser(sub)
-    survey.add_parser(sub)
     build.add_parser(sub)
     create.add_parser(sub)
     layers.add_parser(sub)

@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Removed
+
+- The `NEXUS_API_KEY` developer override and the `apikey` header path; the OAuth
+  sign-in is now the only way the app authenticates (requested by Nexus Mods during
+  app-registry review).
+- The `c2mo2 survey` command, the `--skip-survey` flags and `run_fomod_survey`; it was a
+  development diagnostic that cost one v1 request per mod and nothing depended on its
+  output.
+
 ## 0.2.0 - 2026-09-10
 
 ### Changed

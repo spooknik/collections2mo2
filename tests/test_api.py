@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 
 from collections2mo2 import api, oauth
-from collections2mo2.nexus import ApiKeyAuth
 from collections2mo2.reporter import NullReporter
 
 # -- create_instance: argument mapping ------------------------------------------------
@@ -43,7 +42,6 @@ def test_create_instance_maps_arguments(monkeypatch):
         resolution="1920x1080",
         vsync="on",
         window="borderless",
-        skip_survey=True,
         allow_missing=True,
         reporter=reporter,
     )
@@ -59,7 +57,6 @@ def test_create_instance_maps_arguments(monkeypatch):
     assert ns.resolution == "1920x1080"
     assert ns.vsync == "on"
     assert ns.window == "borderless"
-    assert ns.skip_survey is True
     assert ns.allow_missing is True
     assert ns.mo2_version == api.build.DEFAULT_MO2_VERSION
     assert ns.rootbuilder_version == api.build.DEFAULT_ROOTBUILDER_VERSION
@@ -445,7 +442,7 @@ _SUMMARY_PAYLOAD = {
 
 def test_fetch_collection_summary_reads_game_versions(monkeypatch):
     client = _FakeGraphQLClient(_SUMMARY_PAYLOAD)
-    monkeypatch.setattr(api, "NexusClient", lambda api_key=None: client)
+    monkeypatch.setattr(api, "NexusClient", lambda auth=None: client)
     summary = api.fetch_collection_summary(
         "https://www.nexusmods.com/games/skyrimspecialedition/collections/qdurkx"
     )
@@ -460,7 +457,7 @@ def test_fetch_collection_summary_without_game_versions(monkeypatch):
             k: v for k, v in _SUMMARY_PAYLOAD["collectionRevision"].items() if k != "gameVersions"
         },
     }
-    monkeypatch.setattr(api, "NexusClient", lambda api_key=None: _FakeGraphQLClient(payload))
+    monkeypatch.setattr(api, "NexusClient", lambda auth=None: _FakeGraphQLClient(payload))
     summary = api.fetch_collection_summary(
         "https://www.nexusmods.com/games/skyrimspecialedition/collections/qdurkx"
     )
@@ -584,7 +581,7 @@ def _bearer(expires_in: float = 3600.0) -> oauth.BearerAuth:
 
 
 def test_check_signin_reports_the_account(monkeypatch):
-    monkeypatch.setattr(api.oauth, "default_auth", lambda: ApiKeyAuth("dev-key"))
+    monkeypatch.setattr(api.oauth, "default_auth", lambda: _bearer())
     _fake_client(monkeypatch, _FakeResponse(200, {"name": "Spooknik", "is_premium": True}))
 
     result = api.check_signin()
@@ -611,18 +608,6 @@ def test_check_signin_clears_a_rejected_oauth_sign_in(monkeypatch):
     with pytest.raises(api.ApiError, match="no longer accepts"):
         api.check_signin()
     assert signed_out == [True]
-
-
-def test_check_signin_keeps_a_rejected_env_key(monkeypatch):
-    """A 401 on `NEXUS_API_KEY` is the developer's problem, not a stored sign-in to clear."""
-    signed_out: list[bool] = []
-    monkeypatch.setattr(api.oauth, "default_auth", lambda: ApiKeyAuth("bad-key"))
-    monkeypatch.setattr(api.oauth, "sign_out", lambda *a, **kw: signed_out.append(True))
-    _fake_client(monkeypatch, _FakeResponse(401, {}))
-
-    with pytest.raises(api.ApiError, match="NEXUS_API_KEY"):
-        api.check_signin()
-    assert signed_out == []
 
 
 def test_forget_legacy_api_key_deletes_both_service_names(monkeypatch):
@@ -666,7 +651,7 @@ def test_sign_in_maps_an_oauth_error_to_an_api_error(monkeypatch):
 def test_has_saved_signin_follows_default_auth(monkeypatch):
     monkeypatch.setattr(api.oauth, "default_auth", lambda: None)
     assert api.has_saved_signin() is False
-    monkeypatch.setattr(api.oauth, "default_auth", lambda: ApiKeyAuth("dev-key"))
+    monkeypatch.setattr(api.oauth, "default_auth", lambda: _bearer())
     assert api.has_saved_signin() is True
 
 

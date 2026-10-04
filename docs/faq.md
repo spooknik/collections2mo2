@@ -283,9 +283,6 @@ If you signed in with an older `c2mo2` release that used a personal API key, tha
 deleted from Credential Manager automatically the first time you sign in or out with this
 version - it's never used again.
 
-For developers: `NEXUS_API_KEY` in `.env` still works as a testing-only override (it
-takes precedence over a stored sign-in) - see `docs/development.md`.
-
 ## What happens if a collection pins a file that's since been deleted from Nexus?
 
 The download 404s and the run stops by default, since a missing pinned file usually

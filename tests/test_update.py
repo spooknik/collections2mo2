@@ -525,7 +525,6 @@ def _updatable_instance(tmp_path: Path) -> Path:
             "install": "c2mo2/base-1.install.json",
             "downloads": "c2mo2/base-1.downloads.json",
             "inspect": "c2mo2/base-1.inspect.json",
-            "survey": "c2mo2/base-1.survey.json",
         },
     )
     for folder, md5 in (("A", "m1"), ("B", "m2")):
@@ -578,9 +577,6 @@ def _stub_update(
     monkeypatch.setattr(
         create, "render_profile", lambda *a, **kw: {"mod_order": ["A", "B"], "user_mods": []}
     )
-    monkeypatch.setattr(update.oauth, "load_dotenv", lambda *a, **kw: None)
-    monkeypatch.setattr(update.oauth, "_cached_auth", None)
-    monkeypatch.setenv("NEXUS_API_KEY", "test-key")
 
 
 def _update_args(inst: Path, **kwargs) -> argparse.Namespace:
@@ -623,7 +619,9 @@ def _rows_by_name(inst: Path, revision: int) -> dict[str, dict]:
     return {row["name"]: row for row in data["entries"]}
 
 
-def test_update_without_skip_errors_stops_on_a_failed_download(monkeypatch, tmp_path: Path):
+def test_update_without_skip_errors_stops_on_a_failed_download(
+    monkeypatch, tmp_path: Path, signed_in
+):
     inst = _updatable_instance(tmp_path)
     _stub_update(monkeypatch, downloads=_DOWNLOAD_FAILED, download_rc=1)
     rep = _CollectingReporter()
@@ -638,7 +636,7 @@ def test_update_without_skip_errors_stops_on_a_failed_download(monkeypatch, tmp_
 
 
 def test_update_with_skip_errors_keeps_the_old_row_for_an_undownloadable_mod(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, signed_in
 ):
     inst = _updatable_instance(tmp_path)
     _stub_update(monkeypatch, downloads=_DOWNLOAD_FAILED, download_rc=1)
@@ -664,7 +662,7 @@ def test_update_with_skip_errors_keeps_the_old_row_for_an_undownloadable_mod(
 
 
 def test_update_with_allow_missing_alone_also_carries_on_but_records_nothing_extra(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, signed_in
 ):
     # --allow-missing forgives a file Nexus no longer serves, exactly like --skip-errors
     # does for this case; the mod is still listed as skipped.
@@ -677,7 +675,9 @@ def test_update_with_allow_missing_alone_also_carries_on_but_records_nothing_ext
     assert ledger.load(inst).data["layers"][0]["revision"] == 2
 
 
-def test_update_without_skip_errors_stops_on_a_failed_install(monkeypatch, tmp_path: Path):
+def test_update_without_skip_errors_stops_on_a_failed_install(
+    monkeypatch, tmp_path: Path, signed_in
+):
     inst = _updatable_instance(tmp_path)
     _stub_update(monkeypatch, install=_INSTALL_FAILED, install_rc=1)
     rep = _CollectingReporter()
@@ -688,7 +688,7 @@ def test_update_without_skip_errors_stops_on_a_failed_install(monkeypatch, tmp_p
 
 
 def test_update_with_skip_errors_keeps_the_old_row_for_a_failed_install(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, signed_in
 ):
     inst = _updatable_instance(tmp_path)
     _stub_update(monkeypatch, install=_INSTALL_FAILED, install_rc=1)
@@ -710,7 +710,7 @@ def test_update_with_skip_errors_keeps_the_old_row_for_a_failed_install(
     assert "  NOT installed (skipped): 1" in rep.logs
 
 
-def test_a_clean_update_records_no_skipped_mods(monkeypatch, tmp_path: Path):
+def test_a_clean_update_records_no_skipped_mods(monkeypatch, tmp_path: Path, signed_in):
     inst = _updatable_instance(tmp_path)
     _stub_update(
         monkeypatch,

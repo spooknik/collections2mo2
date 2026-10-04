@@ -31,11 +31,10 @@ from .theme import MUTED_STYLE
 # nothing populates them yet -- see `reporter.py`). Stage names outside this list
 # (Manage-tab actions like "tools", or bookkeeping stages like "ledger") just show
 # their title with no "Stage N of M" prefix.
-STAGE_SEQUENCE = ["fetch", "survey", "download", "inspect", "install", "profile", "build"]
+STAGE_SEQUENCE = ["fetch", "download", "inspect", "install", "profile", "build"]
 
 STAGE_TITLES = {
     "fetch": "Fetching the collection",
-    "survey": "Surveying FOMODs",
     "download": "Downloading archives",
     "inspect": "Inspecting archives",
     "install": "Installing mods",
@@ -50,7 +49,6 @@ STAGE_TITLES = {
 # What a stage's `done`/`total` counts, for the counter line ("112 / 292 <unit>").
 COUNTER_UNIT = {
     "fetch": "items",
-    "survey": "mods",
     "download": "files",
     "inspect": "archives",
     "install": "mods",
